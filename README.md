@@ -174,6 +174,6 @@ Split2ops Software provides enterprise licensing, custom kernel module developme
 
 - **Developer:** Split2ops Software
 - **Website:** [https://github.com/zv9games/s2o.xallfirewall](https://github.com/zv9games/s2o.xallfirewall)
-- **Contact:** `support@split2ops.com`
+- **Contact:** `support@zv9games.org`
 
 *Copyright © 2026 Split2ops Software. All rights reserved.*
