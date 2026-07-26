@@ -58,44 +58,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "      SPLIT2OPS SOFTWARE CYBERDEFENDER AV ENGINE        ".bold().green());
+            println!("{}", "      S2O CyberDefender (Phase 1 target)                 ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Core Protection   : {}", if is_active { "ACTIVE (Real-Time Shield ON)".green().bold() } else { "INACTIVE (Shield OFF)".red().bold() });
-            println!(" Signature Engine  : {}", "S2O YARA Core v4.5 + Windows Defender Service".yellow());
-            println!(" Loaded Rulesets   : {}", "485,120 active threat signatures".bold());
-            println!(" Heuristic Scan    : {}", "DEEP BEHAVIORAL ANALYSIS (Level 3)".green());
+            println!(
+                " WinDefend service : {}",
+                if is_active {
+                    "Running".green().bold()
+                } else {
+                    "Not running / query failed".red().bold()
+                }
+            );
+            println!(" Implemented       : {}", "SHA-256 file hash scan; Defender service query".green());
+            println!(" Not implemented   : {}", "YARA engine, realtime FS shield, cloud defs".red());
+            println!(" Roadmap phase     : {}", "Aegis Edge Phase 1".bold());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Scan { path } => {
-            println!("{}", format!("[CYBERDEFENDER] Initiating high-speed malware scan on target: '{}'...", path).cyan());
+            println!(
+                "{}",
+                format!("[cyberdefender] hashing target (no YARA yet): '{path}'...").cyan()
+            );
 
             match calculate_file_hash(&path) {
                 Ok(hash) => {
                     println!("{}", "---------------------------------------------------------".cyan());
                     println!(" Target File  : {}", path.bold());
                     println!(" SHA-256 Hash : {}", hash.yellow());
-                    println!(" YARA Match   : {}", "CLEAN (0 malware signatures detected)".green().bold());
-                    println!(" Threat Score : {}", "0 / 100 (Safe)".green().bold());
+                    println!(
+                        " Verdict      : {}",
+                        "hash only — malware match engine not implemented".yellow().bold()
+                    );
                     println!("{}", "---------------------------------------------------------".cyan());
                 }
                 Err(e) => {
-                    println!("{}", format!("File Scan Error: {}", e).red());
+                    eprintln!("{}", format!("File Scan Error: {e}").red());
+                    std::process::exit(1);
                 }
             }
         }
         Commands::UpdateDefs => {
-            println!("{}", "[CYBERDEFENDER] Connecting to Split2ops Global Threat Cloud...".cyan());
-            println!("{}", "[CYBERDEFENDER] Downloading latest YARA definitions and IOC hashes...".yellow());
-            println!("{}", "SUCCESS: Signature database updated (Database Version: 2026.07.24.01)".green().bold());
+            eprintln!("[cyberdefender] signature update not implemented (Phase 1).");
+            std::process::exit(2);
         }
         Commands::Realtime { action } => {
-            if action.to_lowercase() == "enable" {
-                println!("{}", "[CYBERDEFENDER] Enabling Real-Time File System Shield...".cyan());
-                println!("{}", "SUCCESS: Real-time malware protection is now ACTIVE.".green().bold());
-            } else {
-                println!("{}", "[CYBERDEFENDER] Disabling Real-Time File System Shield...".yellow());
-                println!("{}", "WARNING: Real-time malware protection is now INACTIVE.".red().bold());
-            }
+            eprintln!(
+                "[cyberdefender] realtime shield not implemented (requested action={action})."
+            );
+            std::process::exit(2);
         }
     }
 

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use cyberwall_core::{
-    EngineError, EngineResult, FirewallEngine, FirewallPolicy, FirewallRule, FirewallStatus, ProfileType, RuleAction, RuleDirection,
+    EngineError, EngineResult, FirewallEngine, FirewallPolicy, FirewallRule, FirewallStatus,
+    ProfileType, RuleAction, RuleDirection,
 };
 
 pub struct WindowsFirewallEngine;
@@ -11,14 +12,21 @@ impl WindowsFirewallEngine {
     }
 }
 
+impl Default for WindowsFirewallEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl FirewallEngine for WindowsFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {
-        let fw_enabled = tokio::task::spawn_blocking(|| {
-            s2o_net_lib::firewall::FirewallController::is_firewall_enabled().unwrap_or(false)
+        let profiles = tokio::task::spawn_blocking(|| {
+            s2o_net_lib::firewall::FirewallController::get_profile_status()
         })
         .await
-        .map_err(|e| EngineError(e.to_string()))?;
+        .map_err(|e| EngineError(e.to_string()))?
+        .map_err(|e| EngineError(format!("COM profile status: {e:?}")))?;
 
         let outbound_blocked = tokio::task::spawn_blocking(|| {
             s2o_net_lib::firewall::FirewallController::is_outbound_blocked().unwrap_or(false)
@@ -33,14 +41,14 @@ impl FirewallEngine for WindowsFirewallEngine {
         .map_err(|e| EngineError(e.to_string()))?;
 
         Ok(FirewallStatus {
-            enabled: fw_enabled,
+            enabled: profiles.any_interactive_enabled(),
             outbound_blocked,
             defender_active,
-            profile_private: fw_enabled,
-            profile_public: fw_enabled,
-            profile_domain: fw_enabled,
+            profile_private: profiles.private,
+            profile_public: profiles.public,
+            profile_domain: profiles.domain,
             platform: "Windows".to_string(),
-            backend_driver: "Win32 COM INetFwPolicy2 + Netsh Advfirewall Service".to_string(),
+            backend_driver: "Win32 COM INetFwPolicy2 (netsh fallback on set)".to_string(),
         })
     }
 
@@ -54,7 +62,7 @@ impl FirewallEngine for WindowsFirewallEngine {
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?
-        .map_err(|e| EngineError(format!("{:?}", e)))?;
+        .map_err(|e| EngineError(format!("set_enabled({enabled}) failed: {e:?}")))?;
 
         Ok(())
     }
@@ -69,25 +77,39 @@ impl FirewallEngine for WindowsFirewallEngine {
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?
-        .map_err(|e| EngineError(format!("{:?}", e)))?;
+        .map_err(|e| EngineError(format!("set_outbound_block({blocked}) failed: {e:?}")))?;
 
         Ok(())
     }
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {
-        Ok(vec![
-            FirewallRule {
-                name: "Split2ops Cyberwall Core Ruleset".to_string(),
-                enabled: true,
-                action: RuleAction::Allow,
+        let rules = tokio::task::spawn_blocking(|| {
+            s2o_net_lib::firewall::FirewallController::get_rules()
+        })
+        .await
+        .map_err(|e| EngineError(e.to_string()))?
+        .map_err(|e| EngineError(format!("list rules failed: {e:?}")))?;
+
+        Ok(rules
+            .into_iter()
+            .map(|r| FirewallRule {
+                name: r.name,
+                enabled: r.enabled,
+                action: match r.action.as_str() {
+                    "Block" => RuleAction::Block,
+                    _ => RuleAction::Allow,
+                },
+                // OS enumeration does not currently expose direction; default inbound.
                 direction: RuleDirection::Inbound,
                 profile: ProfileType::All,
-                application: Some("cyberwalld.exe".to_string()),
-            }
-        ])
+                application: None,
+            })
+            .collect())
     }
 
     async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {
-        Ok(())
+        Err(EngineError(
+            "apply_policy not implemented yet (Phase 1)".into(),
+        ))
     }
 }

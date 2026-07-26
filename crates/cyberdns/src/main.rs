@@ -57,12 +57,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS SOFTWARE CYBERDNS GUARD ENGINE         ".bold().green());
+            println!("{}", "        S2O CyberDNS Guard (Phase 1 target)              ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Protocol Engine   : {}", "DNS-over-HTTPS (DoH) / DoT Encrypted Resolver".bold());
-            println!(" Primary Resolver  : {}", "Cloudflare DoH (1.1.1.1) / Quad9 (9.9.9.9)".yellow());
-            println!(" Web Filtering     : {}", "ENABLED (Malware, Phishing, Adware Blocked)".green().bold());
-            println!(" Blocklist Domains : {}", "142,508 active threat domain signatures".bold());
+            println!(" Implemented       : {}", "DoH resolve via Cloudflare (resolve cmd)".green());
+            println!(" Not implemented   : {}", "local proxy serve, persistent blocklist, DoT".red());
+            println!(" Primary Resolver  : {}", "https://cloudflare-dns.com/dns-query".yellow());
+            println!(" Roadmap phase     : {}", "Aegis Edge Phase 1".bold());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Resolve { domain } => {
@@ -94,19 +94,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Block { domain } => {
-            println!("{}", format!("[CYBERDNS] Adding domain '{}' to S2O Threat Blocklist...", domain).yellow());
-            println!("{}", format!("SUCCESS: Domain '{}' is now BLOCKED by CyberDNS Guard.", domain).red().bold());
+            eprintln!(
+                "[cyberdns] blocklist persistence not implemented yet (wanted: {}).",
+                domain
+            );
+            eprintln!("Use resolve for DoH lookups; block ships in Phase 1.");
+            std::process::exit(2);
         }
         Commands::Serve { listen } => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "     STARTING S2O CYBERDNS GUARD PROXY RESOLVER          ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Local Proxy       : {}", listen.green().bold());
-            println!(" Mode              : {}", "Encrypted DNS-over-HTTPS Interceptor".yellow());
-            println!(" Status            : {}", "RUNNING (Press Ctrl+C to stop)".green().bold());
-            println!("{}", "=========================================================".cyan());
-            tokio::signal::ctrl_c().await?;
-            println!("\nShutting down S2O CyberDNS Guard...");
+            eprintln!(
+                "[cyberdns] local proxy serve not implemented (requested listen={listen})."
+            );
+            eprintln!("Phase 1 will bind a real DoH/forwarding proxy.");
+            std::process::exit(2);
         }
     }
 

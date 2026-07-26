@@ -60,35 +60,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Enable => {
-            println!("[CYBERWALL CLI] Transmitting ENABLE signal to OS Kernel...");
+            println!("[cyberwall] enabling Windows Firewall (COM, netsh fallback)...");
             engine.set_enabled(true).await?;
-            println!("{}", "[CYBERWALL CLI] SUCCESS: OS Firewall enabled across all profiles.".green().bold());
+            let status = engine.get_status().await?;
+            if status.enabled {
+                println!("{}", "[cyberwall] OK: firewall enabled on interactive profiles.".green().bold());
+            } else {
+                eprintln!("{}", "[cyberwall] command returned OK but profiles still report disabled.".red().bold());
+                std::process::exit(1);
+            }
         }
         Commands::Disable => {
-            println!("[CYBERWALL CLI] Transmitting DISABLE signal to OS Kernel...");
+            println!("[cyberwall] disabling Windows Firewall (COM, netsh fallback)...");
             engine.set_enabled(false).await?;
-            println!("{}", "[CYBERWALL CLI] SUCCESS: OS Firewall disabled across all profiles.".yellow().bold());
+            let status = engine.get_status().await?;
+            if !status.enabled {
+                println!("{}", "[cyberwall] OK: firewall disabled on interactive profiles.".yellow().bold());
+            } else {
+                eprintln!("{}", "[cyberwall] command returned OK but profiles still report enabled.".red().bold());
+                std::process::exit(1);
+            }
         }
         Commands::Lock => {
-            println!("[CYBERWALL CLI] Engaging Emergency Outbound Isolation Shield...");
+            println!("[cyberwall] enabling outbound block (airplane / isolation)...");
             engine.set_outbound_block(true).await?;
-            println!("{}", "[CYBERWALL CLI] ALERT: Outbound network traffic is now BLOCKED!".red().bold());
+            let status = engine.get_status().await?;
+            if status.outbound_blocked {
+                println!("{}", "[cyberwall] OK: outbound default action is BLOCK.".red().bold());
+            } else {
+                eprintln!("{}", "[cyberwall] lock returned OK but outbound not blocked.".red().bold());
+                std::process::exit(1);
+            }
         }
         Commands::Unlock => {
-            println!("[CYBERWALL CLI] Disengaging Outbound Isolation Shield...");
+            println!("[cyberwall] restoring outbound allow (from snapshot or default)...");
             engine.set_outbound_block(false).await?;
-            println!("{}", "[CYBERWALL CLI] SUCCESS: Outbound network traffic RESTORED.".green().bold());
+            let status = engine.get_status().await?;
+            if !status.outbound_blocked {
+                println!("{}", "[cyberwall] OK: outbound traffic allowed.".green().bold());
+            } else {
+                eprintln!("{}", "[cyberwall] unlock returned OK but outbound still blocked.".red().bold());
+                std::process::exit(1);
+            }
         }
         Commands::Rules => {
             let rules = engine.list_rules().await?;
             println!("{}", "=========================================================".cyan());
-            println!("{}", "            SPLIT2OPS ACTIVE FIREWALL RULES             ".bold().green());
+            println!("{}", "            S2O Cyberwall — OS firewall rules            ".bold().green());
             println!("{}", "=========================================================".cyan());
+            println!(" Count: {}", rules.len());
             for (idx, rule) in rules.iter().enumerate() {
-                println!("{}. Rule Name : {}", idx + 1, rule.name.bold());
-                println!("   Action    : {:?}", rule.action);
-                println!("   Direction : {:?}", rule.direction);
-                println!("   App Path  : {:?}", rule.application);
+                println!("{}. {}", idx + 1, rule.name.bold());
+                println!(
+                    "   enabled={} action={:?} direction={:?}",
+                    rule.enabled, rule.action, rule.direction
+                );
                 println!("{}", "---------------------------------------------------------".cyan());
             }
         }

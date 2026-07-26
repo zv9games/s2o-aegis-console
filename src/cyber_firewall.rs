@@ -34,7 +34,7 @@ fn spawn_os_worker() -> (Sender<OsCommand>, Receiver<OsStatusEvent>) {
         while let Ok(cmd) = cmd_rx.recv() {
             match cmd {
                 OsCommand::QueryStatus => {
-                    let live_enabled = s2o_net_lib::firewall::FirewallController::is_firewall_enabled().unwrap_or(true);
+                    let live_enabled = s2o_net_lib::firewall::FirewallController::is_firewall_enabled().unwrap_or(false);
                     let live_blocked = s2o_net_lib::firewall::FirewallController::is_outbound_blocked().unwrap_or(false);
                     let live_active = s2o_net_lib::defender::DefenderController::is_defender_active();
 
@@ -213,7 +213,7 @@ fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     // Embed NotoSansJP-Bold font bytes from s2o_net_lib snl0.5
-    let font_bytes = include_bytes!("../../net-lib/snl0.5/NotoSansJP-Bold.ttf");
+    let font_bytes = include_bytes!("../../s2o.s2o_net_lib/snl0.5/NotoSansJP-Bold.ttf");
     fonts.font_data.insert(
         "NotoSansJP".to_owned(),
         egui::FontData::from_static(font_bytes),
@@ -374,7 +374,7 @@ impl Default for CyberFirewallApp {
     fn default() -> Self {
         let (width, height) = load_window_config().unwrap_or((800.0, 600.0));
         let (os_tx, os_rx) = spawn_os_worker();
-        let cached_fw = s2o_net_lib::firewall::FirewallController::is_firewall_enabled().unwrap_or(true);
+        let cached_fw = s2o_net_lib::firewall::FirewallController::is_firewall_enabled().unwrap_or(false);
         let cached_shield = s2o_net_lib::firewall::FirewallController::is_outbound_blocked().unwrap_or(false);
         let cached_def = s2o_net_lib::defender::DefenderController::is_defender_active();
 

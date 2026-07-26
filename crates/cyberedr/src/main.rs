@@ -30,12 +30,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS SOFTWARE CYBEREDR AGENT ENGINE        ".bold().green());
+            println!("{}", "        S2O CyberEDR (Phase 2 target)                    ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Kernel Hooks      : {}", "ACTIVE (Windows ETW / eBPF Tracepoints Attached)".green().bold());
-            println!(" Event Telemetry   : {}", "PROCESS_CREATE, FILE_MUTATION, NETWORK_SOCKET, MEMORY_INJECT".bold());
-            println!(" Anomaly Detection : {}", "BEHAVIORAL ML HEURISTICS (Real-Time Scoring)".yellow());
-            println!(" Active Alerts     : {}", "0 Critical, 0 High, 2 Low (Normal Behavior)".green().bold());
+            println!(" Implemented       : {}", "TCP table via IP Helper (processes cmd)".green());
+            println!(" Not implemented   : {}", "ETW hooks, behavioral ML, alert engine".red());
+            println!(" Kernel hooks      : {}", "NONE ATTACHED".red().bold());
+            println!(" Roadmap phase     : {}", "Aegis Endpoint Phase 2".bold());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Processes => {
@@ -45,50 +45,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "       ACTIVE KERNEL NETWORK SOCKET PROCESS MONITORED TABLE ".bold().green());
+            println!("{}", "       Active TCP connections (IP Helper telemetry)      ".bold().green());
             println!("{}", "=========================================================".cyan());
-            for c in conns.iter().take(8) {
-                println!(" PID {:<6} | {:<15}:{} -> {:<15}:{} [{}]", c.pid, c.local_addr, c.local_port, c.remote_addr, c.remote_port, c.state.bold());
+            for c in conns.iter().take(32) {
+                println!(
+                    " PID {:<6} | {:<15}:{} -> {:<15}:{} [{}]",
+                    c.pid,
+                    c.local_addr,
+                    c.local_port,
+                    c.remote_addr,
+                    c.remote_port,
+                    c.state.bold()
+                );
             }
             println!("{}", "---------------------------------------------------------".cyan());
-            println!(" Total Active Monitored Sockets: {}", conns.len());
+            println!(" Total sockets: {}", conns.len());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Alerts => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "          CYBEREDR BEHAVIORAL THREAT ALERTS TABLE        ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            let alerts = vec![
-                ("LOW", "PROC_SPAWN", "cmd.exe spawned by explorer.exe", "PID 4104", "07:12:04"),
-                ("LOW", "NET_LISTEN", "cyberwalld.exe listening on port 51820", "PID 1284", "07:10:18"),
-            ];
-
-            for (severity, alert_type, desc, pid, time) in alerts {
-                let sev_str = if severity == "HIGH" { severity.red().bold() } else { severity.yellow() };
-                println!("[{}] {} @ {}", time.cyan(), sev_str, alert_type.bold());
-                println!("    Details : {}", desc);
-                println!("    Context : {}", pid);
-                println!("{}", "---------------------------------------------------------".cyan());
-            }
+            println!("{}", "[cyberedr] alert engine not implemented (Phase 2).".yellow());
+            println!("No behavioral alerts stored.");
         }
         Commands::Trace => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "     ATTACHING LIVE CYBEREDR KERNEL TELEMETRY TRACER    ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "[CYBEREDR] Listening for kernel tracepoint events (Press Ctrl+C to stop)...".cyan());
-
-            let sample_events = vec![
-                "[KERNEL ETW] PROC_CREATE pid=8120 image=cargo.exe parent=powershell.exe",
-                "[KERNEL ETW] FILE_WRITE path=C:\\ZV9\\s2o.xallfirewall\\target\\debug\\cyberedr.exe",
-                "[KERNEL ETW] NET_CONNECT pid=8120 remote=142.251.32.14:443 proto=TCP",
-            ];
-
-            for ev in sample_events {
-                tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
-                println!("{}", ev.green());
-            }
-
-            println!("{}", "[CYBEREDR] Tracer listening active...".yellow());
+            eprintln!("[cyberedr] ETW/eBPF live trace not implemented (Phase 2).");
+            std::process::exit(2);
         }
     }
 

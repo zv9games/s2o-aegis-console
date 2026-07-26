@@ -65,51 +65,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS SOFTWARE CYBERMESH VPN ENGINE         ".bold().green());
+            println!("{}", "        S2O CyberMesh (Phase 3 target)                   ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Protocol Engine   : {}", "WireGuard Encrypted Overlay Network (Noise_IK)".bold());
-            println!(" Mesh Node Address : {}", "10.220.0.14 / 24 (s2o-mesh0)".yellow().bold());
-            println!(" Tunnel Status     : {}", "ACTIVE (Connected to 4 enterprise peers)".green().bold());
-            println!(" Transport MTU     : {}", "1420 bytes (ChaCha20-Poly1305 Crypto)".bold());
+            println!(" Tunnel status     : {}", "NOT IMPLEMENTED".red().bold());
+            println!(" Implemented       : {}", "random key material helper (genkey)".yellow());
+            println!(" Target stack      : {}", "WireGuard (boringtun / system wg)".bold());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Up => {
-            println!("{}", "[CYBERMESH] Initializing WireGuard Mesh Tunnel interface (s2o-mesh0)...".cyan());
-            println!("{}", "[CYBERMESH] Handshake established with S2O Cloud Mesh Hub (54.210.88.19:51820)".yellow());
-            println!("{}", "[CYBERMESH] SUCCESS: CyberMesh VPN tunnel is now ONLINE.".green().bold());
+            eprintln!("[cybermesh] tunnel up not implemented (Phase 3).");
+            std::process::exit(2);
         }
         Commands::Down => {
-            println!("{}", "[CYBERMESH] Tearing down WireGuard Mesh Tunnel interface (s2o-mesh0)...".yellow());
-            println!("{}", "[CYBERMESH] SUCCESS: CyberMesh VPN tunnel is now OFFLINE.".red().bold());
+            eprintln!("[cybermesh] tunnel down not implemented (Phase 3).");
+            std::process::exit(2);
         }
         Commands::Peers => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "            ACTIVE CYBERMESH ENTERPRISE PEERS           ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            let peers = vec![
-                ("S2O AWS Cloud Hub", "10.220.0.1", "54.210.88.19:51820", "12 ms", "2.4 GB / 810 MB"),
-                ("S2O GCP West Node", "10.220.0.2", "35.192.44.10:51820", "28 ms", "640 MB / 190 MB"),
-                ("S2O Azure East Hub", "10.220.0.3", "20.81.100.4:51820", "18 ms", "1.1 GB / 450 MB"),
-                ("S2O SecOps HQ Gateway", "10.220.0.10", "198.51.100.8:51820", "4 ms", "14.8 GB / 12.2 GB"),
-            ];
-
-            for (idx, (name, vip, endpoint, latency, transfer)) in peers.iter().enumerate() {
-                println!("{}. Peer Node   : {}", idx + 1, name.bold());
-                println!("   Virtual IP  : {}", vip.yellow());
-                println!("   Endpoint    : {}", endpoint);
-                println!("   Latency     : {}", latency.green());
-                println!("   Transfer    : {}", transfer);
-                println!("{}", "---------------------------------------------------------".cyan());
-            }
+            println!("[cybermesh] no peers — WireGuard mesh not implemented (Phase 3).");
         }
         Commands::Genkey => {
+            // Placeholder random material only — not a real Curve25519 WG keypair.
             let privkey = generate_wireguard_key();
             let pubkey = generate_wireguard_key();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "         CYBERMESH WIREGUARD KEYPAIR GENERATED           ".bold().green());
+            println!("{}", "  Random 32-byte material (NOT a real WireGuard keypair) ".bold().yellow());
             println!("{}", "=========================================================".cyan());
-            println!(" Private Key  : {}", privkey.yellow());
-            println!(" Public Key   : {}", pubkey.green().bold());
+            println!(" Private (demo) : {}", privkey.yellow());
+            println!(" Public  (demo) : {}", pubkey.green());
+            println!(" Note: Phase 3 will use proper X25519 keygen.");
             println!("{}", "=========================================================".cyan());
         }
     }

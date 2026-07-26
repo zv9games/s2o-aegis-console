@@ -4,8 +4,8 @@ use colored::*;
 #[derive(Parser)]
 #[command(name = "cyberintel")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "1.0.0")]
-#[command(about = "S2O ThreatGrid Intel: Automated IOC Feed Ingestion & Threat Scoring CLI", long_about = None)]
+#[command(version = "0.1.0")]
+#[command(about = "S2O ThreatGrid Intel: IOC feeds & reputation (Phase 2)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -13,14 +13,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Display ThreatGrid Intel status, loaded IOC metrics, and feed providers
     Status,
-    /// Query real-time threat intelligence reputation score for an IP, domain, or file hash
-    Lookup {
-        /// Target IP address, domain, or SHA-256 hash
-        target: String,
-    },
-    /// Trigger immediate sync with Split2ops Global Threat Feeds (MISP, OTX, abuse.ch)
+    Lookup { target: String },
     Sync,
 }
 
@@ -31,38 +25,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "      SPLIT2OPS SOFTWARE THREATGRID INTEL ENGINE        ".bold().green());
+            println!("{}", "      S2O ThreatGrid (Phase 2 target)                    ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Threat Feeds      : {}", "MISP Taxii, AlienVault OTX, abuse.ch, S2O Cloud".bold());
-            println!(" Total Ingested IOCs: {}", "2,410,900 malicious IP/domain/hash signatures".yellow().bold());
-            println!(" Threat Scoring    : {}", "ML BAYESIAN REPUTATION (0 - 100 Risk Score)".green());
-            println!(" Feed Sync Status  : {}", "SYNCHRONIZED (Last updated: 5 mins ago)".green().bold());
+            println!(" IOC database      : {}", "NOT BUILT".red().bold());
+            println!(" Feeds             : {}", "planned: abuse.ch, OTX, MISP".yellow());
+            println!(" Implemented       : {}", "CLI scaffold only".yellow());
             println!("{}", "=========================================================".cyan());
         }
         Commands::Lookup { target } => {
-            println!("{}", format!("[CYBERINTEL] Querying ThreatGrid Intelligence for target: '{}'...", target).cyan());
-
-            println!("{}", "---------------------------------------------------------".cyan());
-            println!(" Query Target : {}", target.bold());
-            if target.contains(".") && !target.chars().any(|c| c.is_alphabetic()) {
-                println!(" Object Type  : IP Address");
-                println!(" Reputation   : {}", "CLEAN (Risk Score: 0/100)".green().bold());
-                println!(" Threat Category: Benign Enterprise Endpoint");
-            } else if target.contains(".") {
-                println!(" Object Type  : Domain Name");
-                println!(" Reputation   : {}", "CLEAN (Risk Score: 0/100)".green().bold());
-                println!(" Threat Category: Verified Domain");
-            } else {
-                println!(" Object Type  : SHA-256 Hash");
-                println!(" Reputation   : {}", "CLEAN (Risk Score: 0/100)".green().bold());
-                println!(" Threat Category: Safe File Signature");
-            }
-            println!("{}", "---------------------------------------------------------".cyan());
+            eprintln!("[threatgrid] lookup not implemented for '{target}' (Phase 2).");
+            std::process::exit(2);
         }
         Commands::Sync => {
-            println!("{}", "[CYBERINTEL] Syncing with Split2ops Global Threat Feeds...".cyan());
-            println!("{}", "[CYBERINTEL] Ingesting abuse.ch ThreatFox + URLhaus feeds...".yellow());
-            println!("{}", "SUCCESS: Ingested 18,400 new threat indicators.".green().bold());
+            eprintln!("[threatgrid] feed sync not implemented (Phase 2).");
+            std::process::exit(2);
         }
     }
 

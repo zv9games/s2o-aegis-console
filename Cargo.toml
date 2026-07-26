@@ -1,6 +1,9 @@
 [workspace]
 members = [
     ".",
+    "crates/s2o-schema",
+    "crates/s2o-store",
+    "crates/s2o-bus",
     "crates/cyberwall-core",
     "crates/cyberwall-backend-windows",
     "crates/cyberwall-backend-linux",
