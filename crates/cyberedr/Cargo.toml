@@ -15,4 +15,4 @@ colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
-s2o_net_lib = { path = "../../../s2o.s2o_net_lib" }
+s2o_net_lib = { path = "../../../net-lib" }

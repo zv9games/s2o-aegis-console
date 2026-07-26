@@ -31,7 +31,7 @@ chrono = "0.4"
 winit = "0.26.1"
 crossbeam = "0.8.0"
 crossbeam-channel = "0.5.0"
-s2o_net_lib = { path = "../s2o.s2o_net_lib" }
+s2o_net_lib = { path = "../net-lib" }
 futures = "0.3"
 winapi = { version = "0.3", features = ["winsock2", "ws2ipdef"] }
 libc = "0.2"

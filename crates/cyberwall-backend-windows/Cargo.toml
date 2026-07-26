@@ -8,4 +8,4 @@ authors = ["Split2ops Software"]
 async-trait = "0.1"
 tokio = { version = "1.0", features = ["full"] }
 cyberwall-core = { path = "../cyberwall-core" }
-s2o_net_lib = { path = "../../../s2o.s2o_net_lib" }
+s2o_net_lib = { path = "../../../net-lib" }
