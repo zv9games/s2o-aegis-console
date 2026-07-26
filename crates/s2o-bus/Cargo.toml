@@ -1,0 +1,11 @@
+[package]
+name = "s2o-bus"
+version = "0.1.0"
+edition = "2021"
+authors = ["Split2ops Software"]
+description = "S2O Aegis in-process event bus (IPC later)"
+
+[dependencies]
+s2o-schema = { path = "../s2o-schema" }
+s2o-store = { path = "../s2o-store" }
+parking_lot = "0.12"

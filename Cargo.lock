@@ -27,6 +27,8 @@ dependencies = [
  "colored",
  "cyberwall-backend-windows",
  "cyberwall-core",
+ "s2o-schema",
+ "s2o-store",
  "serde",
  "serde_json",
  "tokio",
@@ -450,6 +452,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
@@ -800,6 +803,8 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
  "serde",
  "serde_json",
  "tokio",
@@ -836,6 +841,8 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "s2o-schema",
+ "s2o-store",
  "serde",
  "serde_json",
  "tokio",
@@ -2843,6 +2850,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
+name = "s2o-bus"
+version = "0.1.0"
+dependencies = [
+ "parking_lot 0.12.3",
+ "s2o-schema",
+ "s2o-store",
+]
+
+[[package]]
+name = "s2o-schema"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "s2o-store"
+version = "0.1.0"
+dependencies = [
+ "s2o-schema",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "s2o_net_lib"
 version = "0.1.0"
 dependencies = [
@@ -3477,6 +3513,7 @@ checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
