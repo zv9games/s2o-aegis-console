@@ -43,6 +43,11 @@ enum Commands {
     /// SHA-256 scan a file or directory (first-level files, max 64)
     Scan {
         path: String,
+        /// Move blocked files into quarantine dir
+        #[arg(long)]
+        quarantine: bool,
+        #[arg(long, default_value = ".aegis/quarantine")]
+        quarantine_dir: PathBuf,
     },
     /// Write / refresh local rules seed file
     UpdateDefs,
@@ -222,6 +227,31 @@ fn content_pattern_hit(path: &Path, patterns: &[(String, String)]) -> Option<Str
     None
 }
 
+fn quarantine_file(src: &Path, qdir: &Path) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(qdir)?;
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let name = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file.bin");
+    let dest = qdir.join(format!("{ts}_{name}"));
+    // prefer rename; fall back to copy+remove
+    if fs::rename(src, &dest).is_err() {
+        fs::copy(src, &dest)?;
+        let _ = fs::remove_file(src);
+    }
+    let meta = serde_json::json!({
+        "original": src.display().to_string(),
+        "quarantined": dest.display().to_string(),
+        "at": chrono::Utc::now().to_rfc3339(),
+    });
+    fs::write(
+        dest.with_extension("meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap_or_else(|_| "{}".into()),
+    )?;
+    Ok(dest)
+}
+
 fn collect_targets(path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
@@ -358,7 +388,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
             );
         }
-        Commands::Scan { path } => {
+        Commands::Scan {
+            path,
+            quarantine,
+            quarantine_dir,
+        } => {
             let root = PathBuf::from(&path);
             let rules = load_rules(&cli.rules);
             let mut hash_set = rules.hash_set();
@@ -395,6 +429,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut hashed = 0u32;
             let mut blocked = 0u32;
+            let mut quarantined = 0u32;
+            let maybe_quarantine = |t: &Path, quarantine: bool, qdir: &Path| -> Option<PathBuf> {
+                if !quarantine {
+                    return None;
+                }
+                match quarantine_file(t, qdir) {
+                    Ok(dest) => {
+                        println!(
+                            " Quarantine   : {}",
+                            dest.display().to_string().yellow().bold()
+                        );
+                        Some(dest)
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!(" quarantine failed: {e}").red());
+                        None
+                    }
+                }
+            };
             for t in &targets {
                 if let Some(sub) = rules.name_hit(t) {
                     blocked += 1;
@@ -407,15 +460,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         " Verdict      : {}",
                         format!("BLOCKED (name rule: {sub})").red().bold()
                     );
+                    let qpath = maybe_quarantine(t, quarantine, &quarantine_dir);
+                    if qpath.is_some() {
+                        quarantined += 1;
+                    }
                     emit(
                         &cli.event_log,
-                        EventAction::Blocked,
+                        EventAction::Quarantined,
                         Severity::High,
                         format!("name rule hit: {}", t.display()),
                         &[
                             ("path", serde_json::json!(t.display().to_string())),
                             ("rule", serde_json::json!(sub)),
                             ("verdict", serde_json::json!("blocked_name")),
+                            (
+                                "quarantined",
+                                serde_json::json!(qpath.map(|p| p.display().to_string())),
+                            ),
                         ],
                         None,
                     );
@@ -433,15 +494,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         " Verdict      : {}",
                         format!("BLOCKED (yara-lite: {rule})").red().bold()
                     );
+                    let qpath = maybe_quarantine(t, quarantine, &quarantine_dir);
+                    if qpath.is_some() {
+                        quarantined += 1;
+                    }
                     emit(
                         &cli.event_log,
-                        EventAction::Blocked,
+                        EventAction::Quarantined,
                         Severity::High,
                         format!("yara-lite hit: {}", t.display()),
                         &[
                             ("path", serde_json::json!(t.display().to_string())),
                             ("rule", serde_json::json!(rule)),
                             ("verdict", serde_json::json!("blocked_pattern")),
+                            (
+                                "quarantined",
+                                serde_json::json!(qpath.map(|p| p.display().to_string())),
+                            ),
                         ],
                         None,
                     );
@@ -466,15 +535,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 " Verdict      : {}",
                                 "BLOCKED (hash rule / ThreatGrid)".red().bold()
                             );
+                            let qpath = maybe_quarantine(t, quarantine, &quarantine_dir);
+                            if qpath.is_some() {
+                                quarantined += 1;
+                            }
                             emit(
                                 &cli.event_log,
-                                EventAction::Blocked,
+                                EventAction::Quarantined,
                                 Severity::High,
                                 format!("hash rule hit: {}", t.display()),
                                 &[
                                     ("path", serde_json::json!(t.display().to_string())),
                                     ("sha256", serde_json::json!(hash)),
                                     ("verdict", serde_json::json!("blocked_hash")),
+                                    (
+                                        "quarantined",
+                                        serde_json::json!(
+                                            qpath.map(|p| p.display().to_string())
+                                        ),
+                                    ),
                                 ],
                                 Some(Ioc::Hash(hash)),
                             );
@@ -506,7 +585,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
-            println!(" Files hashed: {hashed}/{}  blocked: {blocked}", targets.len());
+            println!(
+                " Files hashed: {hashed}/{}  blocked: {blocked}  quarantined: {quarantined}",
+                targets.len()
+            );
             if blocked > 0 {
                 std::process::exit(3);
             }

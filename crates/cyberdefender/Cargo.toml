@@ -15,6 +15,7 @@ colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
 s2o_net_lib = { path = "../../../net-lib" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }

@@ -60,6 +60,20 @@ enum Commands {
         #[arg(long, default_value_t = 5)]
         keep: usize,
     },
+    /// Follow live events from the JSONL store
+    Watch {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long, default_value_t = 5)]
+        from_recent: usize,
+    },
+    /// Run response playbooks against recent events (dry-run by default)
+    Playbook {
+        #[command(subcommand)]
+        command: PlaybookCmd,
+    },
     /// Run a product CLI if on PATH / target/debug (best-effort shim)
     Run {
         /// Product binary: cyberwall, cyberdns, cyberdefender, cyberedr, ...
@@ -82,6 +96,153 @@ enum PolicyCmd {
         #[arg(long, default_value = "edge")]
         kind: String,
     },
+}
+
+#[derive(Subcommand)]
+enum PlaybookCmd {
+    /// Write a starter playbook file
+    Init {
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+    },
+    /// Evaluate playbooks against recent events
+    Run {
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Actually perform actions (default is dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct PlaybookFile {
+    rules: Vec<PlaybookRule>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct PlaybookRule {
+    name: String,
+    #[serde(default)]
+    enabled: bool,
+    when: PlaybookWhen,
+    then: Vec<PlaybookAction>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct PlaybookWhen {
+    #[serde(default)]
+    product: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+    #[serde(default)]
+    message_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct PlaybookAction {
+    #[serde(rename = "type")]
+    action_type: String,
+    #[serde(default)]
+    attr: Option<String>,
+    #[serde(default)]
+    domain: Option<String>,
+}
+
+fn default_playbooks() -> PlaybookFile {
+    PlaybookFile {
+        rules: vec![
+            PlaybookRule {
+                name: "echo-dns-blocks".into(),
+                enabled: true,
+                when: PlaybookWhen {
+                    product: Some("cyberdns".into()),
+                    action: Some("blocked".into()),
+                    severity: None,
+                    message_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "log".into(),
+                    attr: None,
+                    domain: None,
+                }],
+            },
+            PlaybookRule {
+                name: "seed-blocklist-from-dns-attr".into(),
+                enabled: true,
+                when: PlaybookWhen {
+                    product: Some("cyberdns".into()),
+                    action: Some("blocked".into()),
+                    severity: Some("high".into()),
+                    message_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "dns_block_attr".into(),
+                    attr: Some("domain".into()),
+                    domain: None,
+                }],
+            },
+        ],
+    }
+}
+
+fn event_matches(ev: &s2o_schema::AegisEvent, when: &PlaybookWhen) -> bool {
+    if let Some(ref p) = when.product {
+        let id = ev.product.as_str();
+        let name = format!("{:?}", ev.product).to_ascii_lowercase();
+        let pf = p.to_ascii_lowercase();
+        if id != pf && !name.contains(&pf) {
+            return false;
+        }
+    }
+    if let Some(ref a) = when.action {
+        if !format!("{:?}", ev.action).eq_ignore_ascii_case(a) {
+            return false;
+        }
+    }
+    if let Some(ref s) = when.severity {
+        if !format!("{:?}", ev.severity).eq_ignore_ascii_case(s) {
+            return false;
+        }
+    }
+    if let Some(ref m) = when.message_contains {
+        if !ev.message.to_ascii_lowercase().contains(&m.to_ascii_lowercase()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn append_dns_block(domain: &str) -> std::io::Result<()> {
+    let path = Path::new(".aegis/dns-blocklist.txt");
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d.is_empty() {
+        return Ok(());
+    }
+    let existing = if path.exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    if existing.lines().any(|l| l.trim().eq_ignore_ascii_case(&d)) {
+        return Ok(());
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{d}")?;
+    Ok(())
 }
 
 fn find_product_bin(name: &str) -> Option<PathBuf> {
@@ -360,6 +521,141 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 event_log.display()
             );
         }
+        Commands::Watch {
+            event_log,
+            interval_ms,
+            from_recent,
+        } => {
+            println!(
+                "[aegis] watching {} (Ctrl+C to stop)",
+                event_log.display()
+            );
+            let store = EventStore::open(&event_log)?;
+            if from_recent > 0 {
+                for ev in store.recent(from_recent)? {
+                    println!(
+                        "[{}] {:?} {:?} | {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
+                println!("{}", "---- live ----".dimmed());
+            }
+            let mut offset = store.byte_len().unwrap_or(0);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+                let store = EventStore::open(&event_log)?;
+                let (next, events) = store.read_since(offset)?;
+                offset = next;
+                for ev in events {
+                    println!(
+                        "[{}] {:?} {:?} | {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
+            }
+        }
+        Commands::Playbook { command } => match command {
+            PlaybookCmd::Init { path } => {
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
+                let pb = default_playbooks();
+                std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                println!(
+                    "{}",
+                    format!("[aegis] wrote playbook {}", path.display())
+                        .green()
+                        .bold()
+                );
+            }
+            PlaybookCmd::Run {
+                path,
+                event_log,
+                limit,
+                apply,
+            } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let pb: PlaybookFile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                if !event_log.exists() {
+                    eprintln!("[aegis] no event log");
+                    std::process::exit(1);
+                }
+                let store = EventStore::open(&event_log)?;
+                let events = store.recent(limit)?;
+                let mode = if apply { "APPLY" } else { "DRY-RUN" };
+                println!(
+                    "[aegis] playbook {} ({} rules, {} events window)",
+                    mode,
+                    pb.rules.len(),
+                    events.len()
+                );
+                let mut fired = 0u32;
+                for rule in pb.rules.iter().filter(|r| r.enabled) {
+                    for ev in &events {
+                        if !event_matches(ev, &rule.when) {
+                            continue;
+                        }
+                        fired += 1;
+                        println!(
+                            "  rule={} event={} | {}",
+                            rule.name.yellow(),
+                            ev.id,
+                            ev.message
+                        );
+                        for act in &rule.then {
+                            match act.action_type.as_str() {
+                                "log" => {
+                                    println!("    -> log (ok)");
+                                }
+                                "dns_block_attr" => {
+                                    let key = act.attr.as_deref().unwrap_or("domain");
+                                    let domain = ev
+                                        .attrs
+                                        .get(key)
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                        .or_else(|| act.domain.clone());
+                                    match domain {
+                                        Some(d) if apply => {
+                                            append_dns_block(&d)?;
+                                            println!("    -> dns_block {d} APPLIED");
+                                        }
+                                        Some(d) => {
+                                            println!("    -> dns_block {d} (dry-run)");
+                                        }
+                                        None => println!("    -> dns_block skipped (no domain)"),
+                                    }
+                                }
+                                "dns_block" => {
+                                    if let Some(d) = &act.domain {
+                                        if apply {
+                                            append_dns_block(d)?;
+                                            println!("    -> dns_block {d} APPLIED");
+                                        } else {
+                                            println!("    -> dns_block {d} (dry-run)");
+                                        }
+                                    }
+                                }
+                                other => println!("    -> unknown action {other}"),
+                            }
+                        }
+                    }
+                }
+                println!("[aegis] playbook complete: {fired} rule hits");
+            }
+        },
         Commands::Run { product, args } => {
             let bin = find_product_bin(&product).ok_or_else(|| {
                 format!(

@@ -97,6 +97,7 @@ cargo run -p cyberdns -- serve --listen 127.0.0.1:53553
 
 cargo run -p cyberdefender -- update-defs
 cargo run -p cyberdefender -- scan Cargo.toml
+cargo run -p cyberdefender -- scan suspect.bin --quarantine
 cargo run -p cyberedr -- processes --limit 16
 cargo run -p cyberedr -- ps --limit 20
 cargo run -p cyberedr -- alerts

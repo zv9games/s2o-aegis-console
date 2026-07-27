@@ -34,6 +34,9 @@
 - `aegis report` markdown/JSON audit
 - `aegisd start` health HTTP on `127.0.0.1:9090` (`/health`, `/status`)
 - ThreatGrid `sync --online` (URLHaus text feed, capped)
+- `aegis watch` / `cybersiem follow` live event tail
+- Defender `--quarantine` for blocked files
+- `aegis playbook init|run` dry-run/apply response rules
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

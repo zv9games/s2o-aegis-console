@@ -145,6 +145,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ `aegis report` audit (markdown/JSON)  
 - ✅ `aegisd` local health HTTP (`/health`, `/status`)  
 - ✅ ThreatGrid `--online` feed sync (capped)  
+- ✅ Live event watch (`aegis watch` / `cybersiem follow`)  
+- ✅ Defender quarantine on block  
+- ✅ Playbooks dry-run/apply (`aegis playbook`)  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

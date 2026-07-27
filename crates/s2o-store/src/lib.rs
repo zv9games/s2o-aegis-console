@@ -143,6 +143,48 @@ impl EventStore {
             .filter(|l| !l.trim().is_empty())
             .count())
     }
+
+    /// Byte length of the log file (0 if missing).
+    pub fn byte_len(&self) -> StoreResult<u64> {
+        self.len_bytes()
+    }
+
+    /// Read new complete JSONL lines since `byte_offset`. Returns (new_offset, events).
+    /// Incomplete trailing line is not consumed (offset stays before it).
+    pub fn read_since(&self, byte_offset: u64) -> StoreResult<(u64, Vec<AegisEvent>)> {
+        use std::io::{Read, Seek, SeekFrom};
+        if !self.path.exists() {
+            return Ok((0, Vec::new()));
+        }
+        let mut file = File::open(&self.path)?;
+        let len = file.metadata()?.len();
+        if byte_offset >= len {
+            return Ok((len, Vec::new()));
+        }
+        file.seek(SeekFrom::Start(byte_offset))?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        // Keep incomplete final line for next poll
+        let (complete, remainder) = if buf.ends_with('\n') {
+            (buf.as_str(), "")
+        } else if let Some(pos) = buf.rfind('\n') {
+            (&buf[..=pos], &buf[pos + 1..])
+        } else {
+            // no complete line yet
+            return Ok((byte_offset, Vec::new()));
+        };
+        let mut events = Vec::new();
+        for line in complete.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(ev) = serde_json::from_str::<AegisEvent>(line) {
+                events.push(ev);
+            }
+        }
+        let new_offset = len - remainder.len() as u64;
+        Ok((new_offset, events))
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +242,34 @@ mod tests {
         assert!(path.exists());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}.1", path.display()));
+    }
+
+    #[test]
+    fn read_since_streams_new_lines() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("s2o_store_follow_{nanos}.jsonl"));
+        let _ = std::fs::remove_file(&path);
+        let store = EventStore::open(&path).unwrap();
+        let (off0, e0) = store.read_since(0).unwrap();
+        assert!(e0.is_empty());
+        store
+            .append(&AegisEvent::new(
+                "h",
+                ProductId::Aegis,
+                EventKind::Health,
+                EventAction::Observed,
+                Severity::Info,
+                "a",
+            ))
+            .unwrap();
+        let (off1, e1) = store.read_since(off0).unwrap();
+        assert_eq!(e1.len(), 1);
+        assert_eq!(e1[0].message, "a");
+        let (_, e2) = store.read_since(off1).unwrap();
+        assert!(e2.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 }

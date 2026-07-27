@@ -10,7 +10,11 @@ cargo run -p aegis-cli -- report
 cargo run -p aegis-cli -- report --json --out .aegis/report.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
 cargo run -p aegis-cli -- events --limit 20
+cargo run -p aegis-cli -- watch
 cargo run -p aegis-cli -- rotate
+cargo run -p aegis-cli -- playbook init
+cargo run -p aegis-cli -- playbook run              # dry-run
+cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist etc.
 ```
 
 ### Daemon health endpoint

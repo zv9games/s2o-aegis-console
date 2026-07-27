@@ -61,6 +61,17 @@ enum Commands {
         #[arg(long, default_value_t = 5_000)]
         limit: usize,
     },
+    /// Follow the event log (poll for new JSONL lines)
+    Follow {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Poll interval milliseconds
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        /// Print existing tail first
+        #[arg(long, default_value_t = 5)]
+        from_recent: usize,
+    },
 }
 
 fn product_matches(p: ProductId, filter: &str) -> bool {
@@ -329,6 +340,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if hits.is_empty() {
                 println!("(no correlated events)");
+            }
+        }
+        Commands::Follow {
+            event_log,
+            interval_ms,
+            from_recent,
+        } => {
+            println!(
+                "[cyberlog] following {} (Ctrl+C to stop)",
+                event_log.display()
+            );
+            let store = EventStore::open(&event_log)?;
+            if from_recent > 0 {
+                for ev in store.recent(from_recent)? {
+                    println!(
+                        "[{}] {:?} {:?} | {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
+                println!("{}", "---- live ----".dimmed());
+            }
+            let mut offset = store.byte_len().unwrap_or(0);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+                let store = EventStore::open(&event_log)?;
+                let (next, events) = store.read_since(offset)?;
+                offset = next;
+                for ev in events {
+                    println!(
+                        "[{}] {:?} {:?} | {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
             }
         }
     }
