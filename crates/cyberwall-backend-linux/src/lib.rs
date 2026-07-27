@@ -1,13 +1,17 @@
-//! Linux Cyberwall backend — Phase 1 partial (honest nft/firewalld probes).
+//! Linux Cyberwall backend — Phase 1/3 partial (firewalld/nft probes + managed rules).
 //!
 //! Does **not** flush rulesets or blindly DROP OUTPUT. Prefer firewalld when present;
-//! otherwise report nft presence without destructive defaults.
+//! managed apply uses firewalld rich rules or an isolated `inet s2o_aegis` nft table.
 
 use async_trait::async_trait;
 use cyberwall_core::{
     EngineError, EngineResult, FirewallEngine, FirewallPolicy, FirewallRule, FirewallStatus,
-    ProfileType, RuleAction, RuleDirection,
+    ProfileType, RuleAction, RuleDirection, MANAGED_RULE_PREFIX,
 };
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 
 pub struct LinuxFirewallEngine;
 
@@ -191,9 +195,261 @@ impl FirewallEngine for LinuxFirewallEngine {
         Ok(vec![])
     }
 
-    async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {
-        Err(EngineError(
-            "apply_policy not implemented on Linux (Phase 1 partial)".into(),
-        ))
+    async fn apply_policy(&self, policy: &FirewallPolicy) -> EngineResult<()> {
+        let policy = policy.clone().ensure_managed_names();
+        tokio::task::spawn_blocking(move || apply_policy_linux(&policy))
+            .await
+            .map_err(|e| EngineError(e.to_string()))?
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Managed declarative rules (firewalld rich-rule or nft table s2o_aegis)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LinuxManagedState {
+    version: String,
+    /// firewalld rich-rule strings previously applied
+    rich_rules: Vec<String>,
+    /// true if nft table inet s2o_aegis was created
+    nft_table: bool,
+}
+
+fn managed_state_path() -> PathBuf {
+    PathBuf::from(".aegis/linux-fw-managed.json")
+}
+
+fn load_state() -> LinuxManagedState {
+    let p = managed_state_path();
+    if !p.exists() {
+        return LinuxManagedState::default();
+    }
+    fs::read_to_string(&p)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_state(st: &LinuxManagedState) -> Result<(), String> {
+    if let Some(parent) = managed_state_path().parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(
+        managed_state_path(),
+        serde_json::to_string_pretty(st).unwrap_or_else(|_| "{}".into()),
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn firewalld_running() -> bool {
+    Command::new("firewall-cmd")
+        .arg("--state")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn nft_available() -> bool {
+    Command::new("nft")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn rich_rule_for(rule: &FirewallRule) -> Result<String, String> {
+    let port = rule
+        .local_port
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "linux apply: rule {} needs local_port (app rules not supported)",
+                rule.name
+            )
+        })?;
+    let proto = rule
+        .protocol
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .unwrap_or("tcp")
+        .to_ascii_lowercase();
+    let action = match rule.action {
+        RuleAction::Allow => "accept",
+        RuleAction::Block => "reject",
+    };
+    // comment carries managed name for operators; firewalld may ignore unknown attrs
+    let mut parts = vec![
+        r#"rule family="ipv4""#.to_string(),
+        format!(r#"port port="{port}" protocol="{proto}""#),
+    ];
+    if matches!(rule.direction, RuleDirection::Outbound) {
+        parts.insert(1, r#"direction="out""#.to_string());
+    }
+    parts.push(action.to_string());
+    Ok(parts.join(" "))
+}
+
+fn firewalld_remove_rich(rule: &str) {
+    let _ = Command::new("firewall-cmd")
+        .args(["--permanent", &format!("--remove-rich-rule={rule}")])
+        .output();
+}
+
+fn firewalld_add_rich(rule: &str) -> Result<(), String> {
+    let out = Command::new("firewall-cmd")
+        .args(["--permanent", &format!("--add-rich-rule={rule}")])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "firewall-cmd add-rich-rule failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn firewalld_reload() -> Result<(), String> {
+    let out = Command::new("firewall-cmd")
+        .arg("--reload")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "firewall-cmd --reload failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn apply_via_firewalld(policy: &FirewallPolicy) -> Result<(), String> {
+    let mut st = load_state();
+    for old in &st.rich_rules {
+        firewalld_remove_rich(old);
+    }
+    st.rich_rules.clear();
+
+    for rule in &policy.rules {
+        if !rule.enabled {
+            continue;
+        }
+        let rich = rich_rule_for(rule)?;
+        firewalld_add_rich(&rich)?;
+        st.rich_rules.push(rich);
+    }
+    firewalld_reload()?;
+    st.version = policy.version.clone();
+    st.nft_table = false;
+    save_state(&st)?;
+    let _ = MANAGED_RULE_PREFIX; // documented prefix used on Windows; Linux uses rich-rule state
+    Ok(())
+}
+
+fn nft_delete_table() {
+    let _ = Command::new("nft")
+        .args(["delete", "table", "inet", "s2o_aegis"])
+        .output();
+}
+
+fn apply_via_nft(policy: &FirewallPolicy) -> Result<(), String> {
+    nft_delete_table();
+    let mut script = String::from("table inet s2o_aegis {\n");
+    script.push_str("  chain input {\n    type filter hook input priority 0; policy accept;\n");
+    let mut out_rules = String::new();
+    for rule in &policy.rules {
+        if !rule.enabled {
+            continue;
+        }
+        let port = rule
+            .local_port
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| format!("nft apply: rule {} needs local_port", rule.name))?;
+        let proto = rule
+            .protocol
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .unwrap_or("tcp")
+            .to_ascii_lowercase();
+        let verb = match rule.action {
+            RuleAction::Allow => "accept",
+            RuleAction::Block => "drop",
+        };
+        let line = format!(
+            "    {proto} dport {{ {port} }} {verb} comment \"{}\"\n",
+            rule.name.replace('"', "")
+        );
+        match rule.direction {
+            RuleDirection::Inbound => script.push_str(&line),
+            RuleDirection::Outbound => out_rules.push_str(&line.replace("dport", "dport")), // still dport for dest
+        }
+    }
+    script.push_str("  }\n");
+    if !out_rules.is_empty() {
+        script.push_str("  chain output {\n    type filter hook output priority 0; policy accept;\n");
+        // for outbound block of dest ports use dport on output chain
+        script.push_str(&out_rules);
+        script.push_str("  }\n");
+    }
+    script.push_str("}\n");
+
+    let tmp = PathBuf::from(".aegis/linux-fw-nft.rules");
+    if let Some(p) = tmp.parent() {
+        fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    fs::write(&tmp, &script).map_err(|e| e.to_string())?;
+    let out = Command::new("nft")
+        .args(["-f", tmp.to_str().unwrap_or(".aegis/linux-fw-nft.rules")])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "nft -f failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let st = LinuxManagedState {
+        version: policy.version.clone(),
+        rich_rules: vec![],
+        nft_table: true,
+    };
+    save_state(&st)?;
+    Ok(())
+}
+
+fn apply_policy_linux(policy: &FirewallPolicy) -> EngineResult<()> {
+    if firewalld_running() {
+        apply_via_firewalld(policy).map_err(EngineError)?;
+        return Ok(());
+    }
+    if nft_available() {
+        apply_via_nft(policy).map_err(EngineError)?;
+        return Ok(());
+    }
+    Err(EngineError(
+        "linux apply_policy: need firewalld or nft (and privileges)".into(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rich_rule_block_port() {
+        let mut r = FirewallRule::simple(
+            format!("{MANAGED_RULE_PREFIX}lab-445"),
+            RuleAction::Block,
+            RuleDirection::Inbound,
+        );
+        r.local_port = Some("445".into());
+        r.protocol = Some("TCP".into());
+        let s = rich_rule_for(&r).unwrap();
+        assert!(s.contains("445"));
+        assert!(s.contains("tcp") || s.contains("TCP") || s.contains("protocol=\"tcp\""));
+        assert!(s.contains("reject"));
     }
 }

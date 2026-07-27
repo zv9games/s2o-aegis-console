@@ -113,7 +113,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | SIEM | `cybersiem stats\|correlate\|events\|collect\|follow` |
 | Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |
-| Mesh | `cybermesh genkey\|config\|show` |
+| Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna serve [--tls] [--mtls-ca] [--jwt-secret] --upstream URL` |
 
 ## Gate HTTPS + session

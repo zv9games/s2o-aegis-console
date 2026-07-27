@@ -415,6 +415,13 @@ struct PlaybookAction {
     /// Webhook URL for action_type = webhook
     #[serde(default)]
     url: Option<String>,
+    /// Message template for action_type = emit (supports {message})
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+    #[serde(default)]
+    product: Option<String>,
 }
 
 fn default_playbooks() -> PlaybookFile {
@@ -434,6 +441,9 @@ fn default_playbooks() -> PlaybookFile {
                     attr: None,
                     domain: None,
                     url: None,
+                    message: None,
+                    severity: None,
+                    product: None,
                 }],
             },
             PlaybookRule {
@@ -450,6 +460,28 @@ fn default_playbooks() -> PlaybookFile {
                     attr: Some("domain".into()),
                     domain: None,
                     url: None,
+                    message: None,
+                    severity: None,
+                    product: None,
+                }],
+            },
+            PlaybookRule {
+                name: "emit-on-high-block".into(),
+                enabled: true,
+                when: PlaybookWhen {
+                    product: None,
+                    action: Some("blocked".into()),
+                    severity: Some("high".into()),
+                    message_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "emit".into(),
+                    attr: None,
+                    domain: None,
+                    url: None,
+                    message: Some("playbook: {message}".into()),
+                    severity: Some("high".into()),
+                    product: Some("aegis".into()),
                 }],
             },
             PlaybookRule {
@@ -466,6 +498,9 @@ fn default_playbooks() -> PlaybookFile {
                     attr: None,
                     domain: None,
                     url: Some("http://127.0.0.1:9999/hook".into()),
+                    message: None,
+                    severity: None,
+                    product: None,
                 }],
             },
         ],
@@ -598,6 +633,71 @@ async fn run_playbook_actions(
                     }
                 }
             }
+            "dns_allow_attr" => {
+                let key = act.attr.as_deref().unwrap_or("domain");
+                let domain = ev
+                    .attrs
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| act.domain.clone());
+                match domain {
+                    Some(d) if apply => {
+                        append_dns_allow(&d)?;
+                        println!("    -> dns_allow {d} APPLIED");
+                    }
+                    Some(d) => println!("    -> dns_allow {d} (dry-run)"),
+                    None => println!("    -> dns_allow skipped (no domain)"),
+                }
+            }
+            "dns_allow" => {
+                if let Some(d) = &act.domain {
+                    if apply {
+                        append_dns_allow(d)?;
+                        println!("    -> dns_allow {d} APPLIED");
+                    } else {
+                        println!("    -> dns_allow {d} (dry-run)");
+                    }
+                }
+            }
+            "emit" => {
+                let tmpl = act
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "playbook matched: {message}".into());
+                let msg = tmpl.replace("{message}", &ev.message);
+                let severity = act
+                    .severity
+                    .as_deref()
+                    .and_then(s2o_schema::Severity::parse_loose)
+                    .unwrap_or(s2o_schema::Severity::Info);
+                let product = act
+                    .product
+                    .as_deref()
+                    .and_then(s2o_schema::ProductId::parse_loose)
+                    .unwrap_or(s2o_schema::ProductId::Aegis);
+                if apply {
+                    let path = Path::new(".aegis/events.jsonl");
+                    if let Some(p) = path.parent() {
+                        std::fs::create_dir_all(p)?;
+                    }
+                    let store = EventStore::open(path)?;
+                    let out = AegisEvent::new(
+                        s2o_kernel::host_id(),
+                        product,
+                        s2o_schema::EventKind::Alert,
+                        s2o_schema::EventAction::Observed,
+                        severity,
+                        msg.clone(),
+                    )
+                    .with_attr("playbook", serde_json::json!(rule.name))
+                    .with_attr("source_event", serde_json::json!(ev.id.to_string()));
+                    store.append(&out)?;
+                    println!("    -> emit APPLIED ({msg})");
+                } else {
+                    println!("    -> emit (dry-run) {msg}");
+                }
+            }
             "webhook" => {
                 let url = act.url.clone().unwrap_or_default();
                 if url.is_empty() {
@@ -631,6 +731,33 @@ async fn run_playbook_actions(
             other => println!("    -> unknown action {other}"),
         }
     }
+    Ok(())
+}
+
+fn append_dns_allow(domain: &str) -> std::io::Result<()> {
+    let path = Path::new(".aegis/dns-allowlist.txt");
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d.is_empty() {
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    if existing.lines().any(|l| {
+        l.split('#').next().unwrap_or("").trim().eq_ignore_ascii_case(&d)
+    }) {
+        return Ok(());
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    if existing.is_empty() {
+        writeln!(f, "# S2O CyberDNS local allowlist")?;
+    }
+    writeln!(f, "{d}")?;
     Ok(())
 }
 

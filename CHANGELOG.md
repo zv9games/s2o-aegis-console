@@ -81,10 +81,13 @@
 - Multi-process event bus: `POST /events` + `aegisd --event-udp`, `s2o-bus` UDP relay, `aegis emit [--http] [--udp]`
 - CyberDNS allowlist: `allow|unallow|list --allow`, overrides blocklist+IOC in resolve/serve; policy `allow_domains`
 - CyberEDR `listen [--risk-only]`: TCP LISTEN inventory from userspace table
+- Linux Cyberwall `apply_policy`: firewalld rich-rules or nft `inet s2o_aegis` managed table
+- CyberMesh `doctor`: validate private key, conf, peers registry, wg tools
+- Playbook actions: `emit`, `dns_allow` / `dns_allow_attr`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
 - Transparent DNS redirector, embedded boringtun
-- Linux/macOS declarative rule apply (Windows only for managed rules)
+- macOS declarative rule apply
 - Production browser IdP UI (lab authorize HTML + CLI auto-approve only)
 - Remote SIEM EPS / multi-tenant collectors / gRPC bus

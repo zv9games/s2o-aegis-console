@@ -7,4 +7,6 @@ authors = ["Split2ops Software"]
 [dependencies]
 async-trait = "0.1"
 tokio = { version = "1.0", features = ["full", "process"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 cyberwall-core = { path = "../cyberwall-core" }

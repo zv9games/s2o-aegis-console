@@ -24,6 +24,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Status,
+    /// Validate keys/conf/peers registry (no tunnel create)
+    Doctor {
+        #[arg(long, default_value = ".aegis/wg0.conf")]
+        conf: PathBuf,
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        peers_file: PathBuf,
+        #[arg(long, default_value = ".aegis/wg-private.key")]
+        private_key_file: PathBuf,
+    },
     /// Print system `wg show` if available (does not create tunnels)
     Show,
     /// Attempt `wg-quick up` on a conf (requires admin + wg-quick)
@@ -326,7 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "X25519 keys, multi-peer registry, conf writer, wg show/wg-quick".green()
+                "X25519 keys, multi-peer registry, conf writer, doctor, wg show/wg-quick".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -336,6 +345,162 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+        }
+        Commands::Doctor {
+            conf,
+            peers_file,
+            private_key_file,
+        } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut check = |label: &str, good: bool, detail: &str| {
+                if good {
+                    ok += 1;
+                    println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                } else if detail.starts_with("WARN") {
+                    warn += 1;
+                    println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                } else {
+                    fail += 1;
+                    println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                }
+            };
+
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "      S2O CyberMesh doctor                               "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+
+            // X25519 / key material
+            if private_key_file.exists() {
+                match fs::read_to_string(&private_key_file) {
+                    Ok(pk) => {
+                        let pk = pk.trim();
+                        match wg_pubkey_from_private(pk) {
+                            Ok(pubk) => check(
+                                "private key",
+                                true,
+                                &format!(
+                                    "{} → pub {}",
+                                    private_key_file.display(),
+                                    &pubk[..16.min(pubk.len())]
+                                ),
+                            ),
+                            Err(e) => check("private key", false, &format!("decode error: {e}")),
+                        }
+                    }
+                    Err(e) => check("private key", false, &e.to_string()),
+                }
+            } else {
+                check(
+                    "private key",
+                    false,
+                    &format!(
+                        "WARN missing {} — run: cybermesh genkey --write-private …",
+                        private_key_file.display()
+                    ),
+                );
+            }
+
+            // conf file
+            if conf.exists() {
+                match fs::read_to_string(&conf) {
+                    Ok(text) => {
+                        let has_iface = text.contains("[Interface]") && text.contains("PrivateKey");
+                        let peers = text.matches("[Peer]").count();
+                        check(
+                            "conf file",
+                            has_iface,
+                            &format!(
+                                "{} interface={} peers={}",
+                                conf.display(),
+                                has_iface,
+                                peers
+                            ),
+                        );
+                        if has_iface && peers == 0 {
+                            check(
+                                "conf peers",
+                                false,
+                                "WARN no [Peer] sections — peers add or --peer-public",
+                            );
+                        }
+                    }
+                    Err(e) => check("conf file", false, &e.to_string()),
+                }
+            } else {
+                check(
+                    "conf file",
+                    false,
+                    &format!("WARN missing {} — run cybermesh config", conf.display()),
+                );
+            }
+
+            // peers registry
+            if peers_file.exists() {
+                let reg = PeerRegistry::load(&peers_file);
+                check(
+                    "peers registry",
+                    true,
+                    &format!("{} ({} peer(s))", peers_file.display(), reg.peers.len()),
+                );
+                for p in &reg.peers {
+                    let pk_ok = B64.decode(p.public_key.trim()).map(|b| b.len() == 32).unwrap_or(false);
+                    check(
+                        &format!("peer {}", p.name),
+                        pk_ok,
+                        if pk_ok {
+                            p.endpoint.as_deref().unwrap_or("no endpoint")
+                        } else {
+                            "invalid public key base64"
+                        },
+                    );
+                }
+            } else {
+                check(
+                    "peers registry",
+                    false,
+                    &format!("WARN missing {}", peers_file.display()),
+                );
+            }
+
+            // tools
+            match find_wg() {
+                Some(bin) => check("wg tool", true, bin),
+                None => check("wg tool", false, "WARN wg not on PATH (optional)"),
+            }
+            match find_wg_quick() {
+                Some(bin) => check("wg-quick", true, bin),
+                None => check(
+                    "wg-quick",
+                    false,
+                    "WARN not found — import conf via WireGuard UI",
+                ),
+            }
+
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
+            println!(" Summary: ok={ok} warn={warn} fail={fail}");
+            println!(
+                " Not embedded: {}",
+                "boringtun userspace stack (later)".yellow()
+            );
+            if fail > 0 {
+                std::process::exit(2);
+            }
         }
         Commands::Show => {
             let Some(bin) = find_wg() else {

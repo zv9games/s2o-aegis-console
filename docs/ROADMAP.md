@@ -179,6 +179,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberLog UDP syslog collect + ThreatGrid multi-feed online sync (capped)  
 - ✅ Multi-process event ingest (`POST /events`, UDP bus, `aegis emit`)  
 - ✅ CyberDNS allowlist + EDR listen inventory  
+- ✅ Linux managed firewall apply + mesh doctor + playbook emit/dns_allow  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

@@ -99,7 +99,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: X25519 keys + conf writer + optional wg show/wg-quick; no embedded stack",
+            "partial: X25519 keys + conf/peers + doctor + wg show/wg-quick; no boringtun embed",
         ),
         ProductId::Gate => ModuleStatus::new(
             product,
@@ -147,8 +147,9 @@ fn wall_baseline(os: OsFamily, demo: bool) -> ModuleStatus {
         ),
         OsFamily::Linux => (
             HealthState::Partial,
-            "Linux nftables/firewalld partial backend; live probe follows".to_string(),
-            Some("linux_nft_firewalld".to_string()),
+            "Linux firewalld/nft managed rules (s2o_aegis / rich-rule state); live probe follows"
+                .to_string(),
+            Some("linux_firewalld_nft_managed".to_string()),
         ),
         OsFamily::Macos => (
             HealthState::Partial,
