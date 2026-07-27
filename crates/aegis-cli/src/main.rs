@@ -1052,12 +1052,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  + {}", rules.display());
             }
 
-            // yara-lite
+            // yara-lite (substr / re / hex)
             let yara = data_dir.join("yara-lite.rules");
             if !yara.exists() {
                 std::fs::write(
                     &yara,
-                    "# name: needle\n# eicar_string: EICAR-STANDARD-ANTIVIRUS-TEST-FILE\n",
+                    concat!(
+                        "# S2O yara-lite (not full YARA-X)\n",
+                        "# name: substr | re:regex | hex:DE AD BE EF | [high] name: ...\n",
+                        "eicar_string: EICAR-STANDARD-ANTIVIRUS-TEST-FILE\n",
+                        "[high] powershell_enc: re:(?i)powershell.{0,80}-e(nc|ncodedcommand)\n",
+                        "[medium] shellcode_nop_sled: hex:90 90 90 90 90 90 90 90\n",
+                    ),
                 )?;
                 println!("  + {}", yara.display());
             }

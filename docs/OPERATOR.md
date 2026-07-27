@@ -91,9 +91,10 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 |-----|---------|
 | Firewall | `cyberwall status\|enable\|lock` |
 | DNS | `cyberdns resolve\|block\|serve` |
-| Defender | `cyberdefender scan\|update-defs` |
+| Defender | `cyberdefender scan\|watch\|patterns\|update-defs` |
 | EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
+| Linux | `scripts/s2o-aegisd.service` (systemd) |
 | SIEM | `cybersiem stats\|correlate\|events` |
 | Intel | `cyberintel sync\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |
@@ -117,6 +118,28 @@ curl -k -H "X-Aegis-Session: aegis_..." https://127.0.0.1:18443/
 ```
 
 Posture score is cached ~15s. Without a valid session (when `--require-session`), Gate returns **401**. Low posture returns **403** with `x-aegis-posture-score`. IP not on allowlist → **403**. Rate limit → **429**. Successful session use updates `last_used` (`cyberid sessions`). Cleanup: `cyberid gc`.
+
+## YARA-lite (not full YARA-X)
+
+```powershell
+cargo run -p cyberdefender -- patterns init --force
+cargo run -p cyberdefender -- patterns list
+cargo run -p cyberdefender -- patterns test --text "EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
+cargo run -p cyberdefender -- scan .aegis --recursive --max-files 64
+cargo run -p cyberdefender -- watch .aegis --interval-ms 3000
+```
+
+Rule lines: `name: needle`, `name: re:regex`, `name: hex:90 90`, optional `[high] name: ...`.
+
+## Linux systemd
+
+```bash
+sudo install -m 755 target/release/aegisd /usr/local/bin/aegisd
+sudo install -d /var/lib/s2o-aegis
+sudo install -m 644 scripts/s2o-aegisd.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now s2o-aegisd
+curl -s http://127.0.0.1:9090/health
+```
 
 ## Event store
 

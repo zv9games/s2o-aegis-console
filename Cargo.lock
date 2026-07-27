@@ -946,11 +946,12 @@ dependencies = [
 
 [[package]]
 name = "cyberdefender"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "clap",
  "colored",
+ "regex",
  "s2o-ioc",
  "s2o-schema",
  "s2o-store",

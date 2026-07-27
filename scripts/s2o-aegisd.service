@@ -1,0 +1,36 @@
+# systemd unit for S2O Aegis suite kernel (Linux T1 packaging).
+#
+# Install (as root):
+#   install -m 755 target/release/aegisd /usr/local/bin/aegisd
+#   install -d /var/lib/s2o-aegis
+#   install -m 644 scripts/s2o-aegisd.service /etc/systemd/system/s2o-aegisd.service
+#   systemctl daemon-reload
+#   systemctl enable --now s2o-aegisd
+#
+# Health: curl -s http://127.0.0.1:9090/health
+
+[Unit]
+Description=S2O Aegis suite kernel (aegisd)
+Documentation=https://github.com/zv9games/s2o-aegis-console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Override paths via drop-in if non-root:
+#   systemctl edit s2o-aegisd
+Environment=S2O_AEGIS_EVENT_LOG=/var/lib/s2o-aegis/events.jsonl
+Environment=S2O_AEGIS_HEALTH_BIND=127.0.0.1:9090
+ExecStart=/usr/local/bin/aegisd start --event-log /var/lib/s2o-aegis/events.jsonl --health-bind 127.0.0.1:9090
+Restart=on-failure
+RestartSec=5
+# Hardening (adjust if running as non-root with restricted dirs)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/s2o-aegis
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

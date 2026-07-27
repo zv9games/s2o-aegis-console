@@ -1,6 +1,6 @@
 [package]
 name = "cyberdefender"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -15,6 +15,7 @@ colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 s2o_net_lib = { path = "../../../net-lib" }
 s2o-schema = { path = "../s2o-schema" }

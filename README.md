@@ -42,7 +42,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 |---|--------|--------|-------------------------|
 | 1 | Cyberwall | `cyberwall` | **implemented** — COM INetFwPolicy2 via `s2o_net_lib` |
 | 2 | CyberDNS | `cyberdns` | **partial** — DoH + blocklist + IOC + UDP proxy |
-| 3 | CyberDefender | `cyberdefender` | **partial** — hash/name/yara-lite + IOC hashes |
+| 3 | CyberDefender | `cyberdefender` | **partial** — hash/name + yara-lite (substr/re/hex) + IOC |
 | 4 | CyberEDR | `cyberedr` | **partial** — TCP + process inventory + heuristics |
 | 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats/correlate |
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |

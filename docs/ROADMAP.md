@@ -163,6 +163,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate IP allowlist + rate limit + session posture floor + last_used  
 - ✅ Windows Service SCM for aegisd + `aegis service`  
 - ✅ CyberEDR `watch` (process poll / ETW-lite)  
+- ✅ YARA-lite v1 (substr/re/hex + severity) + Defender watch/recursive  
+- ✅ Linux systemd unit for aegisd  
 - ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

@@ -54,6 +54,9 @@
 - Windows Service SCM for aegisd (`--run-as-service`, `aegis service install|start|stop|status`)
 - `scripts/install-aegis-service.ps1`; install tools `-RegisterService`
 - CyberEDR `watch` process appearance poll (ETW-lite userspace)
+- YARA-lite v1: `substr` / `re:` / `hex:` / severity tags; `patterns list|init|test`
+- Defender `scan --recursive`, directory `watch` poll
+- Linux systemd unit `scripts/s2o-aegisd.service`
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
