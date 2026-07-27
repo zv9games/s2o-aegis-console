@@ -58,7 +58,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         process_id: None,
     })?;
 
-    let (event_log, health_bind, no_health) = service_start_config();
+    let (event_log, health_bind, no_health, fleet) = service_start_config();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -76,7 +76,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let run = crate::run_daemon(event_log, health_bind, no_health, true);
+    let run = crate::run_daemon(event_log, health_bind, no_health, true, fleet);
     rt.block_on(async {
         tokio::select! {
             r = run => { let _ = r; }
@@ -98,11 +98,12 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 /// Parse start-like flags from the process command line after `--run-as-service`.
-fn service_start_config() -> (PathBuf, String, bool) {
+fn service_start_config() -> (PathBuf, String, bool, PathBuf) {
     let args: Vec<String> = std::env::args().collect();
     let mut event_log = default_event_log();
     let mut health_bind = "127.0.0.1:9090".to_string();
     let mut no_health = false;
+    let mut fleet = default_fleet_path();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -115,6 +116,12 @@ fn service_start_config() -> (PathBuf, String, bool) {
             "--health-bind" => {
                 if let Some(v) = args.get(i + 1) {
                     health_bind = v.clone();
+                    i += 1;
+                }
+            }
+            "--fleet" => {
+                if let Some(v) = args.get(i + 1) {
+                    fleet = PathBuf::from(v);
                     i += 1;
                 }
             }
@@ -133,7 +140,12 @@ fn service_start_config() -> (PathBuf, String, bool) {
             health_bind = v;
         }
     }
-    (event_log, health_bind, no_health)
+    if let Ok(v) = std::env::var("S2O_AEGIS_FLEET") {
+        if !v.is_empty() {
+            fleet = PathBuf::from(v);
+        }
+    }
+    (event_log, health_bind, no_health, fleet)
 }
 
 fn default_event_log() -> PathBuf {
@@ -145,4 +157,15 @@ fn default_event_log() -> PathBuf {
             .join("events.jsonl");
     }
     PathBuf::from(r"C:\ProgramData\S2O\Aegis\events.jsonl")
+}
+
+fn default_fleet_path() -> PathBuf {
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(base)
+            .join("S2O")
+            .join("Aegis")
+            .join("data")
+            .join("fleet.json");
+    }
+    PathBuf::from(r"C:\ProgramData\S2O\Aegis\fleet.json")
 }

@@ -162,6 +162,24 @@ sudo systemctl daemon-reload && sudo systemctl enable --now s2o-aegisd
 curl -s http://127.0.0.1:9090/health
 ```
 
+## Fleet inventory (local roster)
+
+```powershell
+cargo run -p aegis-cli -- fleet enroll --tag lab
+cargo run -p aegis-cli -- fleet heartbeat
+cargo run -p aegis-cli -- fleet list
+cargo run -p aegis-cli -- fleet status
+
+# With aegisd health HTTP:
+cargo run -p aegisd -- start --health-bind 127.0.0.1:9090
+# GET  http://127.0.0.1:9090/fleet
+# GET  http://127.0.0.1:9090/fleet/summary
+# POST http://127.0.0.1:9090/fleet/heartbeat  (JSON HeartbeatPayload)
+cargo run -p aegis-cli -- fleet heartbeat --push http://127.0.0.1:9090/fleet/heartbeat
+```
+
+Store: `.aegis/fleet.json` (file-backed; not a multi-tenant control plane yet).
+
 ## Event store
 
 - Default path: `.aegis/events.jsonl`

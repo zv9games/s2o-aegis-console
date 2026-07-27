@@ -5,6 +5,7 @@ mod config;
 use clap::{Parser, Subcommand};
 use colored::*;
 use config::SuiteConfig;
+use s2o_fleet::{FleetStore, HeartbeatPayload};
 use s2o_kernel::{
     apply_policy, collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode,
     host_id, load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
@@ -129,6 +130,66 @@ enum Commands {
     Service {
         #[command(subcommand)]
         command: ServiceCmd,
+    },
+    /// Local fleet host inventory (enroll / heartbeat / list)
+    Fleet {
+        #[command(subcommand)]
+        command: FleetCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum FleetCmd {
+    /// Enroll this host (or named host) into the fleet roster
+    Enroll {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        /// Override host id (default: COMPUTERNAME/HOSTNAME)
+        #[arg(long)]
+        host_id: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        tag: Vec<String>,
+    },
+    /// Refresh last_seen + posture/modules for this host
+    Heartbeat {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        #[arg(long)]
+        host_id: Option<String>,
+        /// POST heartbeat to aegisd (e.g. http://127.0.0.1:9090/fleet/heartbeat)
+        #[arg(long)]
+        push: Option<String>,
+    },
+    /// List enrolled hosts
+    List {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        /// Minutes without heartbeat = stale (default 60)
+        #[arg(long, default_value_t = 60)]
+        stale_minutes: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one host
+    Show {
+        id: String,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+    },
+    /// Remove a host from the roster
+    Remove {
+        id: String,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+    },
+    /// Summary counts
+    Status {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        stale_minutes: i64,
     },
 }
 
@@ -569,6 +630,40 @@ fn run_sc(args: &[&str]) -> Result<(i32, String, String), Box<dyn std::error::Er
         String::from_utf8_lossy(&out.stdout).to_string(),
         String::from_utf8_lossy(&out.stderr).to_string(),
     ))
+}
+
+async fn build_local_heartbeat(
+    fw: &s2o_kernel::FirewallEngineHandle,
+    host_override: Option<String>,
+    name: Option<String>,
+    tags: Vec<String>,
+) -> Result<HeartbeatPayload, Box<dyn std::error::Error>> {
+    let st = collect_platform_status(fw).await;
+    let posture = compute_posture_score(fw).await?;
+    let mut implemented = 0u32;
+    let mut partial = 0u32;
+    let mut other = 0u32;
+    for m in &st.modules {
+        match m.state.as_str() {
+            "implemented" => implemented += 1,
+            "partial" => partial += 1,
+            _ => other += 1,
+        }
+    }
+    let hid = host_override.unwrap_or_else(host_id);
+    Ok(HeartbeatPayload {
+        host_id: hid.clone(),
+        display_name: Some(name.unwrap_or_else(|| hid.clone())),
+        os: Some(st.os.as_str().to_string()),
+        phase: Some(st.phase.clone()),
+        kernel: Some(KERNEL_VERSION.to_string()),
+        posture_score: Some(posture.score),
+        modules_implemented: Some(implemented),
+        modules_partial: Some(partial),
+        modules_other: Some(other),
+        tags: if tags.is_empty() { None } else { Some(tags) },
+        last_ip: None,
+    })
 }
 
 #[tokio::main]
@@ -1246,6 +1341,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("{}", "SELFTEST PASS".green().bold());
         }
+        Commands::Fleet { command } => match command {
+            FleetCmd::Enroll {
+                fleet,
+                host_id: hid,
+                name,
+                tag,
+            } => {
+                let hb = build_local_heartbeat(&fw, hid, name, tag).await?;
+                let mut store = FleetStore::load(&fleet);
+                let h = store.upsert_heartbeat(hb);
+                store.save(&fleet)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[aegis] fleet enrolled host={} posture={} modules={}/{}/{}",
+                        h.host_id,
+                        h.posture_score,
+                        h.modules_implemented,
+                        h.modules_partial,
+                        h.modules_other
+                    )
+                    .green()
+                    .bold()
+                );
+                println!("  store : {}", fleet.display());
+            }
+            FleetCmd::Heartbeat {
+                fleet,
+                host_id: hid,
+                push,
+            } => {
+                let hb = build_local_heartbeat(&fw, hid, None, vec![]).await?;
+                if let Some(url) = push {
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(10))
+                        .build()?;
+                    let res = client.post(&url).json(&hb).send().await?;
+                    let status = res.status();
+                    let text = res.text().await.unwrap_or_default();
+                    println!("[aegis] fleet push {url} -> {status} {text}");
+                    if !status.is_success() {
+                        std::process::exit(1);
+                    }
+                } else {
+                    let mut store = FleetStore::load(&fleet);
+                    let h = store.upsert_heartbeat(hb);
+                    store.save(&fleet)?;
+                    println!(
+                        "[aegis] fleet heartbeat host={} posture={} last_seen={}",
+                        h.host_id, h.posture_score, h.last_seen
+                    );
+                }
+            }
+            FleetCmd::List {
+                fleet,
+                stale_minutes,
+                json,
+            } => {
+                let store = FleetStore::load(&fleet);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&store)?);
+                } else if store.hosts.is_empty() {
+                    println!("[aegis] fleet empty — run: aegis fleet enroll");
+                } else {
+                    println!(
+                        "{:<20} {:<12} {:>7} {:>8} {}",
+                        "HOST", "OS", "POSTURE", "STATE", "LAST_SEEN"
+                    );
+                    for h in &store.hosts {
+                        let state = if FleetStore::is_stale(h, stale_minutes) {
+                            "stale".yellow().to_string()
+                        } else {
+                            "online".green().to_string()
+                        };
+                        let name = if h.display_name.is_empty() {
+                            h.host_id.as_str()
+                        } else {
+                            h.display_name.as_str()
+                        };
+                        println!(
+                            "{:<20} {:<12} {:>7} {:>8} {}",
+                            name, h.os, h.posture_score, state, h.last_seen
+                        );
+                    }
+                    let s = store.summary(stale_minutes);
+                    println!(
+                        "--- total={} online={} stale={} avg_posture={:.0}",
+                        s.total, s.online, s.stale, s.avg_posture
+                    );
+                }
+            }
+            FleetCmd::Show { id, fleet } => {
+                let store = FleetStore::load(&fleet);
+                match store.get(&id) {
+                    Some(h) => println!("{}", serde_json::to_string_pretty(h)?),
+                    None => {
+                        eprintln!("[aegis] host not found: {id}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            FleetCmd::Remove { id, fleet } => {
+                let mut store = FleetStore::load(&fleet);
+                if store.remove(&id) {
+                    store.save(&fleet)?;
+                    println!("{}", format!("[aegis] removed {id}").yellow());
+                } else {
+                    eprintln!("[aegis] host not found: {id}");
+                    std::process::exit(1);
+                }
+            }
+            FleetCmd::Status {
+                fleet,
+                stale_minutes,
+            } => {
+                let store = FleetStore::load(&fleet);
+                let s = store.summary(stale_minutes);
+                println!("{}", "Aegis fleet status".bold().green());
+                println!(" Store   : {}", fleet.display());
+                println!(" Total   : {}", s.total);
+                println!(" Online  : {}", s.online.to_string().green());
+                println!(" Stale   : {}", s.stale.to_string().yellow());
+                println!(" Avg posture : {:.0}", s.avg_posture);
+            }
+        },
         Commands::Service { command } => {
             if !cfg!(windows) {
                 eprintln!("[aegis] service commands are Windows-only (use systemd unit on Linux later)");

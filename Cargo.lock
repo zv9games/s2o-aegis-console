@@ -32,6 +32,7 @@ dependencies = [
  "clap",
  "colored",
  "reqwest",
+ "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",
  "s2o-store",
@@ -49,6 +50,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",
  "s2o-store",
@@ -3437,6 +3439,15 @@ dependencies = [
  "parking_lot 0.12.3",
  "s2o-schema",
  "s2o-store",
+]
+
+[[package]]
+name = "s2o-fleet"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

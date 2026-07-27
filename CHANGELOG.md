@@ -60,6 +60,8 @@
 - Gate mTLS: lab PKI (`cyberztna mtls init`) + `--mtls-ca` client cert required
 - Gate JWT HS256 OIDC-lite (`--jwt-secret`, `cyberztna jwt mint|verify`)
 - Policy `gate` fragment + `policies/examples/gate-pack.json`
+- Fleet inventory MVP: `s2o-fleet`, `aegis fleet enroll|heartbeat|list|show|remove|status`
+- aegisd HTTP: `GET /fleet`, `/fleet/summary`, `POST /fleet/heartbeat` + Prometheus fleet gauges
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks

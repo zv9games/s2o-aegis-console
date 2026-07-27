@@ -45,6 +45,9 @@ enum Commands {
         /// Disable the health HTTP endpoint
         #[arg(long)]
         no_health: bool,
+        /// Fleet inventory store path (for /fleet HTTP)
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -77,32 +80,43 @@ enum PolicyCmd {
     },
 }
 
-/// Minimal HTTP/1.0 health server: GET /health, /status, /metrics
+/// Minimal HTTP/1.0 health server: GET /health, /status, /metrics, /fleet
+/// POST /fleet/heartbeat
 async fn health_server(
     bind: String,
     fw: FirewallEngineHandle,
     event_log: PathBuf,
+    fleet_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     loop {
-        let (mut sock, _) = listener.accept().await?;
+        let (mut sock, peer) = listener.accept().await?;
         let fw = fw.clone();
         let event_log = event_log.clone();
+        let fleet_path = fleet_path.clone();
         tokio::spawn(async move {
-            let mut buf = [0u8; 2048];
+            let mut buf = [0u8; 65536];
             let n = match sock.read(&mut buf).await {
                 Ok(n) if n > 0 => n,
                 _ => return,
             };
             let req = String::from_utf8_lossy(&buf[..n]);
-            let path = req
-                .lines()
+            let first = req.lines().next().unwrap_or("");
+            let mut parts = first.split_whitespace();
+            let method = parts.next().unwrap_or("GET");
+            let path = parts
                 .next()
-                .and_then(|l| l.split_whitespace().nth(1))
                 .unwrap_or("/")
                 .split('?')
                 .next()
                 .unwrap_or("/");
+
+            // body after headers
+            let body_bytes = req
+                .split("\r\n\r\n")
+                .nth(1)
+                .or_else(|| req.split("\n\n").nth(1))
+                .unwrap_or("");
 
             let (code, body, ctype) = if path == "/health" || path.starts_with("/health/") {
                 (
@@ -120,6 +134,66 @@ async fn health_server(
                         format!("{{\"error\":\"{e}\"}}\n"),
                         "application/json",
                     ),
+                }
+            } else if path == "/fleet" || path == "/fleet/" {
+                let store = s2o_fleet::FleetStore::load(&fleet_path);
+                match serde_json::to_string(&store) {
+                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
+                }
+            } else if path == "/fleet/summary" || path.starts_with("/fleet/summary") {
+                let store = s2o_fleet::FleetStore::load(&fleet_path);
+                let sum = store.summary(60);
+                match serde_json::to_string(&sum) {
+                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
+                }
+            } else if path == "/fleet/heartbeat" || path.starts_with("/fleet/heartbeat") {
+                if method != "POST" && method != "PUT" {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"POST JSON HeartbeatPayload\"}\n".into(),
+                        "application/json",
+                    )
+                } else {
+                    match serde_json::from_str::<s2o_fleet::HeartbeatPayload>(body_bytes) {
+                        Ok(mut hb) => {
+                            if hb.last_ip.is_none() {
+                                hb.last_ip = Some(peer.ip().to_string());
+                            }
+                            let mut store = s2o_fleet::FleetStore::load(&fleet_path);
+                            let host = store.upsert_heartbeat(hb);
+                            if let Err(e) = store.save(&fleet_path) {
+                                (
+                                    "500 Internal Server Error",
+                                    format!("{{\"error\":\"save: {e}\"}}\n"),
+                                    "application/json",
+                                )
+                            } else {
+                                match serde_json::to_string(&host) {
+                                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!("{{\"error\":\"{e}\"}}\n"),
+                                        "application/json",
+                                    ),
+                                }
+                            }
+                        }
+                        Err(e) => (
+                            "400 Bad Request",
+                            format!("{{\"error\":\"json: {e}\"}}\n"),
+                            "application/json",
+                        ),
+                    }
                 }
             } else if path == "/metrics" || path.starts_with("/metrics/") {
                 let st = collect_platform_status(&fw).await;
@@ -144,6 +218,8 @@ async fn health_server(
                 } else {
                     (0, 0)
                 };
+                let fleet = s2o_fleet::FleetStore::load(&fleet_path);
+                let fsum = fleet.summary(60);
                 let body = format!(
                     "# HELP aegis_up 1 if daemon health endpoint is serving\n\
                      # TYPE aegis_up gauge\n\
@@ -159,16 +235,24 @@ async fn health_server(
                      # HELP aegis_event_log_bytes Size of event log file\n\
                      # TYPE aegis_event_log_bytes gauge\n\
                      aegis_event_log_bytes {bytes}\n\
+                     # HELP aegis_fleet_hosts Fleet roster size\n\
+                     # TYPE aegis_fleet_hosts gauge\n\
+                     aegis_fleet_hosts {fleet_total}\n\
+                     # HELP aegis_fleet_online Hosts seen within stale window\n\
+                     # TYPE aegis_fleet_online gauge\n\
+                     aegis_fleet_online {fleet_online}\n\
                      # HELP aegis_demo_mode 1 if AEGIS_DEMO is enabled\n\
                      # TYPE aegis_demo_mode gauge\n\
                      aegis_demo_mode {}\n",
-                    if st.demo_mode { 1 } else { 0 }
+                    if st.demo_mode { 1 } else { 0 },
+                    fleet_total = fsum.total,
+                    fleet_online = fsum.online,
                 );
                 ("200 OK", body, "text/plain; version=0.0.4")
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /metrics\n".into(),
+                    "try GET /health /status /metrics /fleet /fleet/summary ; POST /fleet/heartbeat\n".into(),
                     "text/plain",
                 )
             };
@@ -188,6 +272,7 @@ pub async fn run_daemon(
     health_bind: String,
     no_health: bool,
     as_service: bool,
+    fleet_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -281,8 +366,9 @@ pub async fn run_daemon(
         let bind = health_bind.clone();
         let fw_h = create_firewall_engine();
         let el = event_log.clone();
+        let fl = fleet_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
@@ -290,6 +376,8 @@ pub async fn run_daemon(
             println!("[AEGISD] health HTTP     : http://{health_bind}/health");
             println!("[AEGISD] status JSON     : http://{health_bind}/status");
             println!("[AEGISD] metrics         : http://{health_bind}/metrics");
+            println!("[AEGISD] fleet           : http://{health_bind}/fleet");
+            println!("[AEGISD] fleet heartbeat : POST http://{health_bind}/fleet/heartbeat");
         }
     }
 
@@ -326,8 +414,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             event_log,
             health_bind,
             no_health,
+            fleet,
         } => {
-            run_daemon(event_log, health_bind, no_health, false).await?;
+            run_daemon(event_log, health_bind, no_health, false, fleet).await?;
         }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;

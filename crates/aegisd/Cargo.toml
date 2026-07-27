@@ -18,6 +18,7 @@ chrono = "0.4"
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }
 s2o-kernel = { path = "../s2o-kernel" }
+s2o-fleet = { path = "../s2o-fleet" }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.7"
