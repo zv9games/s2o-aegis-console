@@ -41,7 +41,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: SHA-256 + IOC + yara-lite + YARA-X lab rules + Defender probe; no minifilter/cloud feed",
+            "partial: SHA-256 + IOC + yara-lite + YARA-X + quarantine list/restore; no minifilter/cloud feed",
         ),
 
         ProductId::CyberEdr => ModuleStatus::new(
@@ -153,9 +153,9 @@ fn wall_baseline(os: OsFamily, demo: bool) -> ModuleStatus {
         ),
         OsFamily::Macos => (
             HealthState::Partial,
-            "macOS Application Firewall status only (socketfilterfw); no full policy control yet"
+            "macOS socketfilterfw status + managed app block apply_policy; no NEFilter/port rules"
                 .to_string(),
-            Some("macos_socketfilterfw".to_string()),
+            Some("macos_socketfilterfw_appblock".to_string()),
         ),
         OsFamily::Freebsd => (
             HealthState::UnsupportedOnOs,

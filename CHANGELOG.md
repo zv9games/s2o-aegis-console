@@ -84,10 +84,12 @@
 - Linux Cyberwall `apply_policy`: firewalld rich-rules or nft `inet s2o_aegis` managed table
 - CyberMesh `doctor`: validate private key, conf, peers registry, wg tools
 - Playbook actions: `emit`, `dns_allow` / `dns_allow_attr`
+- CyberDefender quarantine ops: `quarantine list|restore|purge`
+- macOS Cyberwall `apply_policy`: socketfilterfw managed app block/unblock (path rules)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
 - Transparent DNS redirector, embedded boringtun
-- macOS declarative rule apply
 - Production browser IdP UI (lab authorize HTML + CLI auto-approve only)
 - Remote SIEM EPS / multi-tenant collectors / gRPC bus
+- macOS port-based rules / NEFilter

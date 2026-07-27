@@ -1,0 +1,17 @@
+{
+  "name": "lab-macos-app-block",
+  "version": "0.1.0",
+  "rules": [
+    {
+      "name": "lab-block-example-app",
+      "enabled": true,
+      "action": "Block",
+      "direction": "Outbound",
+      "profile": "All",
+      "application": "/Applications/Example.app",
+      "protocol": null,
+      "local_port": null,
+      "remote_ip": null
+    }
+  ]
+}

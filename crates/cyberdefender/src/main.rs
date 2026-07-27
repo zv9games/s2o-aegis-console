@@ -104,8 +104,46 @@ enum Commands {
         #[arg(long)]
         yara: bool,
     },
+    /// List / restore / purge quarantined files
+    Quarantine {
+        #[command(subcommand)]
+        command: QuarantineCmd,
+    },
     Realtime {
         action: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum QuarantineCmd {
+    /// List quarantine directory entries
+    List {
+        #[arg(long, default_value = ".aegis/quarantine")]
+        dir: PathBuf,
+    },
+    /// Restore a quarantined file by name or path (uses sidecar .meta.json)
+    Restore {
+        /// File name under quarantine dir, or full path
+        target: String,
+        #[arg(long, default_value = ".aegis/quarantine")]
+        dir: PathBuf,
+        /// Overwrite existing original path
+        #[arg(long)]
+        force: bool,
+        /// Destination override (default: original path from meta)
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
+    /// Delete quarantine files (and meta); older_days=0 deletes all
+    Purge {
+        #[arg(long, default_value = ".aegis/quarantine")]
+        dir: PathBuf,
+        /// Age in days; **0 = all entries**
+        #[arg(long, default_value_t = 30)]
+        older_days: u64,
+        /// Actually delete (default dry-run)
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -261,6 +299,18 @@ fn calculate_file_hash(path: &Path) -> Result<String, std::io::Error> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn quarantine_meta_path(qfile: &Path) -> PathBuf {
+    // foo.bin → foo.meta.json ; preserve stem
+    let stem = qfile
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    qfile
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{stem}.meta.json"))
+}
+
 fn quarantine_file(src: &Path, qdir: &Path) -> std::io::Result<PathBuf> {
     fs::create_dir_all(qdir)?;
     let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
@@ -279,10 +329,42 @@ fn quarantine_file(src: &Path, qdir: &Path) -> std::io::Result<PathBuf> {
         "at": chrono::Utc::now().to_rfc3339(),
     });
     fs::write(
-        dest.with_extension("meta.json"),
+        quarantine_meta_path(&dest),
         serde_json::to_string_pretty(&meta).unwrap_or_else(|_| "{}".into()),
     )?;
     Ok(dest)
+}
+
+#[derive(Debug, Deserialize)]
+struct QuarantineMeta {
+    original: String,
+    #[allow(dead_code)]
+    quarantined: String,
+    #[serde(default)]
+    at: String,
+}
+
+fn list_quarantine_entries(dir: &Path) -> Vec<(PathBuf, Option<QuarantineMeta>)> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.ends_with(".meta.json") {
+            continue;
+        }
+        let meta = fs::read_to_string(quarantine_meta_path(&p))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+        out.push((p, meta));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 fn collect_targets(
@@ -695,7 +777,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!(
                 " Implemented       : {}",
-                "SHA-256 + name + yara-lite + YARA-X + IOC + Defender".green()
+                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine list/restore + Defender"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -1195,6 +1278,159 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 seen = live;
             }
         }
+        Commands::Quarantine { command } => match command {
+            QuarantineCmd::List { dir } => {
+                if !dir.is_dir() {
+                    println!("[cyberdefender] quarantine empty/missing: {}", dir.display());
+                    return Ok(());
+                }
+                let entries = list_quarantine_entries(&dir);
+                println!(
+                    "[cyberdefender] quarantine {} ({} file(s))",
+                    dir.display(),
+                    entries.len()
+                );
+                for (p, meta) in entries {
+                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+                    match meta {
+                        Some(m) => println!(
+                            "  {}  ← {}  ({})",
+                            name.bold(),
+                            m.original,
+                            if m.at.is_empty() { "-" } else { &m.at }
+                        ),
+                        None => println!("  {}  (no meta)", name.yellow()),
+                    }
+                }
+            }
+            QuarantineCmd::Restore { target, dir, force, to } => {
+                let qpath = {
+                    let t = PathBuf::from(&target);
+                    if t.is_file() {
+                        t
+                    } else {
+                        dir.join(&target)
+                    }
+                };
+                if !qpath.is_file() {
+                    eprintln!("[cyberdefender] not found: {}", qpath.display());
+                    std::process::exit(2);
+                }
+                let meta_path = quarantine_meta_path(&qpath);
+                let meta: QuarantineMeta = if meta_path.exists() {
+                    serde_json::from_str(&fs::read_to_string(&meta_path)?)?
+                } else {
+                    eprintln!(
+                        "[cyberdefender] missing meta {}; cannot restore to original",
+                        meta_path.display()
+                    );
+                    std::process::exit(2);
+                };
+                let dest = to.unwrap_or_else(|| PathBuf::from(&meta.original));
+                if dest.exists() && !force {
+                    eprintln!(
+                        "[cyberdefender] destination exists (use --force): {}",
+                        dest.display()
+                    );
+                    std::process::exit(3);
+                }
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                if fs::rename(&qpath, &dest).is_err() {
+                    fs::copy(&qpath, &dest)?;
+                    let _ = fs::remove_file(&qpath);
+                }
+                let _ = fs::remove_file(&meta_path);
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdefender] restored {} → {}",
+                        qpath.display(),
+                        dest.display()
+                    )
+                    .green()
+                    .bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Allowed,
+                    Severity::Info,
+                    format!("quarantine restore: {}", dest.display()),
+                    &[
+                        ("path", serde_json::json!(dest.display().to_string())),
+                        ("from", serde_json::json!(qpath.display().to_string())),
+                    ],
+                    None,
+                );
+            }
+            QuarantineCmd::Purge {
+                dir,
+                older_days,
+                apply,
+            } => {
+                if !dir.is_dir() {
+                    println!("[cyberdefender] nothing to purge");
+                    return Ok(());
+                }
+                let cutoff = if older_days == 0 {
+                    None
+                } else {
+                    Some(
+                        chrono::Utc::now() - chrono::Duration::days(older_days as i64),
+                    )
+                };
+                let mut n = 0u32;
+                for (p, meta) in list_quarantine_entries(&dir) {
+                    let old = if cutoff.is_none() {
+                        true
+                    } else {
+                        let cut = cutoff.unwrap();
+                        let at = meta
+                            .as_ref()
+                            .and_then(|m| chrono::DateTime::parse_from_rfc3339(&m.at).ok())
+                            .map(|t| t.with_timezone(&chrono::Utc));
+                        match at {
+                            Some(t) => t < cut,
+                            None => fs::metadata(&p)
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| {
+                                    let secs = d.as_secs() as i64;
+                                    chrono::DateTime::from_timestamp(secs, 0)
+                                        .map(|dt| dt < cut)
+                                        .unwrap_or(false)
+                                })
+                                .unwrap_or(false),
+                        }
+                    };
+                    if !old {
+                        continue;
+                    }
+                    n += 1;
+                    if apply {
+                        let _ = fs::remove_file(&p);
+                        let _ = fs::remove_file(quarantine_meta_path(&p));
+                        println!("  deleted {}", p.display());
+                    } else {
+                        println!("  would delete {}", p.display());
+                    }
+                }
+                if apply {
+                    println!(
+                        "{}",
+                        format!("[cyberdefender] purge deleted {n} file(s) older than {older_days}d")
+                            .green()
+                            .bold()
+                    );
+                } else {
+                    println!(
+                        "[cyberdefender] purge dry-run: {n} file(s) older than {older_days}d (use --apply)"
+                    );
+                }
+            }
+        },
         Commands::Realtime { action } => {
             eprintln!(
                 "[cyberdefender] kernel realtime shield not implemented (action={action})."
