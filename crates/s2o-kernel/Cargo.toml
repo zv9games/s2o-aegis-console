@@ -1,0 +1,26 @@
+[package]
+name = "s2o-kernel"
+version = "0.1.0"
+edition = "2021"
+authors = ["Split2ops Software"]
+description = "S2O Aegis suite kernel — registry, health matrix, policy router (T0)"
+
+[dependencies]
+s2o-schema = { path = "../s2o-schema" }
+s2o-store = { path = "../s2o-store" }
+s2o-bus = { path = "../s2o-bus" }
+cyberwall-core = { path = "../cyberwall-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+
+[target.'cfg(windows)'.dependencies]
+cyberwall-backend-windows = { path = "../cyberwall-backend-windows" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cyberwall-backend-linux = { path = "../cyberwall-backend-linux" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cyberwall-backend-macos = { path = "../cyberwall-backend-macos" }

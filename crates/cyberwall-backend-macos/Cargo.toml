@@ -1,0 +1,11 @@
+[package]
+name = "cyberwall-backend-macos"
+version = "0.1.0"
+edition = "2021"
+authors = ["Split2ops Software"]
+description = "S2O Cyberwall macOS backend (partial: socketfilterfw status)"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full", "process"] }
+cyberwall-core = { path = "../cyberwall-core" }

@@ -25,8 +25,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "cyberwall-backend-windows",
- "cyberwall-core",
+ "s2o-kernel",
  "s2o-schema",
  "s2o-store",
  "serde",
@@ -773,11 +772,13 @@ dependencies = [
 
 [[package]]
 name = "cyberdns"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "colored",
  "reqwest",
+ "s2o-schema",
+ "s2o-store",
  "serde",
  "serde_json",
  "tokio",
@@ -858,6 +859,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberwall-backend-macos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cyberwall-core",
+ "tokio",
+]
+
+[[package]]
 name = "cyberwall-backend-windows"
 version = "0.1.0"
 dependencies = [
@@ -873,8 +883,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "colored",
- "cyberwall-backend-windows",
  "cyberwall-core",
+ "s2o-kernel",
  "serde_json",
  "tokio",
 ]
@@ -2856,6 +2866,24 @@ dependencies = [
  "parking_lot 0.12.3",
  "s2o-schema",
  "s2o-store",
+]
+
+[[package]]
+name = "s2o-kernel"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cyberwall-backend-linux",
+ "cyberwall-backend-macos",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
+ "s2o-bus",
+ "s2o-schema",
+ "s2o-store",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

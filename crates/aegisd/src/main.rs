@@ -1,22 +1,26 @@
-//! S2O Aegis master daemon — Phase 0 honesty:
-//! only Cyberwall is a real engine. Other products report NOT_IMPLEMENTED
-//! unless AEGIS_DEMO=1 is set (explicit demo mode).
+//! S2O Aegis master daemon — Phase 1 foundation front door.
+//!
+//! Honesty: only engines that actually work report live data.
+//! Demo labels require AEGIS_DEMO=1.
 
 use clap::{Parser, Subcommand};
 use colored::*;
-use cyberwall_backend_windows::WindowsFirewallEngine;
-use cyberwall_core::FirewallEngine;
+use s2o_kernel::{
+    apply_policy, collect_platform_status, create_firewall_engine, demo_mode, host_id,
+    load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
+};
 use s2o_schema::{
-    AegisEvent, EventAction, EventKind, ProductId, Severity, SCHEMA_VERSION,
+    AegisEvent, EventAction, EventKind, HealthState, ProductId, Severity, SCHEMA_VERSION,
 };
 use s2o_store::EventStore;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "aegisd")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
 #[command(version = "0.1.0")]
-#[command(about = "S2O Aegis Platform: unified cyber-ops orchestrator (Phase 0: Cyberwall real)", long_about = None)]
+#[command(about = "S2O Aegis Platform: suite kernel / cyber-ops orchestrator (Phase 1 foundation)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -24,208 +28,230 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the Aegis daemon (real Cyberwall probe + event store)
+    /// Start the Aegis daemon (Cyberwall probe + event store)
     Start {
-        /// Directory for local event store (JSONL)
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
     },
-    /// Display platform status (honest: only implemented engines report live data)
+    /// Display platform status (honest matrix for all 9 worlds)
     Status {
         #[arg(long)]
         json: bool,
     },
-    /// Reload policy (not yet implemented)
+    /// Apply a policy document (v0: firewall intents)
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCmd,
+    },
+    /// Reload policy (placeholder — use `policy apply`)
     Reload,
 }
 
-fn demo_mode() -> bool {
-    std::env::var("AEGIS_DEMO")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+#[derive(Subcommand)]
+enum PolicyCmd {
+    /// Apply a JSON policy file through the kernel
+    Apply {
+        /// Path to policy JSON
+        path: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+    },
+    /// Print an example policy document
+    Example,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let fw = create_firewall_engine();
 
     match cli.command {
         Commands::Start { event_log } => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "     S2O AEGIS MASTER DAEMON  (Phase 0 spine)            ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Schema version    : {}", SCHEMA_VERSION);
-            println!(" Demo mode         : {}", if demo_mode() { "ON (AEGIS_DEMO)".yellow() } else { "OFF".green() });
-
-            let store = EventStore::open(&event_log)?;
-            println!(" Event store       : {}", store.path().display());
-
-            println!("[AEGISD] [1/9] Cyberwall Engine (COM policy)...");
-            let fw = WindowsFirewallEngine::new();
-            let st = fw.get_status().await?;
-            let line = if st.enabled {
-                format!(
-                    "ONLINE private={} public={} domain={}",
-                    st.profile_private, st.profile_public, st.profile_domain
-                )
-            } else {
-                "OFFLINE / disabled on interactive profiles".to_string()
-            };
             println!(
-                "[AEGISD]       -> {}",
-                if st.enabled {
-                    line.green().bold().to_string()
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "     S2O AEGIS MASTER DAEMON  (Phase 1 foundation)       "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(" Kernel version    : {}", KERNEL_VERSION);
+            println!(" Schema version    : {}", SCHEMA_VERSION);
+            println!(" Phase             : {}", PHASE_LABEL);
+            println!(" Tier ceiling      : {}", TIER_CEILING.as_str());
+            println!(
+                " Demo mode         : {}",
+                if demo_mode() {
+                    "ON (AEGIS_DEMO)".yellow().to_string()
                 } else {
-                    line.red().to_string()
+                    "OFF".green().to_string()
                 }
             );
 
-            let host_id = hostname();
+            let store = EventStore::open(&event_log)?;
+            println!(" Event store       : {}", store.path().display());
+            println!(" Host id           : {}", host_id());
+
+            let status = collect_platform_status(&fw).await;
+            for (i, m) in status.modules.iter().enumerate() {
+                let label = match m.state {
+                    HealthState::Implemented => m.state.as_str().green().bold().to_string(),
+                    HealthState::Partial => m.state.as_str().yellow().to_string(),
+                    HealthState::Demo => m.state.as_str().yellow().bold().to_string(),
+                    HealthState::Degraded => m.state.as_str().red().bold().to_string(),
+                    _ => m.state.as_str().red().to_string(),
+                };
+                println!(
+                    "[AEGISD] [{}/9] {} ... {}",
+                    i + 1,
+                    m.name,
+                    label
+                );
+                println!("         {}", m.detail);
+            }
+
+            let wall = status
+                .modules
+                .iter()
+                .find(|m| m.product == ProductId::Cyberwall);
             let ev = AegisEvent::new(
-                host_id,
+                host_id(),
                 ProductId::Aegis,
                 EventKind::Health,
                 EventAction::Observed,
                 Severity::Info,
                 format!(
-                    "aegisd start; cyberwall enabled={} defender={}",
-                    st.enabled, st.defender_active
+                    "aegisd start; phase={PHASE_LABEL}; wall={}",
+                    wall.map(|w| w.state.as_str()).unwrap_or("unknown")
                 ),
             )
-            .with_attr("cyberwall_enabled", serde_json::json!(st.enabled))
-            .with_attr("backend", serde_json::json!(st.backend_driver));
+            .with_attr("phase", serde_json::json!(PHASE_LABEL))
+            .with_attr("tier_ceiling", serde_json::json!(TIER_CEILING.as_str()))
+            .with_attr(
+                "wall_detail",
+                serde_json::json!(wall.map(|w| w.detail.as_str()).unwrap_or("")),
+            );
             store.append(&ev)?;
-            println!("[AEGISD]       -> health event written to store");
+            println!("[AEGISD] health event written to store");
 
-            println!("[AEGISD] [2/9] CyberMesh ............ {}", stub_label("Phase 3"));
-            println!("[AEGISD] [3/9] CyberDefender ........ {}", stub_label("Phase 1"));
-            println!("[AEGISD] [4/9] CyberEDR ............. {}", stub_label("Phase 2"));
-            println!("[AEGISD] [5/9] CyberLog ............. {}", stub_label("Phase 2"));
-            println!("[AEGISD] [6/9] ThreatGrid ........... {}", stub_label("Phase 2"));
-            println!("[AEGISD] [7/9] CyberDNS ............. {}", stub_label("Phase 1"));
-            println!("[AEGISD] [8/9] CyberID .............. {}", stub_label("Phase 2/3"));
-            println!("[AEGISD] [9/9] Gate (ZTNA) .......... {}", stub_label("Phase 3"));
-
-            println!("{}", "=========================================================".cyan());
             println!(
                 "{}",
-                "  Phase 0: spine live (Cyberwall + event store). Other engines pending."
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "  Phase 1: kernel + 9-world matrix + Cyberwall T0. Ctrl+C to stop."
                     .bold()
                     .yellow()
             );
-            println!("{}", "=========================================================".cyan());
-            println!("\nPress Ctrl+C to stop...");
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             tokio::signal::ctrl_c().await?;
             println!("\n[AEGISD] shutdown complete.");
         }
         Commands::Status { json } => {
-            let fw = WindowsFirewallEngine::new();
-            let st = fw.get_status().await?;
-
-            #[derive(serde::Serialize)]
-            struct ModuleStatus {
-                id: &'static str,
-                name: &'static str,
-                state: &'static str,
-                detail: String,
-            }
-
-            let modules = vec![
-                ModuleStatus {
-                    id: "cyberwall",
-                    name: "S2O Cyberwall",
-                    state: "implemented",
-                    detail: format!(
-                        "enabled={} private={} public={} domain={} defender={}",
-                        st.enabled,
-                        st.profile_private,
-                        st.profile_public,
-                        st.profile_domain,
-                        st.defender_active
-                    ),
-                },
-                ModuleStatus {
-                    id: "cybermesh",
-                    name: "S2O CyberMesh",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 3)".into(),
-                },
-                ModuleStatus {
-                    id: "cyberdefender",
-                    name: "S2O CyberDefender",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 1); net_lib Defender hooks exist".into(),
-                },
-                ModuleStatus {
-                    id: "cyberedr",
-                    name: "S2O CyberEDR",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 2)".into(),
-                },
-                ModuleStatus {
-                    id: "cybersiem",
-                    name: "S2O CyberLog",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 2); s2o-store/schema ready".into(),
-                },
-                ModuleStatus {
-                    id: "cyberintel",
-                    name: "S2O ThreatGrid",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 2)".into(),
-                },
-                ModuleStatus {
-                    id: "cyberdns",
-                    name: "S2O CyberDNS",
-                    state: stub_state(),
-                    detail: "partial CLI DoH resolve may work; proxy not production".into(),
-                },
-                ModuleStatus {
-                    id: "cyberid",
-                    name: "S2O CyberID",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 2/3)".into(),
-                },
-                ModuleStatus {
-                    id: "cyberztna",
-                    name: "S2O Gate",
-                    state: stub_state(),
-                    detail: "not implemented (Phase 3)".into(),
-                },
-            ];
-
+            let status = collect_platform_status(&fw).await;
             if json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "platform": "S2O Aegis",
-                        "schema_version": SCHEMA_VERSION,
-                        "demo_mode": demo_mode(),
-                        "modules": modules,
-                        "cyberwall": st,
-                    }))?
+                    "=========================================================".cyan()
                 );
-            } else {
-                println!("{}", "=========================================================".cyan());
-                println!("{}", "    S2O AEGIS PLATFORM STATUS (honest)                   ".bold().green());
-                println!("{}", "=========================================================".cyan());
-                for m in &modules {
+                println!(
+                    "{}",
+                    "    S2O AEGIS PLATFORM STATUS (honest)                   "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Phase        : {}", status.phase);
+                println!(" OS           : {}", status.os.as_str());
+                println!(" Tier ceiling : {}", status.tier_ceiling.as_str());
+                println!(" Host         : {}", status.host_id);
+                println!(
+                    " Demo mode    : {}",
+                    if status.demo_mode { "ON" } else { "OFF" }
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                for m in &status.modules {
                     let state_col = match m.state {
-                        "implemented" => m.state.green().bold(),
-                        "demo" => m.state.yellow().bold(),
-                        _ => m.state.red(),
+                        HealthState::Implemented => m.state.as_str().green().bold(),
+                        HealthState::Partial => m.state.as_str().yellow().bold(),
+                        HealthState::Demo => m.state.as_str().yellow().bold(),
+                        HealthState::Degraded => m.state.as_str().red().bold(),
+                        _ => m.state.as_str().red(),
                     };
                     println!(" Module  : {}", m.name.bold());
                     println!(" State   : {}", state_col);
                     println!(" Detail  : {}", m.detail);
-                    println!("{}", "---------------------------------------------------------".cyan());
+                    if let Some(b) = &m.backend {
+                        println!(" Backend : {}", b);
+                    }
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
                 }
             }
         }
+        Commands::Policy { command } => match command {
+            PolicyCmd::Example => {
+                let doc = s2o_schema::PolicyDocument::example_wall_enable();
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+            }
+            PolicyCmd::Apply { path, event_log } => {
+                println!("[aegisd] loading policy {}", path.display());
+                let doc = load_policy_file(&path)?;
+                let store = Arc::new(EventStore::open(&event_log)?);
+                let result = apply_policy(&doc, &fw, Some(store)).await?;
+                if result.ok {
+                    println!(
+                        "{}",
+                        format!("[aegisd] policy OK: {}", result.policy_name)
+                            .green()
+                            .bold()
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[aegisd] policy incomplete/failed: {}", result.policy_name)
+                            .yellow()
+                            .bold()
+                    );
+                }
+                for a in &result.applied {
+                    println!("  applied : {}", a.green());
+                }
+                for s in &result.skipped {
+                    println!("  skipped : {}", s.dimmed());
+                }
+                for e in &result.errors {
+                    println!("  error   : {}", e.red());
+                }
+                if !result.ok {
+                    std::process::exit(1);
+                }
+            }
+        },
         Commands::Reload => {
             eprintln!(
                 "{}",
-                "[AEGISD] Reload not implemented yet (no policy.json loader)."
+                "[AEGISD] Reload: use `aegisd policy apply <file>` (no daemon-held policy file yet)."
                     .yellow()
                     .bold()
             );
@@ -234,26 +260,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn stub_state() -> &'static str {
-    if demo_mode() {
-        "demo"
-    } else {
-        "not_implemented"
-    }
-}
-
-fn stub_label(phase: &str) -> ColoredString {
-    if demo_mode() {
-        format!("DEMO ONLINE ({phase})").yellow().bold()
-    } else {
-        format!("NOT IMPLEMENTED ({phase})").red()
-    }
-}
-
-fn hostname() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown-host".into())
 }

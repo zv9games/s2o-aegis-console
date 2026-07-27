@@ -12,6 +12,6 @@ path = "src/main.rs"
 clap = { version = "4.4", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 cyberwall-core = { path = "../cyberwall-core" }
-cyberwall-backend-windows = { path = "../cyberwall-backend-windows" }
+s2o-kernel = { path = "../s2o-kernel" }
 colored = "2.0"
 serde_json = "1.0"
