@@ -75,9 +75,10 @@
 - OAuth 2.0 device-code (RFC 8628 lab): aegisd `/oauth/device_*` + `cyberztna oauth device|approve`
 - CyberDefender YARA-X (VirusTotal pure-Rust `yara-x` 1.19): `yara init|list|test|scan`, `scan --yara|--yara-only`, lab seed `.aegis/yara/*.yar`
 - Cyberwall Windows `apply_policy`: managed netsh rules (`S2O-Aegis-*`), `cyberwall apply [--dry-run]`, suite policy `firewall.rules[]`
+- OAuth authorization-code grant (lab): aegisd `GET/POST /oauth/authorize`, token `grant_type=authorization_code`, `cyberztna oauth code`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
 - Transparent DNS redirector, embedded boringtun
 - Linux/macOS declarative rule apply (Windows only for managed rules)
-- Full browser OAuth authorization-code UI
+- Production browser IdP UI (lab authorize HTML + CLI auto-approve only)

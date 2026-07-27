@@ -178,9 +178,10 @@ async fn health_server(
                     "device_authorization_endpoint": format!("{issuer}/oauth/device_authorization"),
                     "grant_types_supported": [
                         "urn:ietf:params:oauth:grant-type:device_code",
+                        "authorization_code",
                         "refresh_token"
                     ],
-                    "response_types_supported": ["id_token", "token", "code"],
+                    "response_types_supported": ["code", "id_token", "token"],
                     "subject_types_supported": ["public"],
                     "id_token_signing_alg_values_supported": ["RS256", "HS256"],
                     "scopes_supported": ["openid", "profile"],
@@ -307,6 +308,202 @@ async fn health_server(
                         }
                     }
                 }
+            } else if path == "/oauth/authorize" || path.starts_with("/oauth/authorize?") {
+                // Authorization code grant (lab): GET consent form; POST issue code.
+                let q = path_q.split('?').nth(1).unwrap_or("");
+                let qmap = oauth::parse_form(q);
+                if method == "GET" {
+                    let client_id = qmap
+                        .get("client_id")
+                        .cloned()
+                        .unwrap_or_else(|| "s2o-gate".into());
+                    let redirect_uri = qmap
+                        .get("redirect_uri")
+                        .cloned()
+                        .unwrap_or_else(|| "urn:ietf:wg:oauth:2.0:oob".into());
+                    let state = qmap.get("state").cloned().unwrap_or_default();
+                    let scope = qmap
+                        .get("scope")
+                        .cloned()
+                        .unwrap_or_else(|| "openid profile".into());
+                    let response_type = qmap
+                        .get("response_type")
+                        .cloned()
+                        .unwrap_or_else(|| "code".into());
+                    let auto = qmap
+                        .get("auto_approve")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+                    let user = qmap
+                        .get("user")
+                        .cloned()
+                        .unwrap_or_else(|| "operator".into());
+                    if response_type != "code" {
+                        (
+                            "400 Bad Request",
+                            "{\"error\":\"unsupported_response_type\"}\n".into(),
+                            "application/json",
+                        )
+                    } else if auto {
+                        // Lab automation: issue code immediately
+                        let codes_path = oauth::codes_path_beside_devices(&oauth_devices);
+                        let mut store = oauth::AuthCodeStore::load(&codes_path);
+                        let issued = store.issue(
+                            &client_id,
+                            &redirect_uri,
+                            &user,
+                            if state.is_empty() {
+                                None
+                            } else {
+                                Some(state.clone())
+                            },
+                            300,
+                        );
+                        let _ = store.save(&codes_path);
+                        if oauth::is_oob_redirect(&redirect_uri) {
+                            let body = serde_json::json!({
+                                "code": issued.code,
+                                "state": issued.state,
+                                "redirect_uri": redirect_uri,
+                            });
+                            (
+                                "200 OK",
+                                format!(
+                                    "{}\n",
+                                    serde_json::to_string(&body).unwrap_or_default()
+                                ),
+                                "application/json",
+                            )
+                        } else {
+                            let loc = oauth::build_redirect_location(
+                                &redirect_uri,
+                                &issued.code,
+                                issued.state.as_deref(),
+                            );
+                            let html = format!(
+                                r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={loc}"></head>
+<body><p>Redirecting… <a href="{loc}">continue</a></p>
+<p>code=<code>{}</code></p></body></html>"#,
+                                issued.code
+                            );
+                            ("200 OK", html, "text/html; charset=utf-8")
+                        }
+                    } else {
+                        let html = oauth::authorize_page(
+                            &client_id,
+                            &redirect_uri,
+                            &state,
+                            &scope,
+                            None,
+                        );
+                        ("200 OK", html, "text/html; charset=utf-8")
+                    }
+                } else if method == "POST" {
+                    let form = oauth::parse_form(body_bytes);
+                    let json_body: Option<serde_json::Value> =
+                        serde_json::from_str(body_bytes).ok();
+                    let get = |k: &str| -> String {
+                        form.get(k)
+                            .cloned()
+                            .or_else(|| {
+                                json_body
+                                    .as_ref()
+                                    .and_then(|v| v.get(k))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_default()
+                    };
+                    let client_id = {
+                        let c = get("client_id");
+                        if c.is_empty() {
+                            "s2o-gate".into()
+                        } else {
+                            c
+                        }
+                    };
+                    let redirect_uri = {
+                        let r = get("redirect_uri");
+                        if r.is_empty() {
+                            "urn:ietf:wg:oauth:2.0:oob".into()
+                        } else {
+                            r
+                        }
+                    };
+                    let state = get("state");
+                    let user = {
+                        let u = get("user");
+                        if u.is_empty() {
+                            "operator".into()
+                        } else {
+                            u
+                        }
+                    };
+                    let decision = get("decision");
+                    let want_json = body_bytes.trim_start().starts_with('{')
+                        || get("format") == "json"
+                        || form.get("format").map(|s| s == "json").unwrap_or(false);
+                    if decision == "deny" {
+                        (
+                            "403 Forbidden",
+                            "{\"error\":\"access_denied\"}\n".into(),
+                            "application/json",
+                        )
+                    } else {
+                        let codes_path = oauth::codes_path_beside_devices(&oauth_devices);
+                        let mut store = oauth::AuthCodeStore::load(&codes_path);
+                        let issued = store.issue(
+                            &client_id,
+                            &redirect_uri,
+                            &user,
+                            if state.is_empty() {
+                                None
+                            } else {
+                                Some(state.clone())
+                            },
+                            300,
+                        );
+                        let _ = store.save(&codes_path);
+                        if want_json {
+                            let body = serde_json::json!({
+                                "code": issued.code,
+                                "state": issued.state,
+                                "redirect_uri": redirect_uri,
+                            });
+                            (
+                                "200 OK",
+                                format!(
+                                    "{}\n",
+                                    serde_json::to_string(&body).unwrap_or_default()
+                                ),
+                                "application/json",
+                            )
+                        } else if oauth::is_oob_redirect(&redirect_uri) {
+                            let html = oauth::authorize_code_result_page(
+                                &issued.code,
+                                issued.state.as_deref(),
+                            );
+                            ("200 OK", html, "text/html; charset=utf-8")
+                        } else {
+                            let loc = oauth::build_redirect_location(
+                                &redirect_uri,
+                                &issued.code,
+                                issued.state.as_deref(),
+                            );
+                            let html = format!(
+                                r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={loc}"></head>
+<body><p>Approved. <a href="{loc}">Return to client</a></p></body></html>"#
+                            );
+                            ("200 OK", html, "text/html; charset=utf-8")
+                        }
+                    }
+                } else {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"invalid_request\"}\n".into(),
+                        "application/json",
+                    )
+                }
             } else if path == "/oauth/token" {
                 if method != "POST" {
                     (
@@ -318,37 +515,88 @@ async fn health_server(
                     let form = oauth::parse_form(body_bytes);
                     let json_body: Option<serde_json::Value> =
                         serde_json::from_str(body_bytes).ok();
-                    let grant = form
-                        .get("grant_type")
-                        .cloned()
-                        .or_else(|| {
-                            json_body
-                                .as_ref()
-                                .and_then(|v| v.get("grant_type"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .unwrap_or_default();
-                    let device_code = form
-                        .get("device_code")
-                        .cloned()
-                        .or_else(|| {
-                            json_body
-                                .as_ref()
-                                .and_then(|v| v.get("device_code"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .unwrap_or_default();
-                    if grant != "urn:ietf:params:oauth:grant-type:device_code"
-                        && grant != "device_code"
+                    let form_or = |k: &str| -> String {
+                        form.get(k)
+                            .cloned()
+                            .or_else(|| {
+                                json_body
+                                    .as_ref()
+                                    .and_then(|v| v.get(k))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_default()
+                    };
+                    let grant = form_or("grant_type");
+                    if grant == "authorization_code" {
+                        let code = form_or("code");
+                        let client_id = {
+                            let c = form_or("client_id");
+                            if c.is_empty() {
+                                "s2o-gate".into()
+                            } else {
+                                c
+                            }
+                        };
+                        let redirect_uri = {
+                            let r = form_or("redirect_uri");
+                            if r.is_empty() {
+                                "urn:ietf:wg:oauth:2.0:oob".into()
+                            } else {
+                                r
+                            }
+                        };
+                        let codes_path = oauth::codes_path_beside_devices(&oauth_devices);
+                        let mut store = oauth::AuthCodeStore::load(&codes_path);
+                        match store.consume(&code, &client_id, &redirect_uri) {
+                            Ok(user) => {
+                                let _ = store.save(&codes_path);
+                                let issuer = public_base.trim_end_matches('/').to_string();
+                                match oauth::mint_access_token(
+                                    &user,
+                                    &issuer,
+                                    8,
+                                    &jwt_private,
+                                    None,
+                                ) {
+                                    Ok(tok) => {
+                                        let body = serde_json::json!({
+                                            "access_token": tok,
+                                            "token_type": "Bearer",
+                                            "expires_in": 28800,
+                                            "scope": "openid profile",
+                                            "sub": user,
+                                        });
+                                        (
+                                            "200 OK",
+                                            format!(
+                                                "{}\n",
+                                                serde_json::to_string(&body).unwrap_or_default()
+                                            ),
+                                            "application/json",
+                                        )
+                                    }
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!(
+                                            "{{\"error\":\"server_error\",\"error_description\":\"{e}\"}}\n"
+                                        ),
+                                        "application/json",
+                                    ),
+                                }
+                            }
+                            Err(e) => (
+                                "400 Bad Request",
+                                format!(
+                                    "{{\"error\":\"invalid_grant\",\"error_description\":\"{e}\"}}\n"
+                                ),
+                                "application/json",
+                            ),
+                        }
+                    } else if grant == "urn:ietf:params:oauth:grant-type:device_code"
+                        || grant == "device_code"
                     {
-                        (
-                            "400 Bad Request",
-                            "{\"error\":\"unsupported_grant_type\"}\n".into(),
-                            "application/json",
-                        )
-                    } else {
+                        let device_code = form_or("device_code");
                         let mut store = oauth::DeviceStore::load(&oauth_devices);
                         let now = chrono::Utc::now();
                         let outcome: Result<(String, String), (String, String)> = {
@@ -437,6 +685,12 @@ async fn health_server(
                                 )
                             }
                         }
+                    } else {
+                        (
+                            "400 Bad Request",
+                            "{\"error\":\"unsupported_grant_type\"}\n".into(),
+                            "application/json",
+                        )
                     }
                 }
             } else if path == "/health" || path.starts_with("/health/") {
@@ -809,7 +1063,7 @@ async fn health_server(
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /oauth/device /jwks.json /.well-known/openid-configuration ; POST /oauth/device_authorization /oauth/token /oauth/device_approve\n".into(),
+                    "try GET /health /status /oauth/device /oauth/authorize /jwks.json /.well-known/openid-configuration ; POST /oauth/device_authorization /oauth/token /oauth/authorize\n".into(),
                     "text/plain",
                 )
             };
@@ -953,6 +1207,7 @@ pub async fn run_daemon(
             println!("[AEGISD] JWKS            : http://{health_bind}/jwks.json");
             println!("[AEGISD] OAuth device    : POST http://{health_bind}/oauth/device_authorization");
             println!("[AEGISD] OAuth approve   : http://{health_bind}/oauth/device");
+            println!("[AEGISD] OAuth auth-code : GET/POST http://{health_bind}/oauth/authorize");
             println!("[AEGISD] console API     : http://{health_bind}/api/v1/* (aliases)");
         }
     }

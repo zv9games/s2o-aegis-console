@@ -229,6 +229,10 @@ cargo run -p cyberztna -- serve --oidc-issuer http://127.0.0.1:9090 --upstream h
 # OAuth device-code (RFC 8628 lab):
 # terminal A: cyberztna oauth device --issuer http://127.0.0.1:9090
 # terminal B: cyberztna oauth approve ABCD-EFGH --user alice --issuer http://127.0.0.1:9090
+# OAuth authorization-code (lab; auto-approve OOB):
+# cyberztna oauth code --issuer http://127.0.0.1:9090
+# cyberztna oauth code --url-only   # print authorize URL only
+# cyberztna oauth code --code ac_...  # exchange existing code
 # (or open verification_uri in a browser)
 # Use access_token as: Authorization: Bearer …
 ```

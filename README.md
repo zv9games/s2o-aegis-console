@@ -48,7 +48,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
 | 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + WG conf; optional system wg |
-| 9 | Gate | `cyberztna` | **partial** — posture-gated HTTP reverse proxy |
+| 9 | Gate | `cyberztna` | **partial** — posture proxy + mTLS/JWT/OIDC + OAuth device/auth-code lab |
 | — | Kernel | `aegisd` | **implemented** — status, policy, start |
 
 `AEGIS_DEMO=1` can label stubs as demo — **never the default**.

@@ -46,7 +46,7 @@ enum Commands {
         #[command(subcommand)]
         command: JwtCmd,
     },
-    /// OAuth 2.0 device-code client (RFC 8628 lab flow against aegisd)
+    /// OAuth 2.0 lab client (device-code + authorization-code against aegisd)
     Oauth {
         #[command(subcommand)]
         command: OauthCmd,
@@ -237,6 +237,41 @@ enum OauthCmd {
         #[arg(long, default_value = "http://127.0.0.1:9090")]
         issuer: String,
     },
+    /// Authorization-code grant (lab): auto-approve + token exchange
+    Code {
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        issuer: String,
+        #[arg(long, default_value = "s2o-gate")]
+        client_id: String,
+        #[arg(long, default_value = "operator")]
+        user: String,
+        /// OOB by default (prints code + exchanges without browser redirect)
+        #[arg(long, default_value = "urn:ietf:wg:oauth:2.0:oob")]
+        redirect_uri: String,
+        #[arg(long, default_value = "lab")]
+        state: String,
+        /// Only print authorize URL (no auto-approve)
+        #[arg(long)]
+        url_only: bool,
+        /// Exchange an existing authorization code
+        #[arg(long)]
+        code: Option<String>,
+    },
+}
+
+/// Minimal form url-encode for OAuth query/body params.
+fn urlencoding_form(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 fn emit(event_log: &Path, action: EventAction, severity: Severity, message: impl Into<String>, attrs: &[(&str, serde_json::Value)]) {
@@ -285,7 +320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Not implemented   : {}",
-                "full OAuth authorization code flow, multi-POP SASE".red()
+                "production browser IdP UI, multi-POP SASE".red()
             );
             println!(" Config            : {}", cli.config.display());
             println!(" Routes            : {}", cfg.routes.len());
@@ -742,6 +777,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("[gate] approve failed {status}: {body}");
                     std::process::exit(1);
                 }
+            }
+            OauthCmd::Code {
+                issuer,
+                client_id,
+                user,
+                redirect_uri,
+                state,
+                url_only,
+                code,
+            } => {
+                let base = issuer.trim_end_matches('/');
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(20))
+                    .build()?;
+                let auth_code = if let Some(c) = code {
+                    c
+                } else {
+                    let auth_url = format!(
+                        "{base}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid%20profile&user={}&auto_approve=1",
+                        urlencoding_form(&client_id),
+                        urlencoding_form(&redirect_uri),
+                        urlencoding_form(&state),
+                        urlencoding_form(&user),
+                    );
+                    println!(" Authorize URL : {auth_url}");
+                    if url_only {
+                        return Ok(());
+                    }
+                    let res = client.get(&auth_url).send().await?;
+                    let status = res.status();
+                    let text = res.text().await.unwrap_or_default();
+                    if !status.is_success() {
+                        eprintln!("[gate] authorize failed {status}: {text}");
+                        std::process::exit(1);
+                    }
+                    let v: serde_json::Value =
+                        serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+                    let c = v["code"].as_str().unwrap_or("").to_string();
+                    if c.is_empty() {
+                        eprintln!("[gate] no code in authorize response: {text}");
+                        std::process::exit(1);
+                    }
+                    println!(" Code         : {}", c.yellow());
+                    c
+                };
+                let tok = client
+                    .post(format!("{base}/oauth/token"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(format!(
+                        "grant_type=authorization_code&code={}&client_id={}&redirect_uri={}",
+                        urlencoding_form(&auth_code),
+                        urlencoding_form(&client_id),
+                        urlencoding_form(&redirect_uri),
+                    ))
+                    .send()
+                    .await?;
+                let status = tok.status();
+                let text = tok.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    eprintln!("[gate] token exchange failed {status}: {text}");
+                    std::process::exit(1);
+                }
+                let v: serde_json::Value =
+                    serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+                let access = v["access_token"].as_str().unwrap_or("");
+                println!(
+                    "{}",
+                    format!(
+                        "[gate] authorization_code OK sub={:?}",
+                        v.get("sub")
+                    )
+                    .green()
+                    .bold()
+                );
+                println!("{access}");
+                println!(" Header : Authorization: Bearer <token>");
             }
         },
         Commands::Serve {

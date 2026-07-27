@@ -175,7 +175,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ OAuth device-code lab flow (RFC 8628) on aegisd + Gate client  
 - ✅ YARA-X engine in CyberDefender  
 - ✅ Windows Cyberwall declarative `apply_policy` (managed `S2O-Aegis-*` netsh rules)  
-- ⏳ Kernel ETW / boringtun / browser OAuth code UI / cloud YARA feed (later)  
+- ✅ OAuth authorization-code lab grant (aegisd + Gate client; not prod IdP UI)  
+- ⏳ Kernel ETW / boringtun / prod browser IdP / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

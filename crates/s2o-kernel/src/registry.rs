@@ -110,7 +110,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: posture+session+mTLS+JWT/JWKS/OIDC+OAuth device; no browser auth-code UI",
+            "partial: posture+session+mTLS+JWT/JWKS/OIDC+OAuth device+auth-code lab; no prod IdP UI",
         ),
         ProductId::Aegis => ModuleStatus::new(
             product,
