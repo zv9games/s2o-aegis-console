@@ -37,7 +37,17 @@ cargo run -p aegisd -- start
 # other terminal:
 curl http://127.0.0.1:9090/health
 curl http://127.0.0.1:9090/status
+curl http://127.0.0.1:9090/metrics
 # disable: cargo run -p aegisd -- start --no-health
+```
+
+### Config + continuous playbooks
+
+```powershell
+cargo run -p aegis-cli -- config init
+cargo run -p aegis-cli -- config show
+cargo run -p aegis-cli -- playbook watch          # dry-run on new events
+cargo run -p aegis-cli -- playbook watch --apply  # live responses
 ```
 
 ## First-time host setup

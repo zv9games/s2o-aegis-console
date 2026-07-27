@@ -72,15 +72,17 @@ enum PolicyCmd {
     },
 }
 
-/// Minimal HTTP/1.0 health server (no extra deps): GET /health, GET /status
+/// Minimal HTTP/1.0 health server: GET /health, /status, /metrics
 async fn health_server(
     bind: String,
     fw: FirewallEngineHandle,
+    event_log: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     loop {
         let (mut sock, _) = listener.accept().await?;
         let fw = fw.clone();
+        let event_log = event_log.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 2048];
             let n = match sock.read(&mut buf).await {
@@ -92,9 +94,12 @@ async fn health_server(
                 .lines()
                 .next()
                 .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("/")
+                .split('?')
+                .next()
                 .unwrap_or("/");
 
-            let (code, body, ctype) = if path.starts_with("/health") {
+            let (code, body, ctype) = if path == "/health" || path.starts_with("/health/") {
                 (
                     "200 OK",
                     format!(
@@ -102,21 +107,63 @@ async fn health_server(
                     ),
                     "application/json",
                 )
-            } else if path.starts_with("/status") {
-                match collect_platform_status(&fw).await {
-                    st => match serde_json::to_string(&st) {
-                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
-                        Err(e) => (
-                            "500 Internal Server Error",
-                            format!("{{\"error\":\"{e}\"}}\n"),
-                            "application/json",
-                        ),
-                    },
+            } else if path == "/status" || path.starts_with("/status/") {
+                match serde_json::to_string(&collect_platform_status(&fw).await) {
+                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
                 }
+            } else if path == "/metrics" || path.starts_with("/metrics/") {
+                let st = collect_platform_status(&fw).await;
+                let mut implemented = 0u32;
+                let mut partial = 0u32;
+                let mut other = 0u32;
+                for m in &st.modules {
+                    match m.state.as_str() {
+                        "implemented" => implemented += 1,
+                        "partial" => partial += 1,
+                        _ => other += 1,
+                    }
+                }
+                let (events, bytes) = if event_log.exists() {
+                    match EventStore::open(&event_log) {
+                        Ok(s) => (
+                            s.count().unwrap_or(0) as u64,
+                            s.len_bytes().unwrap_or(0),
+                        ),
+                        Err(_) => (0, 0),
+                    }
+                } else {
+                    (0, 0)
+                };
+                let body = format!(
+                    "# HELP aegis_up 1 if daemon health endpoint is serving\n\
+                     # TYPE aegis_up gauge\n\
+                     aegis_up 1\n\
+                     # HELP aegis_modules Modules by honesty state\n\
+                     # TYPE aegis_modules gauge\n\
+                     aegis_modules{{state=\"implemented\"}} {implemented}\n\
+                     aegis_modules{{state=\"partial\"}} {partial}\n\
+                     aegis_modules{{state=\"other\"}} {other}\n\
+                     # HELP aegis_events_total Events in local JSONL store\n\
+                     # TYPE aegis_events_total gauge\n\
+                     aegis_events_total {events}\n\
+                     # HELP aegis_event_log_bytes Size of event log file\n\
+                     # TYPE aegis_event_log_bytes gauge\n\
+                     aegis_event_log_bytes {bytes}\n\
+                     # HELP aegis_demo_mode 1 if AEGIS_DEMO is enabled\n\
+                     # TYPE aegis_demo_mode gauge\n\
+                     aegis_demo_mode {}\n",
+                    if st.demo_mode { 1 } else { 0 }
+                );
+                ("200 OK", body, "text/plain; version=0.0.4")
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health or /status\n".into(),
+                    "try GET /health /status /metrics\n".into(),
                     "text/plain",
                 )
             };
@@ -217,13 +264,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !no_health && !health_bind.is_empty() {
                 let bind = health_bind.clone();
                 let fw_h = create_firewall_engine();
+                let el = event_log.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = health_server(bind, fw_h).await {
+                    if let Err(e) = health_server(bind, fw_h, el).await {
                         eprintln!("[AEGISD] health server error: {e}");
                     }
                 });
                 println!("[AEGISD] health HTTP     : http://{health_bind}/health");
                 println!("[AEGISD] status JSON     : http://{health_bind}/status");
+                println!("[AEGISD] metrics         : http://{health_bind}/metrics");
             }
 
             println!(

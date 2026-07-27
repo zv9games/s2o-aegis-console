@@ -1,13 +1,17 @@
 //! `aegis` — single operator front door for the suite kernel.
 
+mod config;
+
 use clap::{Parser, Subcommand};
 use colored::*;
+use config::SuiteConfig;
 use s2o_kernel::{
     apply_policy, collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode,
     host_id, load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
 };
-use s2o_schema::{HealthState, PolicyDocument, SCHEMA_VERSION};
+use s2o_schema::{AegisEvent, HealthState, PolicyDocument, SCHEMA_VERSION};
 use s2o_store::EventStore;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -108,6 +112,11 @@ enum Commands {
         #[arg(long)]
         no_policy: bool,
     },
+    /// Show or write suite config (.aegis/config.json)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCmd,
+    },
     /// Run a product CLI if on PATH / target/debug (best-effort shim)
     Run {
         /// Product binary: cyberwall, cyberdns, cyberdefender, cyberedr, ...
@@ -115,6 +124,20 @@ enum Commands {
         /// Args forwarded to the product
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Print effective config (file + defaults)
+    Show {
+        #[arg(long, default_value = ".aegis/config.json")]
+        path: PathBuf,
+    },
+    /// Write default config file
+    Init {
+        #[arg(long, default_value = ".aegis/config.json")]
+        path: PathBuf,
     },
 }
 
@@ -147,6 +170,18 @@ enum PlaybookCmd {
         event_log: PathBuf,
         #[arg(long, default_value_t = 200)]
         limit: usize,
+        /// Actually perform actions (default is dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Continuously follow events and run matching playbooks
+    Watch {
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
         /// Actually perform actions (default is dry-run)
         #[arg(long)]
         apply: bool,
@@ -332,6 +367,81 @@ fn unzip_to(zip_path: &Path, dest: &Path, force: bool) -> Result<usize, Box<dyn 
         n += 1;
     }
     Ok(n)
+}
+
+async fn run_playbook_actions(
+    rule: &PlaybookRule,
+    ev: &AegisEvent,
+    apply: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for act in &rule.then {
+        match act.action_type.as_str() {
+            "log" => {
+                println!("    -> log (ok)");
+            }
+            "dns_block_attr" => {
+                let key = act.attr.as_deref().unwrap_or("domain");
+                let domain = ev
+                    .attrs
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| act.domain.clone());
+                match domain {
+                    Some(d) if apply => {
+                        append_dns_block(&d)?;
+                        println!("    -> dns_block {d} APPLIED");
+                    }
+                    Some(d) => {
+                        println!("    -> dns_block {d} (dry-run)");
+                    }
+                    None => println!("    -> dns_block skipped (no domain)"),
+                }
+            }
+            "dns_block" => {
+                if let Some(d) = &act.domain {
+                    if apply {
+                        append_dns_block(d)?;
+                        println!("    -> dns_block {d} APPLIED");
+                    } else {
+                        println!("    -> dns_block {d} (dry-run)");
+                    }
+                }
+            }
+            "webhook" => {
+                let url = act.url.clone().unwrap_or_default();
+                if url.is_empty() {
+                    println!("    -> webhook skipped (no url)");
+                } else if apply {
+                    let body = serde_json::json!({
+                        "rule": rule.name,
+                        "event_id": ev.id.to_string(),
+                        "product": ev.product.as_str(),
+                        "action": format!("{:?}", ev.action),
+                        "severity": format!("{:?}", ev.severity),
+                        "message": ev.message,
+                        "attrs": ev.attrs,
+                        "host_id": ev.host_id,
+                        "ts": ev.ts.to_rfc3339(),
+                    });
+                    match reqwest::Client::new()
+                        .post(&url)
+                        .json(&body)
+                        .timeout(std::time::Duration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        Ok(r) => println!("    -> webhook {} status={}", url, r.status()),
+                        Err(e) => println!("    -> webhook {} ERROR {e}", url),
+                    }
+                } else {
+                    println!("    -> webhook {url} (dry-run)");
+                }
+            }
+            other => println!("    -> unknown action {other}"),
+        }
+    }
+    Ok(())
 }
 
 fn append_dns_block(domain: &str) -> std::io::Result<()> {
@@ -729,82 +839,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ev.id,
                             ev.message
                         );
-                        for act in &rule.then {
-                            match act.action_type.as_str() {
-                                "log" => {
-                                    println!("    -> log (ok)");
-                                }
-                                "dns_block_attr" => {
-                                    let key = act.attr.as_deref().unwrap_or("domain");
-                                    let domain = ev
-                                        .attrs
-                                        .get(key)
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                        .or_else(|| act.domain.clone());
-                                    match domain {
-                                        Some(d) if apply => {
-                                            append_dns_block(&d)?;
-                                            println!("    -> dns_block {d} APPLIED");
-                                        }
-                                        Some(d) => {
-                                            println!("    -> dns_block {d} (dry-run)");
-                                        }
-                                        None => println!("    -> dns_block skipped (no domain)"),
-                                    }
-                                }
-                                "dns_block" => {
-                                    if let Some(d) = &act.domain {
-                                        if apply {
-                                            append_dns_block(d)?;
-                                            println!("    -> dns_block {d} APPLIED");
-                                        } else {
-                                            println!("    -> dns_block {d} (dry-run)");
-                                        }
-                                    }
-                                }
-                                "webhook" => {
-                                    let url = act.url.clone().unwrap_or_default();
-                                    if url.is_empty() {
-                                        println!("    -> webhook skipped (no url)");
-                                    } else if apply {
-                                        let body = serde_json::json!({
-                                            "rule": rule.name,
-                                            "event_id": ev.id.to_string(),
-                                            "product": ev.product.as_str(),
-                                            "action": format!("{:?}", ev.action),
-                                            "severity": format!("{:?}", ev.severity),
-                                            "message": ev.message,
-                                            "attrs": ev.attrs,
-                                            "host_id": ev.host_id,
-                                            "ts": ev.ts.to_rfc3339(),
-                                        });
-                                        match reqwest::Client::new()
-                                            .post(&url)
-                                            .json(&body)
-                                            .timeout(std::time::Duration::from_secs(5))
-                                            .send()
-                                            .await
-                                        {
-                                            Ok(r) => println!(
-                                                "    -> webhook {} status={}",
-                                                url,
-                                                r.status()
-                                            ),
-                                            Err(e) => {
-                                                println!("    -> webhook {} ERROR {e}", url)
-                                            }
-                                        }
-                                    } else {
-                                        println!("    -> webhook {url} (dry-run)");
-                                    }
-                                }
-                                other => println!("    -> unknown action {other}"),
-                            }
-                        }
+                        run_playbook_actions(rule, ev, apply).await?;
                     }
                 }
                 println!("[aegis] playbook complete: {fired} rule hits");
+            }
+            PlaybookCmd::Watch {
+                path,
+                event_log,
+                interval_ms,
+                apply,
+            } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let pb: PlaybookFile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                let mode = if apply { "APPLY" } else { "DRY-RUN" };
+                println!(
+                    "[aegis] playbook watch {} on {} (Ctrl+C to stop)",
+                    mode,
+                    event_log.display()
+                );
+                let store = EventStore::open(&event_log)?;
+                let mut offset = store.byte_len().unwrap_or(0);
+                // de-dupe rule+event pairs within process lifetime
+                let mut seen: HashSet<String> = HashSet::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+                    // reload playbooks each tick so edits apply live
+                    let pb = match std::fs::read_to_string(&path) {
+                        Ok(t) => serde_json::from_str::<PlaybookFile>(&t).unwrap_or(pb.clone()),
+                        Err(_) => pb.clone(),
+                    };
+                    let store = EventStore::open(&event_log)?;
+                    let (next, events) = store.read_since(offset)?;
+                    offset = next;
+                    for ev in events {
+                        for rule in pb.rules.iter().filter(|r| r.enabled) {
+                            if !event_matches(&ev, &rule.when) {
+                                continue;
+                            }
+                            let key = format!("{}:{}", rule.name, ev.id);
+                            if !seen.insert(key) {
+                                continue;
+                            }
+                            println!(
+                                "  rule={} event={} | {}",
+                                rule.name.yellow(),
+                                ev.id,
+                                ev.message
+                            );
+                            run_playbook_actions(rule, &ev, apply).await?;
+                        }
+                    }
+                }
+            }
+        },
+        Commands::Config { command } => match command {
+            ConfigCmd::Show { path } => {
+                let cfg = SuiteConfig::load(&path);
+                println!("{}", serde_json::to_string_pretty(&cfg)?);
+                if path.exists() {
+                    eprintln!("(from {})", path.display());
+                } else {
+                    eprintln!("(defaults; no file at {})", path.display());
+                }
+            }
+            ConfigCmd::Init { path } => {
+                let cfg = SuiteConfig::default();
+                cfg.save(&path)?;
+                println!(
+                    "{}",
+                    format!("[aegis] wrote {}", path.display()).green().bold()
+                );
             }
         },
         Commands::Setup {
@@ -823,6 +934,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Touch event log
             let event_log = data_dir.join("events.jsonl");
             let _ = EventStore::open(&event_log)?;
+
+            // Suite config
+            let cfg_path = data_dir.join("config.json");
+            if !cfg_path.exists() {
+                let mut cfg = SuiteConfig::default();
+                cfg.data_dir = data_dir.display().to_string();
+                cfg.event_log = event_log.display().to_string();
+                cfg.playbooks = data_dir.join("playbooks.json").display().to_string();
+                cfg.gate_config = data_dir.join("gate-routes.json").display().to_string();
+                cfg.save(&cfg_path)?;
+                println!("  + {}", cfg_path.display());
+            }
 
             // DNS blocklist seed
             let bl = data_dir.join("dns-blocklist.txt");

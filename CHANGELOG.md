@@ -42,6 +42,9 @@
 - `aegis setup` bootstrap for .aegis data + starter configs
 - CyberEDR process baseline/drift
 - Playbook `webhook` action (POST JSON)
+- Suite `.aegis/config.json` + `aegis config init|show`
+- aegisd Prometheus `/metrics`
+- Continuous `aegis playbook watch`
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

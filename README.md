@@ -77,6 +77,7 @@ cargo build -p aegisd -p cyberwall-cli -p cyberdns -p cybersiem
 
 ```powershell
 cargo run -p aegis-cli -- setup
+cargo run -p aegis-cli -- config init
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- status
 cargo run -p aegis-cli -- report --out .aegis/report.md

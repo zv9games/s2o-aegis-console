@@ -154,6 +154,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ `aegis setup` first-time bootstrap  
 - ✅ EDR process baseline + drift  
 - ✅ Playbook webhook action  
+- ✅ Suite config.json + `aegis config`  
+- ✅ Prometheus text `/metrics` on aegisd  
+- ✅ Continuous `aegis playbook watch`  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 
