@@ -212,7 +212,16 @@ async fn proxy_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-pub async fn run(cfg: GateConfig, event_log: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub struct TlsFiles {
+    pub cert: PathBuf,
+    pub key: PathBuf,
+}
+
+pub async fn run(
+    cfg: GateConfig,
+    event_log: PathBuf,
+    tls: Option<TlsFiles>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         cfg: cfg.clone(),
         event_log,
@@ -227,8 +236,24 @@ pub async fn run(cfg: GateConfig, event_log: PathBuf) -> Result<(), Box<dyn std:
         .fallback(any(proxy_handler))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
-    println!("[gate] listening on http://{}", cfg.listen);
-    axum::serve(listener, app).await?;
+    let addr: std::net::SocketAddr = cfg.listen.parse()?;
+
+    if let Some(tls) = tls {
+        crate::tls::ensure_self_signed(&tls.cert, &tls.key)?;
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key).await?;
+        println!(
+            "[gate] listening on https://{} (cert {})",
+            cfg.listen,
+            tls.cert.display()
+        );
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        println!("[gate] listening on http://{}", cfg.listen);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
+    }
     Ok(())
 }

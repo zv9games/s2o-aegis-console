@@ -24,6 +24,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print suite / kernel versions
+    Version,
     /// Honest platform matrix (same as aegisd status)
     Status {
         #[arg(long)]
@@ -98,6 +100,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fw = create_firewall_engine();
 
     match cli.command {
+        Commands::Version => {
+            println!("aegis-cli          0.1.0");
+            println!("s2o-kernel         {KERNEL_VERSION}");
+            println!("s2o-schema         {SCHEMA_VERSION}");
+            println!("phase              {PHASE_LABEL}");
+            println!("tier_ceiling       {}", TIER_CEILING.as_str());
+        }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;
             if json {

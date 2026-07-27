@@ -2,6 +2,7 @@
 
 mod config;
 mod proxy;
+mod tls;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -45,6 +46,13 @@ enum Commands {
         /// Single-route mode: upstream base URL (ignores multi-route path match except /)
         #[arg(long)]
         upstream: Option<String>,
+        /// Enable HTTPS with self-signed cert (or existing PEM paths)
+        #[arg(long)]
+        tls: bool,
+        #[arg(long, default_value = ".aegis/gate-cert.pem")]
+        tls_cert: PathBuf,
+        #[arg(long, default_value = ".aegis/gate-key.pem")]
+        tls_key: PathBuf,
     },
     /// Check posture only (same kernel score Gate uses)
     Check {
@@ -102,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture-gated HTTP reverse proxy + routes file".green()
+                "posture-gated HTTP/HTTPS reverse proxy + routes + self-signed TLS".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -189,6 +197,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             listen,
             min_score,
             upstream,
+            tls,
+            tls_cert,
+            tls_key,
         } => {
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             if let Some(l) = listen {
@@ -208,11 +219,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[gate] no routes configured — run cyberztna init or pass --upstream");
                 std::process::exit(2);
             }
+            let scheme = if tls { "https" } else { "http" };
             println!(
-                "[gate] starting on {} min_score={} routes={}",
+                "[gate] starting on {}://{} min_score={} routes={} tls={}",
+                scheme,
                 cfg.listen,
                 cfg.min_score,
-                cfg.routes.len()
+                cfg.routes.len(),
+                tls
             );
             for r in &cfg.routes {
                 println!("  {} {} -> {}", r.name, r.path_prefix, r.upstream);
@@ -221,13 +235,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &cli.event_log,
                 EventAction::Observed,
                 Severity::Info,
-                format!("gate serve listen={}", cfg.listen),
+                format!("gate serve listen={} tls={}", cfg.listen, tls),
                 &[
                     ("listen", serde_json::json!(cfg.listen)),
                     ("min_score", serde_json::json!(cfg.min_score)),
+                    ("tls", serde_json::json!(tls)),
                 ],
             );
-            proxy::run(cfg, cli.event_log).await?;
+            let tls_files = if tls {
+                Some(proxy::TlsFiles {
+                    cert: tls_cert,
+                    key: tls_key,
+                })
+            } else {
+                None
+            };
+            proxy::run(cfg, cli.event_log, tls_files).await?;
         }
         Commands::Connect { app } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());

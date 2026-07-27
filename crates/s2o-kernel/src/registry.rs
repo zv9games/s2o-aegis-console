@@ -110,7 +110,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: posture-gated HTTP reverse proxy (cyberztna serve); no mTLS/OIDC",
+            "partial: posture-gated HTTP/HTTPS reverse proxy; self-signed TLS; no mTLS/OIDC",
         ),
         ProductId::Aegis => ModuleStatus::new(
             product,

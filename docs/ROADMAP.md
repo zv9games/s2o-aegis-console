@@ -140,7 +140,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberMesh conf writer + optional `wg show` / `wg-quick` hooks  
 - ✅ Event store size-based rotation (`aegis rotate`)  
 - ✅ `scripts/dev-smoke.ps1` suite smoke  
-- ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS Gate (later)  
+- ✅ Gate HTTPS self-signed (`cyberztna serve --tls`)  
+- ✅ Operator install script + OPERATOR.md + CHANGELOG  
+- ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof
