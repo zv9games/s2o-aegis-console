@@ -203,8 +203,15 @@ cargo run -p cyberztna -- jwt mint alice --rsa-key .aegis/jwt/jwt-private.pem --
 cargo run -p cyberztna -- jwt verify <token> --jwks .aegis/jwt/jwks.json
 cargo run -p cyberztna -- serve --jwt-jwks .aegis/jwt/jwks.json --upstream https://example.com --min-score 40
 # Remote JWKS at start (caches to file):
-cargo run -p cyberztna -- serve --jwt-jwks-url http://127.0.0.1:9090/api/v1/jwks --upstream https://example.com
+cargo run -p cyberztna -- serve --jwt-jwks-url http://127.0.0.1:9090/jwks.json --upstream https://example.com
 cargo run -p cyberztna -- jwt fetch-jwks --url https://example.com/.well-known/jwks.json
+
+# OIDC discovery (fetch openid-configuration + jwks_uri, validate iss):
+cargo run -p cyberztna -- jwt keygen --dir .aegis/jwt --force
+cargo run -p aegisd -- start --health-bind 127.0.0.1:9090 --jwks .aegis/jwt/jwks.json
+cargo run -p cyberztna -- jwt oidc-discover http://127.0.0.1:9090 --fetch-jwks
+cargo run -p cyberztna -- jwt mint alice --rsa-key .aegis/jwt/jwt-private.pem --issuer http://127.0.0.1:9090
+cargo run -p cyberztna -- serve --oidc-issuer http://127.0.0.1:9090 --upstream https://example.com --min-score 40
 ```
 
 ### Mesh multi-peer

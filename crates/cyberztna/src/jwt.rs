@@ -93,7 +93,16 @@ pub fn verify(secret: &str, token: &str) -> Result<GateClaims, String> {
 }
 
 pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, String> {
-    match verifier {
+    verify_with_iss(verifier, token, None)
+}
+
+/// Verify JWT and optionally require `iss` claim equals `expected_iss`.
+pub fn verify_with_iss(
+    verifier: &JwtVerifier,
+    token: &str,
+    expected_iss: Option<&str>,
+) -> Result<GateClaims, String> {
+    let claims = match verifier {
         JwtVerifier::Hs256(secret) => {
             let mut validation = Validation::new(Algorithm::HS256);
             validation.validate_exp = true;
@@ -103,7 +112,7 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
                 &validation,
             )
             .map(|d| d.claims)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?
         }
         JwtVerifier::Rs256Pem { public_pem, kid } => {
             check_rs256_alg(token)?;
@@ -121,7 +130,7 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
                 DecodingKey::from_rsa_pem(public_pem.as_bytes()).map_err(|e| e.to_string())?;
             decode::<GateClaims>(token, &key, &validation)
                 .map(|d| d.claims)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?
         }
         JwtVerifier::Rs256Jwk { jwk, kid } => {
             check_rs256_alg(token)?;
@@ -133,7 +142,7 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
                     }
                 }
             }
-            decode_with_jwk(token, jwk)
+            decode_with_jwk(token, jwk)?
         }
         JwtVerifier::Rs256JwkSet { keys } => {
             check_rs256_alg(token)?;
@@ -160,15 +169,96 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
                 keys.iter().collect()
             };
             let mut last_err = "no jwks keys".to_string();
+            let mut claims = None;
             for jwk in ordered {
                 match decode_with_jwk(token, jwk) {
-                    Ok(c) => return Ok(c),
+                    Ok(c) => {
+                        claims = Some(c);
+                        break;
+                    }
                     Err(e) => last_err = e,
                 }
             }
-            Err(last_err)
+            claims.ok_or(last_err)?
+        }
+    };
+    if let Some(want) = expected_iss {
+        let got = claims.iss.as_deref().unwrap_or("");
+        if got != want {
+            return Err(format!("iss mismatch: token={got:?} expected={want}"));
         }
     }
+    Ok(claims)
+}
+
+/// OIDC discovery document (subset we care about).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcDiscovery {
+    pub issuer: String,
+    pub jwks_uri: String,
+    #[serde(default)]
+    pub authorization_endpoint: Option<String>,
+    #[serde(default)]
+    pub token_endpoint: Option<String>,
+    #[serde(default)]
+    pub id_token_signing_alg_values_supported: Option<Vec<String>>,
+}
+
+/// Normalize issuer URL (strip trailing slash for comparison; keep base for fetch).
+pub fn normalize_issuer(issuer: &str) -> String {
+    issuer.trim().trim_end_matches('/').to_string()
+}
+
+fn discovery_url(issuer: &str) -> String {
+    let base = normalize_issuer(issuer);
+    format!("{base}/.well-known/openid-configuration")
+}
+
+/// Fetch OpenID Provider metadata from `{issuer}/.well-known/openid-configuration`.
+pub async fn discover_oidc(issuer: &str) -> Result<OidcDiscovery, Box<dyn std::error::Error>> {
+    let url = discovery_url(issuer);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?;
+    let res = client.get(&url).send().await?;
+    if !res.status().is_success() {
+        return Err(format!("OIDC discovery HTTP {} for {url}", res.status()).into());
+    }
+    let doc: OidcDiscovery = res.json().await?;
+    if doc.jwks_uri.is_empty() {
+        return Err("OIDC discovery missing jwks_uri".into());
+    }
+    if doc.issuer.is_empty() {
+        return Err("OIDC discovery missing issuer".into());
+    }
+    Ok(doc)
+}
+
+/// Discover OIDC provider and load JWKS verifier; returns (verifier, canonical issuer).
+pub async fn oidc_verifier_from_issuer(
+    issuer: &str,
+    jwks_cache: Option<&Path>,
+) -> Result<(JwtVerifier, String), Box<dyn std::error::Error>> {
+    let disc = discover_oidc(issuer).await?;
+    let verifier = fetch_jwks_url(&disc.jwks_uri, jwks_cache).await?;
+    Ok((verifier, disc.issuer))
+}
+
+/// Build a lab OpenID configuration JSON for a local issuer base URL.
+#[allow(dead_code)]
+pub fn lab_openid_configuration(issuer_base: &str, jwks_uri: &str) -> serde_json::Value {
+    let issuer = normalize_issuer(issuer_base);
+    serde_json::json!({
+        "issuer": issuer,
+        "jwks_uri": jwks_uri,
+        "authorization_endpoint": format!("{issuer}/oauth/authorize"),
+        "token_endpoint": format!("{issuer}/oauth/token"),
+        "response_types_supported": ["id_token", "token"],
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+        "scopes_supported": ["openid", "profile"],
+        "claims_supported": ["sub", "iss", "exp", "iat", "posture"],
+    })
 }
 
 fn check_rs256_alg(token: &str) -> Result<(), String> {

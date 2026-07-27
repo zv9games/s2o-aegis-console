@@ -169,7 +169,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Fleet inventory MVP (`aegis fleet` + aegisd `/fleet`)  
 - ✅ Fleet policy push/pull/apply + Gate RS256/JWKS file JWT  
 - ✅ Gate remote JWKS URL + mesh multi-peer registry + `/api/v1` console surface  
-- ⏳ Full YARA-X / kernel ETW / system DNS hijack / boringtun / OIDC well-known (later)  
+- ✅ OIDC well-known discovery + lab IdP stub on aegisd  
+- ⏳ Full YARA-X / kernel ETW / system DNS hijack / boringtun / OAuth code flow (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

@@ -90,6 +90,15 @@ enum Commands {
         /// Optional cache file when using --jwt-jwks-url
         #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
         jwt_jwks_cache: PathBuf,
+        /// OIDC issuer URL — fetch /.well-known/openid-configuration + jwks_uri
+        #[arg(long, env = "S2O_GATE_OIDC_ISSUER")]
+        oidc_issuer: Option<String>,
+        /// Require token iss claim equals discovered issuer (default true with --oidc-issuer)
+        #[arg(long, default_value_t = true)]
+        oidc_validate_iss: bool,
+        /// Skip iss claim check even when using --oidc-issuer
+        #[arg(long)]
+        no_oidc_validate_iss: bool,
         /// Allow only these client IPs / CIDRs (repeatable). Empty = all.
         #[arg(long = "allow-ip")]
         allow_ips: Vec<String>,
@@ -168,6 +177,12 @@ enum JwtCmd {
         secret: Option<String>,
         #[arg(long, env = "S2O_GATE_JWT_JWKS")]
         jwks: Option<PathBuf>,
+        /// Expected iss claim
+        #[arg(long)]
+        iss: Option<String>,
+        /// Discover OIDC issuer and verify with its JWKS
+        #[arg(long)]
+        oidc_issuer: Option<String>,
     },
     /// Generate lab RS256 keypair + JWKS under a directory
     Keygen {
@@ -184,6 +199,16 @@ enum JwtCmd {
         url: String,
         #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
         out: PathBuf,
+    },
+    /// Discover OIDC provider via /.well-known/openid-configuration
+    OidcDiscover {
+        /// Issuer base URL (e.g. http://127.0.0.1:9090)
+        issuer: String,
+        /// Also fetch and cache JWKS
+        #[arg(long)]
+        fetch_jwks: bool,
+        #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
+        jwks_out: PathBuf,
     },
 }
 
@@ -229,11 +254,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture+session+JWT, TLS/mTLS, allowlist, rate-limit, access log".green()
+                "posture+session+JWT/OIDC discovery, TLS/mTLS, allowlist, rate-limit".green()
             );
             println!(
                 " Not implemented   : {}",
-                "full OIDC discovery/JWKS IdP, multi-POP SASE".red()
+                "full OAuth authorization code flow, multi-POP SASE".red()
             );
             println!(" Config            : {}", cli.config.display());
             println!(" Routes            : {}", cfg.routes.len());
@@ -407,6 +432,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     out.display()
                 );
             }
+            JwtCmd::OidcDiscover {
+                issuer,
+                fetch_jwks,
+                jwks_out,
+            } => {
+                let disc = jwt::discover_oidc(&issuer).await?;
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      OIDC discovery                                   "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Issuer     : {}", disc.issuer);
+                println!(" JWKS URI   : {}", disc.jwks_uri);
+                if let Some(ref a) = disc.authorization_endpoint {
+                    println!(" Authorize  : {a}");
+                }
+                if let Some(ref t) = disc.token_endpoint {
+                    println!(" Token      : {t}");
+                }
+                if let Some(ref algs) = disc.id_token_signing_alg_values_supported {
+                    println!(" ID algs    : {}", algs.join(", "));
+                }
+                if fetch_jwks {
+                    let v = jwt::fetch_jwks_url(&disc.jwks_uri, Some(&jwks_out)).await?;
+                    let n = match &v {
+                        jwt::JwtVerifier::Rs256JwkSet { keys } => keys.len(),
+                        _ => 1,
+                    };
+                    println!(
+                        "[gate] JWKS cached -> {} (keys~{n})",
+                        jwks_out.display()
+                    );
+                }
+                println!(
+                    " Serve hint : cyberztna serve --oidc-issuer {} ...",
+                    disc.issuer
+                );
+            }
             JwtCmd::Mint {
                 user,
                 secret,
@@ -484,14 +556,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token,
                 secret,
                 jwks,
+                iss,
+                oidc_issuer,
             } => {
-                let result = if let Some(path) = jwks {
+                let result = if let Some(issuer) = oidc_issuer {
+                    let (v, canon) = jwt::oidc_verifier_from_issuer(&issuer, None).await?;
+                    let expected = iss.as_deref().unwrap_or(canon.as_str());
+                    jwt::verify_with_iss(&v, &token, Some(expected))
+                } else if let Some(path) = jwks {
                     let v = jwt::rs256_verifier_from_path(&path)?;
-                    jwt::verify_with(&v, &token)
+                    jwt::verify_with_iss(&v, &token, iss.as_deref())
                 } else if let Some(secret) = secret {
-                    jwt::verify(&secret, &token)
+                    jwt::verify_with_iss(
+                        &jwt::JwtVerifier::Hs256(secret),
+                        &token,
+                        iss.as_deref(),
+                    )
                 } else {
-                    eprintln!("[gate] jwt verify needs --secret or --jwks");
+                    eprintln!("[gate] jwt verify needs --secret, --jwks, or --oidc-issuer");
                     std::process::exit(2);
                 };
                 match result {
@@ -524,6 +606,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             jwt_jwks,
             jwt_jwks_url,
             jwt_jwks_cache,
+            oidc_issuer,
+            oidc_validate_iss,
+            no_oidc_validate_iss,
             allow_ips,
             rate_limit,
             enforce_session_posture,
@@ -601,9 +686,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         "jwt",
                         serde_json::json!(
-                            jwt_secret.is_some() || jwt_jwks.is_some() || jwt_jwks_url.is_some()
+                            jwt_secret.is_some()
+                                || jwt_jwks.is_some()
+                                || jwt_jwks_url.is_some()
+                                || oidc_issuer.is_some()
                         ),
                     ),
+                    ("oidc", serde_json::json!(oidc_issuer.is_some())),
                 ],
             );
             let (tls_cert, tls_key) = if let Some(ref ca) = mtls_ca {
@@ -652,22 +741,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sessions.display()
                 );
             }
-            let jwt_verifier = if let Some(url) = jwt_jwks_url {
+            let validate_iss = oidc_validate_iss && !no_oidc_validate_iss;
+            let (jwt_verifier, jwt_expected_iss) = if let Some(issuer) = oidc_issuer {
+                println!("[gate] OIDC issuer     : {issuer}");
+                let (v, canon) =
+                    jwt::oidc_verifier_from_issuer(&issuer, Some(&jwt_jwks_cache)).await?;
+                println!("[gate] OIDC JWKS cache : {}", jwt_jwks_cache.display());
+                println!("[gate] OIDC iss check  : {}", validate_iss);
+                let expected = if validate_iss {
+                    Some(canon)
+                } else {
+                    None
+                };
+                (Some(v), expected)
+            } else if let Some(url) = jwt_jwks_url {
                 println!("[gate] JWT JWKS URL    : {url}");
                 println!("[gate] JWT JWKS cache  : {}", jwt_jwks_cache.display());
-                Some(jwt::fetch_jwks_url(&url, Some(&jwt_jwks_cache)).await?)
+                (
+                    Some(jwt::fetch_jwks_url(&url, Some(&jwt_jwks_cache)).await?),
+                    None,
+                )
             } else if let Some(path) = jwt_jwks {
                 let v = jwt::rs256_verifier_from_path(&path)?;
                 println!("[gate] JWT RS256/JWKS  : {}", path.display());
-                Some(v)
+                (Some(v), None)
             } else if let Some(ref s) = jwt_secret {
                 println!(
                     "[gate] JWT HS256        : enabled (secret len={})",
                     s.len()
                 );
-                Some(jwt::JwtVerifier::Hs256(s.clone()))
+                (Some(jwt::JwtVerifier::Hs256(s.clone())), None)
             } else {
-                None
+                (None, None)
             };
             if cfg.enforce_session_posture {
                 println!(
@@ -702,6 +807,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     require_session,
                     sessions_path,
                     jwt_verifier,
+                    jwt_expected_iss,
                 },
             )
             .await?;

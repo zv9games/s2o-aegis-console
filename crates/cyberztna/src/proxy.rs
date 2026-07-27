@@ -31,6 +31,8 @@ struct AppState {
     require_session: bool,
     /// JWT verifier (HS256 secret and/or RS256 JWKS)
     jwt_verifier: Option<crate::jwt::JwtVerifier>,
+    /// When set (OIDC), require token `iss` claim to match
+    jwt_expected_iss: Option<String>,
     /// Cached posture score with TTL
     cache: Arc<RwLock<Option<(Instant, u32)>>>,
     /// Per-IP rate window: (window_start, count)
@@ -88,6 +90,7 @@ fn verify_auth(
     token: &str,
     sessions_path: Option<&Path>,
     jwt_verifier: Option<&crate::jwt::JwtVerifier>,
+    jwt_expected_iss: Option<&str>,
     require_session: bool,
     min_score: u32,
     enforce_session_posture: bool,
@@ -95,7 +98,7 @@ fn verify_auth(
     // Prefer JWT when it looks like one and a verifier is configured
     if let Some(verifier) = jwt_verifier {
         if looks_like_jwt(token) {
-            return match crate::jwt::verify_with(verifier, token) {
+            return match crate::jwt::verify_with_iss(verifier, token, jwt_expected_iss) {
                 Ok(c) => {
                     let posture = c.posture.unwrap_or(0);
                     if enforce_session_posture && posture < min_score {
@@ -309,6 +312,7 @@ async fn proxy_handler(
                 t,
                 state.sessions_path.as_deref(),
                 state.jwt_verifier.as_ref(),
+                state.jwt_expected_iss.as_deref(),
                 state.require_session,
                 state.cfg.min_score,
                 state.cfg.enforce_session_posture,
@@ -558,6 +562,7 @@ pub struct AuthOptions {
     pub require_session: bool,
     pub sessions_path: Option<PathBuf>,
     pub jwt_verifier: Option<crate::jwt::JwtVerifier>,
+    pub jwt_expected_iss: Option<String>,
 }
 
 pub async fn run(
@@ -574,6 +579,7 @@ pub async fn run(
         sessions_path: auth.sessions_path,
         require_session: auth.require_session,
         jwt_verifier: auth.jwt_verifier,
+        jwt_expected_iss: auth.jwt_expected_iss,
         cache: Arc::new(RwLock::new(None)),
         rate: Arc::new(RwLock::new(HashMap::new())),
         client: reqwest::Client::builder()

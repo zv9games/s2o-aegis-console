@@ -55,6 +55,9 @@ enum Commands {
         /// Mesh peer directory for /mesh/peers
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         mesh_peers: PathBuf,
+        /// Lab JWKS path for /.well-known OIDC stub (optional)
+        #[arg(long, default_value = ".aegis/jwt/jwks.json")]
+        jwks: PathBuf,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -96,8 +99,10 @@ async fn health_server(
     fleet_path: PathBuf,
     fleet_policy_path: PathBuf,
     mesh_peers_path: PathBuf,
+    jwks_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
+    let public_base = format!("http://{bind}");
     loop {
         let (mut sock, peer) = listener.accept().await?;
         let fw = fw.clone();
@@ -105,6 +110,8 @@ async fn health_server(
         let fleet_path = fleet_path.clone();
         let fleet_policy_path = fleet_policy_path.clone();
         let mesh_peers_path = mesh_peers_path.clone();
+        let jwks_path = jwks_path.clone();
+        let public_base = public_base.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 65536];
             let n = match sock.read(&mut buf).await {
@@ -147,7 +154,51 @@ async fn health_server(
                 })
                 .unwrap_or(20);
 
-            let (code, body, ctype) = if path == "/health" || path.starts_with("/health/") {
+            let (code, body, ctype) = if path == "/.well-known/openid-configuration"
+                || path == "/api/v1/.well-known/openid-configuration"
+            {
+                let issuer = public_base.trim_end_matches('/').to_string();
+                let jwks_uri = format!("{issuer}/jwks.json");
+                let doc = serde_json::json!({
+                    "issuer": issuer,
+                    "jwks_uri": jwks_uri,
+                    "authorization_endpoint": format!("{issuer}/oauth/authorize"),
+                    "token_endpoint": format!("{issuer}/oauth/token"),
+                    "response_types_supported": ["id_token", "token"],
+                    "subject_types_supported": ["public"],
+                    "id_token_signing_alg_values_supported": ["RS256"],
+                    "scopes_supported": ["openid", "profile"],
+                    "claims_supported": ["sub", "iss", "exp", "iat", "posture"],
+                });
+                match serde_json::to_string(&doc) {
+                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
+                }
+            } else if path == "/jwks.json"
+                || path == "/api/v1/jwks.json"
+                || path == "/.well-known/jwks.json"
+            {
+                if jwks_path.exists() {
+                    match fs::read_to_string(&jwks_path) {
+                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            format!("{{\"error\":\"{e}\"}}\n"),
+                            "application/json",
+                        ),
+                    }
+                } else {
+                    (
+                        "404 Not Found",
+                        "{\"error\":\"no lab JWKS — run: cyberztna jwt keygen --dir .aegis/jwt\"}\n".into(),
+                        "application/json",
+                    )
+                }
+            } else if path == "/health" || path.starts_with("/health/") {
                 (
                     "200 OK",
                     format!(
@@ -517,7 +568,7 @@ async fn health_server(
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /posture /events /metrics /fleet /fleet/summary /fleet/policy /mesh/peers (also under /api/v1/*)\n".into(),
+                    "try GET /health /status /posture /events /metrics /fleet /jwks.json /.well-known/openid-configuration /mesh/peers (also /api/v1/*)\n".into(),
                     "text/plain",
                 )
             };
@@ -540,6 +591,7 @@ pub async fn run_daemon(
     fleet_path: PathBuf,
     fleet_policy_path: PathBuf,
     mesh_peers_path: PathBuf,
+    jwks_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -636,8 +688,9 @@ pub async fn run_daemon(
         let fl = fleet_path.clone();
         let fp = fleet_policy_path.clone();
         let mp = mesh_peers_path.clone();
+        let jw = jwks_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp, jw).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
@@ -651,6 +704,8 @@ pub async fn run_daemon(
             println!("[AEGISD] fleet policy    : GET/POST http://{health_bind}/fleet/policy");
             println!("[AEGISD] fleet heartbeat : POST http://{health_bind}/fleet/heartbeat");
             println!("[AEGISD] mesh peers      : GET/POST http://{health_bind}/mesh/peers");
+            println!("[AEGISD] OIDC discovery  : http://{health_bind}/.well-known/openid-configuration");
+            println!("[AEGISD] JWKS            : http://{health_bind}/jwks.json");
             println!("[AEGISD] console API     : http://{health_bind}/api/v1/* (aliases)");
         }
     }
@@ -691,6 +746,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             fleet,
             fleet_policy,
             mesh_peers,
+            jwks,
         } => {
             run_daemon(
                 event_log,
@@ -700,6 +756,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 fleet,
                 fleet_policy,
                 mesh_peers,
+                jwks,
             )
             .await?;
         }
