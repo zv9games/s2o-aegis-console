@@ -978,8 +978,9 @@ dependencies = [
 
 [[package]]
 name = "cyberdns"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "chrono",
  "clap",
  "colored",
  "reqwest",
@@ -994,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "cyberedr"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "clap",
