@@ -36,10 +36,13 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         emit_event: bool,
     },
-    /// OS process inventory (tasklist / ps)
+    /// OS process inventory (tasklist / WMI / ps)
     Ps {
         #[arg(long, default_value_t = 40)]
         limit: usize,
+        /// Include command line + parent PID (WMI/ps - richer, slower)
+        #[arg(long)]
+        rich: bool,
     },
     /// Snapshot process image names into baseline file
     Baseline {
@@ -65,9 +68,20 @@ enum Commands {
         /// Exit after this many new-process events (0 = run forever)
         #[arg(long, default_value_t = 0)]
         max_events: u32,
+        /// Capture command line + parent PID on start (WMI/ps)
+        #[arg(long)]
+        rich: bool,
     },
-    /// Placeholder for true ETW/eBPF (use `watch` for userspace poll)
+    /// Placeholder for true ETW/eBPF (use `watch --rich` for richer poll)
     Trace,
+}
+
+#[derive(Debug, Clone)]
+struct ProcessInfo {
+    pid: u32,
+    name: String,
+    ppid: Option<u32>,
+    cmdline: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,21 +124,29 @@ fn emit(
 }
 
 fn process_images(limit: usize) -> BTreeSet<String> {
-    list_processes(limit)
+    list_processes(limit, false)
         .into_iter()
-        .map(|(_, name)| {
-            // strip path if present; keep basename
-            let base = Path::new(&name)
+        .map(|p| {
+            let base = Path::new(&p.name)
                 .file_name()
                 .and_then(|s| s.to_str())
-                .unwrap_or(&name);
+                .unwrap_or(&p.name);
             base.to_ascii_lowercase()
         })
         .filter(|s| !s.is_empty())
         .collect()
 }
 
-fn list_processes(limit: usize) -> Vec<(u32, String)> {
+fn list_processes(limit: usize, rich: bool) -> Vec<ProcessInfo> {
+    if rich {
+        if let Some(rows) = list_processes_rich(limit) {
+            return rows;
+        }
+    }
+    list_processes_fast(limit)
+}
+
+fn list_processes_fast(limit: usize) -> Vec<ProcessInfo> {
     // Windows: tasklist /FO CSV /NH
     if cfg!(windows) {
         if let Ok(out) = Command::new("tasklist").args(["/FO", "CSV", "/NH"]).output() {
@@ -132,7 +154,6 @@ fn list_processes(limit: usize) -> Vec<(u32, String)> {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let mut rows = Vec::new();
                 for line in text.lines() {
-                    // "name","pid","session","session#","mem"
                     let parts: Vec<&str> = line.split(',').collect();
                     if parts.len() < 2 {
                         continue;
@@ -144,7 +165,12 @@ fn list_processes(limit: usize) -> Vec<(u32, String)> {
                         .parse::<u32>()
                         .unwrap_or(0);
                     if pid > 0 {
-                        rows.push((pid, name));
+                        rows.push(ProcessInfo {
+                            pid,
+                            name,
+                            ppid: None,
+                            cmdline: None,
+                        });
                     }
                     if rows.len() >= limit {
                         break;
@@ -154,17 +180,25 @@ fn list_processes(limit: usize) -> Vec<(u32, String)> {
             }
         }
     }
-    // Unix fallback
-    if let Ok(out) = Command::new("ps").args(["-eo", "pid,comm", "--no-headers"]).output() {
+    if let Ok(out) = Command::new("ps")
+        .args(["-eo", "pid,ppid,comm", "--no-headers"])
+        .output()
+    {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             let mut rows = Vec::new();
             for line in text.lines() {
                 let mut it = line.split_whitespace();
                 let pid = it.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                let ppid = it.next().and_then(|p| p.parse().ok());
                 let name = it.collect::<Vec<_>>().join(" ");
                 if pid > 0 {
-                    rows.push((pid, name));
+                    rows.push(ProcessInfo {
+                        pid,
+                        name,
+                        ppid,
+                        cmdline: None,
+                    });
                 }
                 if rows.len() >= limit {
                     break;
@@ -174,6 +208,157 @@ fn list_processes(limit: usize) -> Vec<(u32, String)> {
         }
     }
     Vec::new()
+}
+
+/// Windows WMI / Unix ps -eo with args for cmdline + parent.
+fn list_processes_rich(limit: usize) -> Option<Vec<ProcessInfo>> {
+    if cfg!(windows) {
+        // wmic is deprecated but still common; PowerShell as fallback
+        if let Ok(out) = Command::new("wmic")
+            .args([
+                "process",
+                "get",
+                "ProcessId,ParentProcessId,Name,CommandLine",
+                "/FORMAT:CSV",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut rows = Vec::new();
+                for line in text.lines().skip(1) {
+                    // Node,CommandLine,Name,ParentProcessId,ProcessId
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let parts = parse_csv_line(line);
+                    if parts.len() < 5 {
+                        continue;
+                    }
+                    let cmdline = parts[1].trim().to_string();
+                    let name = parts[2].trim().to_string();
+                    let ppid = parts[3].trim().parse::<u32>().ok();
+                    let pid = parts[4].trim().parse::<u32>().unwrap_or(0);
+                    if pid == 0 {
+                        continue;
+                    }
+                    rows.push(ProcessInfo {
+                        pid,
+                        name,
+                        ppid,
+                        cmdline: if cmdline.is_empty() {
+                            None
+                        } else {
+                            Some(cmdline)
+                        },
+                    });
+                    if rows.len() >= limit {
+                        break;
+                    }
+                }
+                if !rows.is_empty() {
+                    return Some(rows);
+                }
+            }
+        }
+        // PowerShell fallback
+        if let Ok(out) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Csv -NoTypeInformation",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut rows = Vec::new();
+                for line in text.lines().skip(1) {
+                    let parts = parse_csv_line(line);
+                    // "ProcessId","ParentProcessId","Name","CommandLine"
+                    if parts.len() < 3 {
+                        continue;
+                    }
+                    let pid = parts[0].trim().parse::<u32>().unwrap_or(0);
+                    let ppid = parts.get(1).and_then(|s| s.trim().parse().ok());
+                    let name = parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default();
+                    let cmdline = parts.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    if pid == 0 {
+                        continue;
+                    }
+                    rows.push(ProcessInfo {
+                        pid,
+                        name,
+                        ppid,
+                        cmdline,
+                    });
+                    if rows.len() >= limit {
+                        break;
+                    }
+                }
+                if !rows.is_empty() {
+                    return Some(rows);
+                }
+            }
+        }
+        return None;
+    }
+    // Unix: pid,ppid,comm,args
+    if let Ok(out) = Command::new("ps")
+        .args(["-eo", "pid,ppid,comm,args", "--no-headers"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut rows = Vec::new();
+            for line in text.lines() {
+                let mut it = line.split_whitespace();
+                let pid = it.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                let ppid = it.next().and_then(|p| p.parse().ok());
+                let name = it.next().unwrap_or("").to_string();
+                let cmdline = {
+                    let rest = it.collect::<Vec<_>>().join(" ");
+                    if rest.is_empty() {
+                        None
+                    } else {
+                        Some(rest)
+                    }
+                };
+                if pid > 0 {
+                    rows.push(ProcessInfo {
+                        pid,
+                        name,
+                        ppid,
+                        cmdline,
+                    });
+                }
+                if rows.len() >= limit {
+                    break;
+                }
+            }
+            return Some(rows);
+        }
+    }
+    None
+}
+
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut in_q = false;
+    for c in line.chars() {
+        match c {
+            '"' => in_q = !in_q,
+            ',' if !in_q => {
+                fields.push(cur.clone());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    fields.push(cur);
+    fields
 }
 
 #[tokio::main]
@@ -198,7 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, process inventory, baseline/drift, alerts, watch (poll)".green()
+                "TCP table, process inventory (+rich cmdline), baseline/drift, alerts, watch".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -302,24 +487,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Commands::Ps { limit } => {
-            let rows = list_processes(limit);
+        Commands::Ps { limit, rich } => {
+            let rows = list_processes(limit, rich);
             println!(
                 "{}",
                 "=========================================================".cyan()
             );
             println!(
                 "{}",
-                "       Process inventory (userspace)                     "
-                    .bold()
-                    .green()
+                format!(
+                    "       Process inventory ({})                     ",
+                    if rich { "rich/WMI" } else { "userspace" }
+                )
+                .bold()
+                .green()
             );
             println!(
                 "{}",
                 "=========================================================".cyan()
             );
-            for (pid, name) in &rows {
-                println!(" PID {pid:<6} | {name}");
+            for p in &rows {
+                if rich {
+                    println!(
+                        " PID {:<6} PPID {:<6} | {}{}",
+                        p.pid,
+                        p.ppid.map(|x| x.to_string()).unwrap_or_else(|| "-".into()),
+                        p.name,
+                        p.cmdline
+                            .as_ref()
+                            .map(|c| format!("\n    cmd: {c}"))
+                            .unwrap_or_default()
+                    );
+                } else {
+                    println!(" PID {:<6} | {}", p.pid, p.name);
+                }
             }
             println!(" Count: {}", rows.len());
             emit(
@@ -327,8 +528,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 EventKind::Process,
                 EventAction::Observed,
                 Severity::Info,
-                format!("process inventory count={}", rows.len()),
-                &[("count", serde_json::json!(rows.len()))],
+                format!("process inventory count={} rich={rich}", rows.len()),
+                &[
+                    ("count", serde_json::json!(rows.len())),
+                    ("rich", serde_json::json!(rich)),
+                ],
             );
         }
         Commands::Baseline { limit } => {
@@ -505,45 +709,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit,
             exits,
             max_events,
+            rich,
         } => {
             println!(
-                "[cyberedr] watch interval={}ms limit={} (Ctrl+C to stop; userspace poll, not ETW)",
-                interval_ms, limit
+                "[cyberedr] watch interval={}ms limit={} rich={} (poll, not kernel ETW)",
+                interval_ms, limit, rich
             );
-            let mut known: BTreeMap<u32, String> = list_processes(limit).into_iter().collect();
+            let seed = list_processes(limit, rich);
+            let mut known: BTreeMap<u32, ProcessInfo> =
+                seed.into_iter().map(|p| (p.pid, p)).collect();
             println!("[cyberedr] seed {} processes", known.len());
             emit(
                 &cli.event_log,
                 EventKind::Process,
                 EventAction::Observed,
                 Severity::Info,
-                format!("edr watch start seed={}", known.len()),
+                format!("edr watch start seed={} rich={rich}", known.len()),
                 &[
                     ("interval_ms", serde_json::json!(interval_ms)),
                     ("seed", serde_json::json!(known.len())),
-                    ("engine", serde_json::json!("poll_v0")),
+                    ("engine", serde_json::json!(if rich { "poll_rich_v0" } else { "poll_v0" })),
                 ],
             );
             let mut new_events = 0u32;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(200))).await;
-                let live: BTreeMap<u32, String> = list_processes(limit).into_iter().collect();
-                for (pid, name) in &live {
+                let live_list = list_processes(limit, rich);
+                let live: BTreeMap<u32, ProcessInfo> =
+                    live_list.into_iter().map(|p| (p.pid, p)).collect();
+                for (pid, info) in &live {
                     if !known.contains_key(pid) {
                         println!(
-                            "{} PID {pid:<6} | {name}",
-                            " START".green().bold()
+                            "{} PID {pid:<6} PPID {} | {}{}",
+                            " START".green().bold(),
+                            info.ppid
+                                .map(|x| x.to_string())
+                                .unwrap_or_else(|| "-".into()),
+                            info.name,
+                            info.cmdline
+                                .as_ref()
+                                .map(|c| format!(" | {c}"))
+                                .unwrap_or_default()
                         );
                         emit(
                             &cli.event_log,
                             EventKind::Process,
                             EventAction::Observed,
                             Severity::Info,
-                            format!("process start pid={pid} name={name}"),
+                            format!("process start pid={pid} name={}", info.name),
                             &[
                                 ("pid", serde_json::json!(pid)),
-                                ("name", serde_json::json!(name)),
-                                ("engine", serde_json::json!("poll_v0")),
+                                ("name", serde_json::json!(info.name)),
+                                ("ppid", serde_json::json!(info.ppid)),
+                                ("cmdline", serde_json::json!(info.cmdline)),
+                                (
+                                    "engine",
+                                    serde_json::json!(if rich {
+                                        "poll_rich_v0"
+                                    } else {
+                                        "poll_v0"
+                                    }),
+                                ),
                             ],
                         );
                         new_events += 1;
@@ -554,21 +780,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if exits {
-                    for (pid, name) in &known {
+                    for (pid, info) in &known {
                         if !live.contains_key(pid) {
                             println!(
-                                "{} PID {pid:<6} | {name}",
-                                " EXIT ".yellow().bold()
+                                "{} PID {pid:<6} | {}",
+                                " EXIT ".yellow().bold(),
+                                info.name
                             );
                             emit(
                                 &cli.event_log,
                                 EventKind::Process,
                                 EventAction::Observed,
                                 Severity::Low,
-                                format!("process exit pid={pid} name={name}"),
+                                format!("process exit pid={pid} name={}", info.name),
                                 &[
                                     ("pid", serde_json::json!(pid)),
-                                    ("name", serde_json::json!(name)),
+                                    ("name", serde_json::json!(info.name)),
                                     ("engine", serde_json::json!("poll_v0")),
                                 ],
                             );
@@ -580,8 +807,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Trace => {
             eprintln!("[cyberedr] kernel ETW/eBPF live trace not implemented.");
-            eprintln!("Use: cyberedr watch  (userspace process poll / ETW-lite)");
-            eprintln!("     cyberedr processes | ps | alerts | drift");
+            eprintln!("Use: cyberedr watch --rich  (WMI/ps process poll with cmdline)");
+            eprintln!("     cyberedr ps --rich | processes | alerts | drift");
             std::process::exit(2);
         }
     }

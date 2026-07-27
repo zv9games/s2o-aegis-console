@@ -1,7 +1,8 @@
-//! S2O CyberDNS — DoH resolve, blocklist, local UDP proxy (Phase 2 shell).
+//! S2O CyberDNS — DoH resolve, blocklist, local UDP proxy, system DNS bind.
 
 mod blocklist;
 mod serve;
+mod system_dns;
 
 use blocklist::{is_blocked, load_blocklist, normalize_domain, save_blocklist};
 use clap::{Parser, Subcommand};
@@ -29,8 +30,8 @@ fn domain_denied(blocklist: &Path, ioc_path: &Path, domain: &str) -> Option<&'st
 #[derive(Parser)]
 #[command(name = "cyberdns")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.3.0")]
-#[command(about = "S2O CyberDNS Guard: DoH + blocklist + local UDP proxy", long_about = None)]
+#[command(version = "0.4.0")]
+#[command(about = "S2O CyberDNS Guard: DoH + blocklist + local UDP proxy + system DNS", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/dns-blocklist.txt")]
     blocklist: PathBuf,
@@ -58,6 +59,37 @@ enum Commands {
         /// Prefer high ports (5353 is often blocked on Windows / Hyper-V)
         #[arg(short, long, default_value = "127.0.0.1:53553")]
         listen: String,
+    },
+    /// Point OS resolver at local proxy / restore (hijack-lite T0)
+    SystemDns {
+        #[command(subcommand)]
+        command: SystemDnsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SystemDnsCmd {
+    /// Show current system DNS configuration
+    Show,
+    /// Backup current DNS then set primary to SERVER (default 127.0.0.1)
+    Set {
+        #[arg(long, default_value = "127.0.0.1")]
+        server: String,
+        /// Windows interface name (default: all interfaces)
+        #[arg(long)]
+        interface: Option<String>,
+        #[arg(long, default_value = ".aegis/dns-system-backup.json")]
+        backup: PathBuf,
+    },
+    /// Restore DNS from backup file
+    Restore {
+        #[arg(long, default_value = ".aegis/dns-system-backup.json")]
+        backup: PathBuf,
+    },
+    /// Only write backup without changing DNS
+    Backup {
+        #[arg(long, default_value = ".aegis/dns-system-backup.json")]
+        backup: PathBuf,
     },
 }
 
@@ -154,12 +186,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(0);
             println!(
                 " Implemented       : {}",
-                "DoH + blocklist + ThreatGrid IOC check + UDP proxy".green()
+                "DoH + blocklist + IOC + UDP proxy + system-dns bind".green()
             );
             println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
             println!(
                 " Not implemented   : {}",
-                "DoT, system resolver takeover, full recursive".red()
+                "DoT, full recursive, transparent redirector".red()
             );
             println!(
                 " Primary Resolver  : {}",
@@ -288,6 +320,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Serve { listen } => {
             serve::run_proxy(&listen, &cli.blocklist, &cli.ioc_store, &cli.event_log).await?;
         }
+        Commands::SystemDns { command } => match command {
+            SystemDnsCmd::Show => match system_dns::show_current() {
+                Ok(s) => print!("{s}"),
+                Err(e) => {
+                    eprintln!("[cyberdns] {e}");
+                    std::process::exit(1);
+                }
+            },
+            SystemDnsCmd::Backup { backup } => match system_dns::backup_current(&backup) {
+                Ok(b) => {
+                    println!(
+                        "[cyberdns] backup wrote {} ({} server(s), {} iface(s))",
+                        backup.display(),
+                        b.servers.len(),
+                        b.interfaces.len()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[cyberdns] {e}");
+                    std::process::exit(1);
+                }
+            },
+            SystemDnsCmd::Set {
+                server,
+                interface,
+                backup,
+            } => {
+                println!(
+                    "{}",
+                    "[cyberdns] system-dns set requires elevation on Windows (Admin) / root on Linux"
+                        .yellow()
+                );
+                match system_dns::set_system_dns(&server, interface.as_deref(), &backup) {
+                    Ok(msg) => {
+                        println!("{}", format!("[cyberdns] {msg}").green().bold());
+                        println!("Start proxy: cyberdns serve --listen 127.0.0.1:53  (or map 53→53553)");
+                        println!("Note: many OS stacks need port 53; serve on 53553 + portproxy if needed.");
+                        emit(
+                            &cli.event_log,
+                            EventAction::Observed,
+                            Severity::High,
+                            format!("system dns set server={server}"),
+                            &server,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[cyberdns] {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SystemDnsCmd::Restore { backup } => match system_dns::restore_system_dns(&backup) {
+                Ok(msg) => {
+                    println!("{}", format!("[cyberdns] {msg}").green().bold());
+                    emit(
+                        &cli.event_log,
+                        EventAction::Observed,
+                        Severity::Medium,
+                        "system dns restored from backup",
+                        "restore",
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[cyberdns] {e}");
+                    std::process::exit(1);
+                }
+            },
+        },
     }
 
     Ok(())

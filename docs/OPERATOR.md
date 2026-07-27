@@ -90,9 +90,9 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Job | Command |
 |-----|---------|
 | Firewall | `cyberwall status\|enable\|lock` |
-| DNS | `cyberdns resolve\|block\|serve` |
+| DNS | `cyberdns resolve\|block\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|watch\|patterns\|update-defs` |
-| EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts\|watch` |
+| EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | SIEM | `cybersiem stats\|correlate\|events` |
@@ -224,6 +224,25 @@ cargo run -p cybermesh -- config --private-key-file .aegis/wg0.key --address 10.
 # Peer directory via aegisd:
 cargo run -p cybermesh -- peers publish .aegis/wg0.pub --endpoint 1.2.3.4:51820
 cargo run -p cybermesh -- peers pull --merge
+```
+
+### System DNS bind (hijack-lite)
+
+```powershell
+# Show current OS DNS, then point at loopback (Admin shell on Windows)
+cargo run -p cyberdns -- system-dns show
+cargo run -p cyberdns -- system-dns backup
+cargo run -p cyberdns -- system-dns set --server 127.0.0.1
+# restore previous:
+cargo run -p cyberdns -- system-dns restore
+# Pair with: cyberdns serve --listen 127.0.0.1:53   (or 53553 + port proxy)
+```
+
+### EDR rich process intel
+
+```powershell
+cargo run -p cyberedr -- ps --rich --limit 20
+cargo run -p cyberedr -- watch --rich --interval-ms 2000 --max-events 5
 ```
 
 ### Console API (aegisd)

@@ -70,8 +70,10 @@
 - aegisd console API aliases `/api/v1/*`, `/posture`, `/events`, `/mesh/peers`
 - OIDC discovery: Gate `--oidc-issuer`, `jwt oidc-discover`, iss validation
 - aegisd lab IdP stub: `/.well-known/openid-configuration` + `/jwks.json`
+- CyberDNS `system-dns show|backup|set|restore` (OS resolver bind + backup)
+- CyberEDR `ps --rich` / `watch --rich` (cmdline + parent PID via WMI/ps)
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
-- System DNS hijack, embedded boringtun
+- Transparent DNS redirector, embedded boringtun
 - Full OAuth authorization-code login UI
