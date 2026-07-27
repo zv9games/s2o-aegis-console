@@ -11,6 +11,8 @@ use http_body_util::BodyExt;
 use s2o_kernel::{compute_posture_score, create_firewall_engine, host_id};
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
 use s2o_store::EventStore;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -19,9 +21,22 @@ use tokio::sync::RwLock;
 struct AppState {
     cfg: GateConfig,
     event_log: PathBuf,
+    access_log: Option<PathBuf>,
     /// Cached posture score with TTL
     cache: Arc<RwLock<Option<(std::time::Instant, u32)>>>,
     client: reqwest::Client,
+}
+
+fn access_log_line(path: &Option<PathBuf>, line: &str) {
+    let Some(p) = path else {
+        return;
+    };
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(p) {
+        let _ = writeln!(f, "{line}");
+    }
 }
 
 fn emit(event_log: &PathBuf, action: EventAction, severity: Severity, message: impl Into<String>, attrs: &[(&str, serde_json::Value)]) {
@@ -63,6 +78,8 @@ async fn proxy_handler(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Result<Response<Body>, StatusCode> {
+    let method = req.method().clone();
+    let req_path = req.uri().path().to_string();
     let score = current_score(&state).await?;
     if score < state.cfg.min_score {
         emit(
@@ -71,15 +88,23 @@ async fn proxy_handler(
             Severity::High,
             format!(
                 "gate deny path={} score={} min={}",
-                req.uri().path(),
-                score,
-                state.cfg.min_score
+                req_path, score, state.cfg.min_score
             ),
             &[
-                ("path", serde_json::json!(req.uri().path())),
+                ("path", serde_json::json!(req_path)),
                 ("score", serde_json::json!(score)),
                 ("min_score", serde_json::json!(state.cfg.min_score)),
             ],
+        );
+        access_log_line(
+            &state.access_log,
+            &format!(
+                "{} DENY {} score={} min={}",
+                chrono::Utc::now().to_rfc3339(),
+                req_path,
+                score,
+                state.cfg.min_score
+            ),
         );
         let body = format!(
             "S2O Gate DENY: posture score {score} < min {}\n",
@@ -128,7 +153,6 @@ async fn proxy_handler(
 
     let url = format!("{upstream_base}{forward_path}");
 
-    let method = req.method().clone();
     let headers = req.headers().clone();
     let body_bytes = req
         .into_body()
@@ -206,6 +230,18 @@ async fn proxy_handler(
             ("upstream_status", serde_json::json!(status_code)),
         ],
     );
+    access_log_line(
+        &state.access_log,
+        &format!(
+            "{} ALLOW {} {} route={} status={} score={}",
+            chrono::Utc::now().to_rfc3339(),
+            method,
+            path,
+            route_name,
+            status_code,
+            score
+        ),
+    );
 
     response_builder
         .body(Body::from(Bytes::from(bytes)))
@@ -221,10 +257,12 @@ pub async fn run(
     cfg: GateConfig,
     event_log: PathBuf,
     tls: Option<TlsFiles>,
+    access_log: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         cfg: cfg.clone(),
         event_log,
+        access_log,
         cache: Arc::new(RwLock::new(None)),
         client: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())

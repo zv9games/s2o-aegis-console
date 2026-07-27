@@ -114,6 +114,11 @@ cargo run -p cyberztna -- init
 cargo run -p cyberztna -- check --min-score 50
 cargo run -p cyberztna -- serve --upstream https://example.com --listen 127.0.0.1:18443
 cargo run -p cyberztna -- serve --tls --upstream https://example.com --listen 127.0.0.1:18443
+# access log: .aegis/gate-access.log
+
+# Local sessions (posture-gated)
+cargo run -p cyberid -- authenticate alice --min-score 50
+cargo run -p cyberid -- sessions
 
 # Mesh — keys + WireGuard conf (import with system WG / wg-quick)
 cargo run -p cybermesh -- config --output .aegis/wg0.conf --address 10.220.0.2/32

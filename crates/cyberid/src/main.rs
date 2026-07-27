@@ -1,7 +1,10 @@
-//! S2O CyberID — endpoint posture scoring + events (Phase 2 shell).
+//! S2O CyberID — endpoint posture scoring + local sessions (Phase 2/3).
+
+mod sessions;
 
 use clap::{Parser, Subcommand};
 use colored::*;
+use sessions::SessionStore;
 use s2o_kernel::create_firewall_engine;
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
 use s2o_store::EventStore;
@@ -11,11 +14,14 @@ use std::process::Command;
 #[derive(Parser)]
 #[command(name = "cyberid")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.2.0")]
-#[command(about = "S2O CyberID: device posture scoring (Phase 2 shell)", long_about = None)]
+#[command(version = "0.3.0")]
+#[command(about = "S2O CyberID: posture scoring + local session tokens", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
+
+    #[arg(long, global = true, default_value = ".aegis/sessions.json")]
+    sessions: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -32,8 +38,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    Authenticate { user: String },
+    /// Mint a local session token after posture gate passes
+    Authenticate {
+        user: String,
+        #[arg(long, default_value_t = 50)]
+        min_score: u32,
+        /// Session TTL hours
+        #[arg(long, default_value_t = 8)]
+        ttl_hours: i64,
+    },
+    /// List active (non-expired, non-revoked) sessions
     Sessions,
+    /// Revoke a session by token or id
+    Revoke { token: String },
+    /// Verify a session token (exit 3 if invalid)
+    Verify { token: String },
 }
 
 #[derive(serde::Serialize)]
@@ -122,11 +141,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture score (firewall, defender, IOC, DNS, encryption hint)".green()
+                "posture score + local session tokens (mint/list/revoke/verify)".green()
             );
             println!(
                 " Not implemented   : {}",
-                "OIDC/FIDO2 auth, session store, PAM".red()
+                "OIDC/FIDO2, enterprise PAM, federated IdP".red()
+            );
+            println!(
+                " Sessions file     : {} ({})",
+                cli.sessions.display(),
+                if cli.sessions.exists() {
+                    "present".green().to_string()
+                } else {
+                    "missing".yellow().to_string()
+                }
             );
             println!(
                 "{}",
@@ -280,13 +308,130 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         }
-        Commands::Authenticate { user } => {
-            eprintln!("[cyberid] authenticate not implemented for '{user}' (Phase 3).");
-            eprintln!("Posture gate is available: cyberid posture");
-            std::process::exit(2);
+        Commands::Authenticate {
+            user,
+            min_score,
+            ttl_hours,
+        } => {
+            let fw = create_firewall_engine();
+            let st = cyberwall_core::FirewallEngine::get_status(fw.as_ref()).await?;
+            let mut score = 0u32;
+            if st.enabled {
+                score += 30;
+            }
+            if st.defender_active || !cfg!(windows) {
+                score += 25;
+            }
+            if Path::new(".aegis/ioc-store.json").exists() {
+                score += 15;
+            }
+            if Path::new(".aegis/dns-blocklist.txt").exists() {
+                score += 15;
+            }
+            let (enc_ok, _) = bitlocker_or_encryption_hint();
+            if enc_ok {
+                score += 15;
+            }
+            if score < min_score {
+                eprintln!(
+                    "[cyberid] authenticate DENY for '{user}': posture {score} < {min_score}"
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Blocked,
+                    Severity::High,
+                    format!("auth deny user={user} score={score}"),
+                    &[
+                        ("user", serde_json::json!(user)),
+                        ("score", serde_json::json!(score)),
+                        ("min_score", serde_json::json!(min_score)),
+                    ],
+                );
+                std::process::exit(3);
+            }
+            let mut store = SessionStore::load(&cli.sessions);
+            let session = store.mint(&user, &host_id(), score, ttl_hours);
+            store.save(&cli.sessions)?;
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "      CyberID session issued                             "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(" User     : {}", user.bold());
+            println!(" Score    : {score}");
+            println!(" Token    : {}", session.token.yellow().bold());
+            println!(" Expires  : {}", session.expires_at);
+            println!(" Store    : {}", cli.sessions.display());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            emit(
+                &cli.event_log,
+                EventAction::Allowed,
+                Severity::Info,
+                format!("auth ok user={user} session={}", session.id),
+                &[
+                    ("user", serde_json::json!(user)),
+                    ("session_id", serde_json::json!(session.id)),
+                    ("score", serde_json::json!(score)),
+                ],
+            );
         }
         Commands::Sessions => {
-            println!("[cyberid] no sessions — auth store not implemented (Phase 3).");
+            let store = SessionStore::load(&cli.sessions);
+            let active: Vec<_> = store.active().collect();
+            if active.is_empty() {
+                println!("[cyberid] no active sessions");
+            } else {
+                for s in active {
+                    println!(
+                        "{}  user={} score={} exp={}",
+                        s.token, s.user, s.posture_score, s.expires_at
+                    );
+                }
+            }
+        }
+        Commands::Revoke { token } => {
+            let mut store = SessionStore::load(&cli.sessions);
+            if store.revoke_token(&token) {
+                store.save(&cli.sessions)?;
+                println!("{}", "[cyberid] session revoked".yellow().bold());
+                emit(
+                    &cli.event_log,
+                    EventAction::Observed,
+                    Severity::Info,
+                    "session revoked",
+                    &[("token_prefix", serde_json::json!(&token[..token.len().min(16)]))],
+                );
+            } else {
+                eprintln!("[cyberid] token not found");
+                std::process::exit(1);
+            }
+        }
+        Commands::Verify { token } => {
+            let store = SessionStore::load(&cli.sessions);
+            match store.verify(&token) {
+                Some(s) => {
+                    println!(
+                        "OK user={} score={} exp={}",
+                        s.user, s.posture_score, s.expires_at
+                    );
+                }
+                None => {
+                    eprintln!("INVALID");
+                    std::process::exit(3);
+                }
+            }
         }
     }
 

@@ -53,6 +53,12 @@ enum Commands {
         tls_cert: PathBuf,
         #[arg(long, default_value = ".aegis/gate-key.pem")]
         tls_key: PathBuf,
+        /// Append access lines to this file
+        #[arg(long, default_value = ".aegis/gate-access.log")]
+        access_log: PathBuf,
+        /// Disable access log file
+        #[arg(long)]
+        no_access_log: bool,
     },
     /// Check posture only (same kernel score Gate uses)
     Check {
@@ -200,6 +206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tls,
             tls_cert,
             tls_key,
+            access_log,
+            no_access_log,
         } => {
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             if let Some(l) = listen {
@@ -250,7 +258,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            proxy::run(cfg, cli.event_log, tls_files).await?;
+            let access = if no_access_log {
+                None
+            } else {
+                Some(access_log)
+            };
+            if let Some(ref p) = access {
+                println!("[gate] access log      : {}", p.display());
+            }
+            proxy::run(cfg, cli.event_log, tls_files, access).await?;
         }
         Commands::Connect { app } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());

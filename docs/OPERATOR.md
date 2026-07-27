@@ -90,7 +90,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts` |
 | SIEM | `cybersiem stats\|correlate\|events` |
 | Intel | `cyberintel sync\|lookup\|add` |
-| Identity | `cyberid posture` |
+| Identity | `cyberid posture\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|show` |
 | Gate | `cyberztna serve [--tls] --upstream URL` |
 

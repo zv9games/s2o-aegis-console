@@ -45,6 +45,8 @@
 - Suite `.aegis/config.json` + `aegis config init|show`
 - aegisd Prometheus `/metrics`
 - Continuous `aegis playbook watch`
+- Gate access log (`.aegis/gate-access.log`)
+- CyberID local session tokens after posture gate
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks
