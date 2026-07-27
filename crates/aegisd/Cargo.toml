@@ -1,6 +1,6 @@
 [package]
 name = "aegisd"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -18,3 +18,6 @@ chrono = "0.4"
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }
 s2o-kernel = { path = "../s2o-kernel" }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"

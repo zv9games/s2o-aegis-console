@@ -9,6 +9,8 @@
 param(
     [switch]$Release,
     [switch]$RegisterTask,
+    # Register real Windows Service (requires Administrator)
+    [switch]$RegisterService,
     [string]$InstallDir = "$env:LOCALAPPDATA\S2O\Aegis\bin"
 )
 
@@ -68,6 +70,11 @@ if ($RegisterTask) {
     Write-Host "Start now: Start-ScheduledTask -TaskName S2O-Aegisd"
 } else {
     Write-Host "Tip: re-run with -RegisterTask to auto-start aegisd at logon" -ForegroundColor DarkYellow
+}
+
+if ($RegisterService) {
+    $svcScript = Join-Path $PSScriptRoot 'install-aegis-service.ps1'
+    & $svcScript -BinPath (Join-Path $InstallDir 'aegisd.exe') -DataDir $data
 }
 
 Write-Host "Done." -ForegroundColor Green

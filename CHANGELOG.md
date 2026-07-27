@@ -51,9 +51,11 @@
 - Gate IP allowlist (`--allow-ip` / CIDR), per-IP rate limit (`--rate-limit`)
 - Gate `--enforce-session-posture` (mint-time score vs min_score)
 - Session `last_used` touch on Gate use; `cyberid gc` for store cleanup
+- Windows Service SCM for aegisd (`--run-as-service`, `aegis service install|start|stop|status`)
+- `scripts/install-aegis-service.ps1`; install tools `-RegisterService`
+- CyberEDR `watch` process appearance poll (ETW-lite userspace)
 
 ### Known gaps (intentionally later)
-- Full YARA-X engine, ETW/eBPF hooks
+- Full YARA-X engine, kernel ETW/eBPF hooks
 - System DNS hijack, embedded boringtun
 - Gate mTLS / OIDC IdP
-- Full Windows Service SCM integration (Scheduled Task provided)

@@ -125,6 +125,60 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Windows Service / Scheduled Task control for aegisd (T1 packaging)
+    Service {
+        #[command(subcommand)]
+        command: ServiceCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// Show SCM / Scheduled Task state for S2OAegisd
+    Status {
+        #[arg(long, default_value = "S2OAegisd")]
+        name: String,
+    },
+    /// Register Windows Service (requires Administrator)
+    Install {
+        #[arg(long, default_value = "S2OAegisd")]
+        name: String,
+        /// Path to aegisd.exe (default: next to aegis / target)
+        #[arg(long)]
+        bin: Option<PathBuf>,
+        /// Defaults to %LOCALAPPDATA%\S2O\Aegis\data
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        #[arg(long, default_value = "127.0.0.1:9090")]
+        health_bind: String,
+        /// Also register AtLogOn Scheduled Task (user-level fallback)
+        #[arg(long)]
+        task: bool,
+    },
+    /// Remove Windows Service registration
+    Uninstall {
+        #[arg(long, default_value = "S2OAegisd")]
+        name: String,
+        #[arg(long)]
+        task: bool,
+    },
+    /// Start the service (or Scheduled Task)
+    Start {
+        #[arg(long, default_value = "S2OAegisd")]
+        name: String,
+    },
+    /// Stop the service
+    Stop {
+        #[arg(long, default_value = "S2OAegisd")]
+        name: String,
+    },
+}
+
+fn default_service_data_dir() -> PathBuf {
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(base).join("S2O").join("Aegis").join("data");
+    }
+    PathBuf::from(".aegis")
 }
 
 #[derive(Subcommand)]
@@ -486,6 +540,35 @@ fn find_product_bin(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn resolve_aegisd_bin(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    find_product_bin("aegisd")
+}
+
+fn sc_query(name: &str) -> Option<String> {
+    let out = Command::new("sc").args(["query", name]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    if out.status.success() || text.contains("STATE") {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+fn run_sc(args: &[&str]) -> Result<(i32, String, String), Box<dyn std::error::Error>> {
+    let out = Command::new("sc").args(args).output()?;
+    let code = out.status.code().unwrap_or(1);
+    Ok((
+        code,
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    ))
 }
 
 #[tokio::main]
@@ -1156,6 +1239,165 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
             println!("{}", "SELFTEST PASS".green().bold());
+        }
+        Commands::Service { command } => {
+            if !cfg!(windows) {
+                eprintln!("[aegis] service commands are Windows-only (use systemd unit on Linux later)");
+                std::process::exit(2);
+            }
+            match command {
+                ServiceCmd::Status { name } => {
+                    println!("{}", "Aegis service status".bold().green());
+                    println!(" Service name : {name}");
+                    match sc_query(&name) {
+                        Some(text) => {
+                            for line in text.lines().take(12) {
+                                println!("  {line}");
+                            }
+                            let running = text.to_ascii_uppercase().contains("RUNNING");
+                            println!(
+                                " Summary      : {}",
+                                if running {
+                                    "RUNNING".green().bold().to_string()
+                                } else {
+                                    "installed (not running or stopped)".yellow().to_string()
+                                }
+                            );
+                        }
+                        None => {
+                            println!(" SCM          : {}", "not installed".yellow());
+                        }
+                    }
+                    // Scheduled task probe
+                    let task = Command::new("schtasks")
+                        .args(["/Query", "/TN", "S2O-Aegisd", "/FO", "LIST"])
+                        .output();
+                    match task {
+                        Ok(o) if o.status.success() => {
+                            println!(" Task S2O-Aegisd: {}", "registered".green());
+                        }
+                        _ => println!(" Task S2O-Aegisd: {}", "not registered".dimmed()),
+                    }
+                }
+                ServiceCmd::Install {
+                    name,
+                    bin,
+                    data_dir,
+                    health_bind,
+                    task,
+                } => {
+                    let Some(exe) = resolve_aegisd_bin(bin) else {
+                        eprintln!("[aegis] aegisd.exe not found — build first or pass --bin");
+                        std::process::exit(2);
+                    };
+                    let data_dir = data_dir.unwrap_or_else(default_service_data_dir);
+                    std::fs::create_dir_all(&data_dir)?;
+                    let event_log = data_dir.join("events.jsonl");
+                    // binPath for sc: quoted exe + --run-as-service + flags
+                    let bin_path = format!(
+                        "\"{}\" --run-as-service --event-log \"{}\" --health-bind {}",
+                        exe.display(),
+                        event_log.display(),
+                        health_bind
+                    );
+                    println!("[aegis] installing service {name}");
+                    println!("  binPath : {bin_path}");
+                    let (code, stdout, stderr) = run_sc(&[
+                        "create",
+                        &name,
+                        &format!("binPath= {bin_path}"),
+                        "start= auto",
+                        "DisplayName= S2O Aegis Suite Kernel (aegisd)",
+                    ])?;
+                    print!("{stdout}{stderr}");
+                    if code != 0 {
+                        eprintln!(
+                            "[aegis] sc create failed (exit {code}). Run elevated Administrator shell."
+                        );
+                        std::process::exit(code);
+                    }
+                    let _ = run_sc(&[
+                        "description",
+                        &name,
+                        "S2O Aegis control plane: health HTTP, status matrix, event store",
+                    ]);
+                    println!("{}", format!("[aegis] service {name} installed").green().bold());
+                    println!("  start : aegis service start --name {name}");
+                    if task {
+                        let action = format!(
+                            "\"{}\" start --event-log \"{}\" --health-bind {}",
+                            exe.display(),
+                            event_log.display(),
+                            health_bind
+                        );
+                        let out = Command::new("schtasks")
+                            .args([
+                                "/Create",
+                                "/TN",
+                                "S2O-Aegisd",
+                                "/SC",
+                                "ONLOGON",
+                                "/RL",
+                                "LIMITED",
+                                "/F",
+                                "/TR",
+                                &action,
+                            ])
+                            .output()?;
+                        if out.status.success() {
+                            println!("  task  : S2O-Aegisd registered (AtLogOn)");
+                        } else {
+                            eprintln!(
+                                "  task  : failed: {}",
+                                String::from_utf8_lossy(&out.stderr)
+                            );
+                        }
+                    }
+                }
+                ServiceCmd::Uninstall { name, task } => {
+                    let _ = run_sc(&["stop", &name]);
+                    let (code, stdout, stderr) = run_sc(&["delete", &name])?;
+                    print!("{stdout}{stderr}");
+                    if code != 0 {
+                        eprintln!("[aegis] sc delete exit {code} (may need Administrator)");
+                    } else {
+                        println!("{}", format!("[aegis] service {name} removed").yellow());
+                    }
+                    if task {
+                        let _ = Command::new("schtasks")
+                            .args(["/Delete", "/TN", "S2O-Aegisd", "/F"])
+                            .status();
+                        println!("[aegis] task S2O-Aegisd delete attempted");
+                    }
+                }
+                ServiceCmd::Start { name } => {
+                    let (code, stdout, stderr) = run_sc(&["start", &name])?;
+                    print!("{stdout}{stderr}");
+                    if code != 0 {
+                        // fallback task
+                        let t = Command::new("schtasks")
+                            .args(["/Run", "/TN", "S2O-Aegisd"])
+                            .output()?;
+                        if t.status.success() {
+                            println!("[aegis] started via Scheduled Task S2O-Aegisd");
+                        } else {
+                            eprintln!("[aegis] service start failed (exit {code})");
+                            std::process::exit(code);
+                        }
+                    } else {
+                        println!("{}", format!("[aegis] service {name} started").green().bold());
+                    }
+                }
+                ServiceCmd::Stop { name } => {
+                    let (code, stdout, stderr) = run_sc(&["stop", &name])?;
+                    print!("{stdout}{stderr}");
+                    if code != 0 {
+                        eprintln!("[aegis] service stop exit {code}");
+                        std::process::exit(code);
+                    }
+                    println!("{}", format!("[aegis] service {name} stopped").yellow());
+                }
+            }
         }
         Commands::Run { product, args } => {
             let bin = find_product_bin(&product).ok_or_else(|| {

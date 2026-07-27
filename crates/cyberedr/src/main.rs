@@ -53,6 +53,20 @@ enum Commands {
     },
     /// Heuristic alerts from TCP snapshot (no ETW yet)
     Alerts,
+    /// Poll process table for new PIDs (ETW-lite T0; not kernel ETW)
+    Watch {
+        #[arg(long, default_value_t = 2000)]
+        interval_ms: u64,
+        #[arg(long, default_value_t = 800)]
+        limit: usize,
+        /// Also emit when a process image name disappears
+        #[arg(long)]
+        exits: bool,
+        /// Exit after this many new-process events (0 = run forever)
+        #[arg(long, default_value_t = 0)]
+        max_events: u32,
+    },
+    /// Placeholder for true ETW/eBPF (use `watch` for userspace poll)
     Trace,
 }
 
@@ -184,11 +198,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, process inventory, baseline/drift, heuristic alerts".green()
+                "TCP table, process inventory, baseline/drift, alerts, watch (poll)".green()
             );
             println!(
                 " Not implemented   : {}",
-                "ETW/eBPF kernel hooks, behavioral ML".red()
+                "kernel ETW/eBPF hooks, behavioral ML".red()
             );
             println!(
                 " Baseline file     : {} ({})",
@@ -486,9 +500,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!(" Alerts: {}", alerts.len());
         }
+        Commands::Watch {
+            interval_ms,
+            limit,
+            exits,
+            max_events,
+        } => {
+            println!(
+                "[cyberedr] watch interval={}ms limit={} (Ctrl+C to stop; userspace poll, not ETW)",
+                interval_ms, limit
+            );
+            let mut known: BTreeMap<u32, String> = list_processes(limit).into_iter().collect();
+            println!("[cyberedr] seed {} processes", known.len());
+            emit(
+                &cli.event_log,
+                EventKind::Process,
+                EventAction::Observed,
+                Severity::Info,
+                format!("edr watch start seed={}", known.len()),
+                &[
+                    ("interval_ms", serde_json::json!(interval_ms)),
+                    ("seed", serde_json::json!(known.len())),
+                    ("engine", serde_json::json!("poll_v0")),
+                ],
+            );
+            let mut new_events = 0u32;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(200))).await;
+                let live: BTreeMap<u32, String> = list_processes(limit).into_iter().collect();
+                for (pid, name) in &live {
+                    if !known.contains_key(pid) {
+                        println!(
+                            "{} PID {pid:<6} | {name}",
+                            " START".green().bold()
+                        );
+                        emit(
+                            &cli.event_log,
+                            EventKind::Process,
+                            EventAction::Observed,
+                            Severity::Info,
+                            format!("process start pid={pid} name={name}"),
+                            &[
+                                ("pid", serde_json::json!(pid)),
+                                ("name", serde_json::json!(name)),
+                                ("engine", serde_json::json!("poll_v0")),
+                            ],
+                        );
+                        new_events += 1;
+                        if max_events > 0 && new_events >= max_events {
+                            println!("[cyberedr] watch max_events={max_events} reached");
+                            return Ok(());
+                        }
+                    }
+                }
+                if exits {
+                    for (pid, name) in &known {
+                        if !live.contains_key(pid) {
+                            println!(
+                                "{} PID {pid:<6} | {name}",
+                                " EXIT ".yellow().bold()
+                            );
+                            emit(
+                                &cli.event_log,
+                                EventKind::Process,
+                                EventAction::Observed,
+                                Severity::Low,
+                                format!("process exit pid={pid} name={name}"),
+                                &[
+                                    ("pid", serde_json::json!(pid)),
+                                    ("name", serde_json::json!(name)),
+                                    ("engine", serde_json::json!("poll_v0")),
+                                ],
+                            );
+                        }
+                    }
+                }
+                known = live;
+            }
+        }
         Commands::Trace => {
-            eprintln!("[cyberedr] ETW/eBPF live trace not implemented (Phase 2).");
-            eprintln!("Use: cyberedr processes | ps | alerts for userspace visibility.");
+            eprintln!("[cyberedr] kernel ETW/eBPF live trace not implemented.");
+            eprintln!("Use: cyberedr watch  (userspace process poll / ETW-lite)");
+            eprintln!("     cyberedr processes | ps | alerts | drift");
             std::process::exit(2);
         }
     }

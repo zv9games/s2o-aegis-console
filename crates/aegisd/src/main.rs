@@ -1,7 +1,12 @@
-//! S2O Aegis master daemon — Phase 1 foundation front door.
+//! S2O Aegis master daemon — suite kernel front door.
 //!
 //! Honesty: only engines that actually work report live data.
 //! Demo labels require AEGIS_DEMO=1.
+//!
+//! Windows Service: `aegisd --run-as-service` (SCM entry). Interactive: `aegisd start`.
+
+#[cfg(windows)]
+mod service;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -21,8 +26,8 @@ use tokio::net::TcpListener;
 #[derive(Parser)]
 #[command(name = "aegisd")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.1.0")]
-#[command(about = "S2O Aegis Platform: suite kernel / cyber-ops orchestrator (Phase 1 foundation)", long_about = None)]
+#[command(version = "0.2.0")]
+#[command(about = "S2O Aegis Platform: suite kernel / cyber-ops orchestrator", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -177,8 +182,142 @@ async fn health_server(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Shared start path for interactive console and Windows Service.
+pub async fn run_daemon(
+    event_log: PathBuf,
+    health_bind: String,
+    no_health: bool,
+    as_service: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let fw = create_firewall_engine();
+
+    if !as_service {
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
+        println!(
+            "{}",
+            "     S2O AEGIS MASTER DAEMON  (Phase 2/3 shell)          "
+                .bold()
+                .green()
+        );
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
+        println!(" Kernel version    : {}", KERNEL_VERSION);
+        println!(" Schema version    : {}", SCHEMA_VERSION);
+        println!(" Phase             : {}", PHASE_LABEL);
+        println!(" Tier ceiling      : {}", TIER_CEILING.as_str());
+        println!(
+            " Demo mode         : {}",
+            if demo_mode() {
+                "ON (AEGIS_DEMO)".yellow().to_string()
+            } else {
+                "OFF".green().to_string()
+            }
+        );
+    }
+
+    if let Some(parent) = event_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let store = EventStore::open(&event_log)?;
+    if !as_service {
+        println!(" Event store       : {}", store.path().display());
+        println!(" Host id           : {}", host_id());
+    }
+
+    let status = collect_platform_status(&fw).await;
+    if !as_service {
+        for (i, m) in status.modules.iter().enumerate() {
+            let label = match m.state {
+                HealthState::Implemented => m.state.as_str().green().bold().to_string(),
+                HealthState::Partial => m.state.as_str().yellow().to_string(),
+                HealthState::Demo => m.state.as_str().yellow().bold().to_string(),
+                HealthState::Degraded => m.state.as_str().red().bold().to_string(),
+                _ => m.state.as_str().red().to_string(),
+            };
+            println!(
+                "[AEGISD] [{}/9] {} ... {}",
+                i + 1,
+                m.name,
+                label
+            );
+            println!("         {}", m.detail);
+        }
+    }
+
+    let wall = status
+        .modules
+        .iter()
+        .find(|m| m.product == ProductId::Cyberwall);
+    let mode = if as_service { "service" } else { "console" };
+    let ev = AegisEvent::new(
+        host_id(),
+        ProductId::Aegis,
+        EventKind::Health,
+        EventAction::Observed,
+        Severity::Info,
+        format!(
+            "aegisd start mode={mode}; phase={PHASE_LABEL}; wall={}",
+            wall.map(|w| w.state.as_str()).unwrap_or("unknown")
+        ),
+    )
+    .with_attr("phase", serde_json::json!(PHASE_LABEL))
+    .with_attr("tier_ceiling", serde_json::json!(TIER_CEILING.as_str()))
+    .with_attr("mode", serde_json::json!(mode))
+    .with_attr(
+        "wall_detail",
+        serde_json::json!(wall.map(|w| w.detail.as_str()).unwrap_or("")),
+    );
+    store.append(&ev)?;
+    if !as_service {
+        println!("[AEGISD] health event written to store");
+    }
+
+    if !no_health && !health_bind.is_empty() {
+        let bind = health_bind.clone();
+        let fw_h = create_firewall_engine();
+        let el = event_log.clone();
+        tokio::spawn(async move {
+            if let Err(e) = health_server(bind, fw_h, el).await {
+                eprintln!("[AEGISD] health server error: {e}");
+            }
+        });
+        if !as_service {
+            println!("[AEGISD] health HTTP     : http://{health_bind}/health");
+            println!("[AEGISD] status JSON     : http://{health_bind}/status");
+            println!("[AEGISD] metrics         : http://{health_bind}/metrics");
+        }
+    }
+
+    if !as_service {
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
+        println!(
+            "{}",
+            "  Suite kernel live. Ctrl+C to stop."
+                .bold()
+                .yellow()
+        );
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
+        tokio::signal::ctrl_c().await?;
+        println!("\n[AEGISD] shutdown complete.");
+    } else {
+        // Service mode: run until cancelled by caller (select in service.rs)
+        std::future::pending::<()>().await;
+    }
+    Ok(())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
     let fw = create_firewall_engine();
 
@@ -188,109 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             health_bind,
             no_health,
         } => {
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "     S2O AEGIS MASTER DAEMON  (Phase 2/3 shell)          "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(" Kernel version    : {}", KERNEL_VERSION);
-            println!(" Schema version    : {}", SCHEMA_VERSION);
-            println!(" Phase             : {}", PHASE_LABEL);
-            println!(" Tier ceiling      : {}", TIER_CEILING.as_str());
-            println!(
-                " Demo mode         : {}",
-                if demo_mode() {
-                    "ON (AEGIS_DEMO)".yellow().to_string()
-                } else {
-                    "OFF".green().to_string()
-                }
-            );
-
-            let store = EventStore::open(&event_log)?;
-            println!(" Event store       : {}", store.path().display());
-            println!(" Host id           : {}", host_id());
-
-            let status = collect_platform_status(&fw).await;
-            for (i, m) in status.modules.iter().enumerate() {
-                let label = match m.state {
-                    HealthState::Implemented => m.state.as_str().green().bold().to_string(),
-                    HealthState::Partial => m.state.as_str().yellow().to_string(),
-                    HealthState::Demo => m.state.as_str().yellow().bold().to_string(),
-                    HealthState::Degraded => m.state.as_str().red().bold().to_string(),
-                    _ => m.state.as_str().red().to_string(),
-                };
-                println!(
-                    "[AEGISD] [{}/9] {} ... {}",
-                    i + 1,
-                    m.name,
-                    label
-                );
-                println!("         {}", m.detail);
-            }
-
-            let wall = status
-                .modules
-                .iter()
-                .find(|m| m.product == ProductId::Cyberwall);
-            let ev = AegisEvent::new(
-                host_id(),
-                ProductId::Aegis,
-                EventKind::Health,
-                EventAction::Observed,
-                Severity::Info,
-                format!(
-                    "aegisd start; phase={PHASE_LABEL}; wall={}",
-                    wall.map(|w| w.state.as_str()).unwrap_or("unknown")
-                ),
-            )
-            .with_attr("phase", serde_json::json!(PHASE_LABEL))
-            .with_attr("tier_ceiling", serde_json::json!(TIER_CEILING.as_str()))
-            .with_attr(
-                "wall_detail",
-                serde_json::json!(wall.map(|w| w.detail.as_str()).unwrap_or("")),
-            );
-            store.append(&ev)?;
-            println!("[AEGISD] health event written to store");
-
-            if !no_health && !health_bind.is_empty() {
-                let bind = health_bind.clone();
-                let fw_h = create_firewall_engine();
-                let el = event_log.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = health_server(bind, fw_h, el).await {
-                        eprintln!("[AEGISD] health server error: {e}");
-                    }
-                });
-                println!("[AEGISD] health HTTP     : http://{health_bind}/health");
-                println!("[AEGISD] status JSON     : http://{health_bind}/status");
-                println!("[AEGISD] metrics         : http://{health_bind}/metrics");
-            }
-
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "  Suite kernel live. Ctrl+C to stop."
-                    .bold()
-                    .yellow()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            tokio::signal::ctrl_c().await?;
-            println!("\n[AEGISD] shutdown complete.");
+            run_daemon(event_log, health_bind, no_health, false).await?;
         }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;
@@ -399,4 +436,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn main() {
+    // SCM entry: must run before clap (service dispatcher protocol).
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--run-as-service") {
+        #[cfg(windows)]
+        {
+            if let Err(e) = service::dispatch() {
+                eprintln!("[aegisd] service dispatcher error: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("[aegisd] --run-as-service is only supported on Windows");
+            std::process::exit(2);
+        }
+    }
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("[aegisd] runtime error: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = rt.block_on(async_main()) {
+        eprintln!("[aegisd] error: {e}");
+        std::process::exit(1);
+    }
 }

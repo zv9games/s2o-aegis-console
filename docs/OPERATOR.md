@@ -78,6 +78,11 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
    ```powershell
    pwsh -File scripts/install-aegis-tools.ps1 -Release
    pwsh -File scripts/install-aegis-tools.ps1 -Release -RegisterTask
+   # Real Windows Service (Administrator):
+   pwsh -File scripts/install-aegis-tools.ps1 -Release -RegisterService
+   cargo run -p aegis-cli -- service install
+   cargo run -p aegis-cli -- service start
+   cargo run -p aegis-cli -- service status
    ```
 
 ## Product commands (deep CLIs)
@@ -87,7 +92,8 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Firewall | `cyberwall status\|enable\|lock` |
 | DNS | `cyberdns resolve\|block\|serve` |
 | Defender | `cyberdefender scan\|update-defs` |
-| EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts` |
+| EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts\|watch` |
+| Service | `aegis service install\|start\|stop\|status` (Windows) |
 | SIEM | `cybersiem stats\|correlate\|events` |
 | Intel | `cyberintel sync\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |

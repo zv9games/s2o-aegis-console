@@ -161,7 +161,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberID local sessions (mint/list/revoke/verify)  
 - ✅ Gate `--require-session` (CyberID token header)  
 - ✅ Gate IP allowlist + rate limit + session posture floor + last_used  
-- ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
+- ✅ Windows Service SCM for aegisd + `aegis service`  
+- ✅ CyberEDR `watch` (process poll / ETW-lite)  
+- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof
