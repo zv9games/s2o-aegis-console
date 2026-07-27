@@ -126,7 +126,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ EDR TCP snapshot + summary events  
 - ✅ `aegis` meta-CLI (`doctor` / `status` / `policy` / `events`)  
 - ✅ GitHub Actions CI (portable Ubuntu + optional Windows+net-lib)  
-- ⏳ YARA / ETW / DNS local proxy (later in P2)  
+- ✅ CyberDNS local UDP proxy (`serve`, blocklist NXDOMAIN + DoH A)  
+- ✅ CyberDefender local hash/name rules (`update-defs` + scan verdicts)  
+- ⏳ Full YARA-X / ETW hooks / system DNS hijack (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

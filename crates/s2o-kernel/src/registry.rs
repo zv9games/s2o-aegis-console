@@ -27,9 +27,9 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             os,
             CapabilityTier::T0,
             if demo {
-                "DEMO: DoH resolve + local blocklist"
+                "DEMO: DoH + blocklist + UDP proxy"
             } else {
-                "partial: DoH resolve + file blocklist; local proxy serve not production"
+                "partial: DoH resolve + file blocklist + local UDP proxy (serve); no DoT/system hijack"
             },
         ),
         ProductId::CyberDefender => ModuleStatus::new(
@@ -41,8 +41,9 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: SHA-256 scan scaffold; no YARA/RT shield product",
+            "partial: SHA-256 + local hash/name rules + Defender probe; no full YARA/RT shield",
         ),
+
         ProductId::CyberEdr => ModuleStatus::new(
             product,
             if demo {

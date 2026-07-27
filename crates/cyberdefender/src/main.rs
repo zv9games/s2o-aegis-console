@@ -1,22 +1,28 @@
-//! S2O CyberDefender — SHA-256 scan + Defender service probe + events (Phase 2 shell).
+//! S2O CyberDefender — hash scan + local hash rules + Defender probe (Phase 2 shell).
 
 use clap::{Parser, Subcommand};
 use colored::*;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
-use std::fs::File;
+use std::collections::BTreeSet;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "cyberdefender")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.2.0")]
-#[command(about = "S2O CyberDefender: hash scan + Defender health (Phase 2 shell)", long_about = None)]
+#[command(version = "0.3.0")]
+#[command(about = "S2O CyberDefender: hash scan + local rules (Phase 2 shell)", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
+
+    /// Local signature / hash rules file
+    #[arg(long, global = true, default_value = ".aegis/defender-rules.json")]
+    rules: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -25,14 +31,73 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Status,
-    /// SHA-256 hash a file (directory: first-level files, max 32)
+    /// SHA-256 scan a file or directory (first-level files, max 64)
     Scan {
         path: String,
     },
+    /// Write / refresh local rules seed file
     UpdateDefs,
     Realtime {
         action: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LocalRules {
+    version: String,
+    /// SHA-256 hex (lowercase) treated as malicious
+    #[serde(default)]
+    blocked_hashes: Vec<String>,
+    /// Path substring matches (case-insensitive)
+    #[serde(default)]
+    blocked_name_substrings: Vec<String>,
+}
+
+impl LocalRules {
+    fn seed() -> Self {
+        Self {
+            version: "0.1.0".into(),
+            blocked_hashes: vec![],
+            blocked_name_substrings: vec!["eicar".into()],
+        }
+    }
+
+    fn hash_set(&self) -> BTreeSet<String> {
+        self.blocked_hashes
+            .iter()
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect()
+    }
+
+    fn name_hit(&self, path: &Path) -> Option<String> {
+        let s = path.to_string_lossy().to_ascii_lowercase();
+        for sub in &self.blocked_name_substrings {
+            let sub = sub.to_ascii_lowercase();
+            if !sub.is_empty() && s.contains(&sub) {
+                return Some(sub);
+            }
+        }
+        None
+    }
+}
+
+fn load_rules(path: &Path) -> LocalRules {
+    if !path.exists() {
+        return LocalRules::seed();
+    }
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(LocalRules::seed)
+}
+
+fn save_rules(path: &Path, rules: &LocalRules) -> std::io::Result<()> {
+    if let Some(p) = path.parent() {
+        fs::create_dir_all(p)?;
+    }
+    let text = serde_json::to_string_pretty(rules).unwrap_or_else(|_| "{}".into());
+    fs::write(path, text)
 }
 
 fn host_id() -> String {
@@ -41,7 +106,14 @@ fn host_id() -> String {
         .unwrap_or_else(|_| "unknown-host".into())
 }
 
-fn emit(event_log: &Path, action: EventAction, severity: Severity, message: impl Into<String>, attrs: &[(&str, serde_json::Value)], ioc: Option<Ioc>) {
+fn emit(
+    event_log: &Path,
+    action: EventAction,
+    severity: Severity,
+    message: impl Into<String>,
+    attrs: &[(&str, serde_json::Value)],
+    ioc: Option<Ioc>,
+) {
     if let Ok(store) = EventStore::open(event_log) {
         let mut ev = AegisEvent::new(
             host_id(),
@@ -87,7 +159,7 @@ fn collect_targets(path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Erro
             if p.is_file() {
                 files.push(p);
             }
-            if files.len() >= 32 {
+            if files.len() >= 64 {
                 break;
             }
         }
@@ -106,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s2o_net_lib::defender::DefenderController::is_defender_active()
             })
             .await?;
+            let rules = load_rules(&cli.rules);
 
             println!(
                 "{}",
@@ -129,13 +202,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Not running / query failed".red().bold()
                 }
             );
+            println!(" Rules file        : {}", cli.rules.display());
+            println!(
+                " Local hash rules  : {}",
+                rules.blocked_hashes.len().to_string().yellow()
+            );
+            println!(
+                " Name substr rules : {}",
+                rules.blocked_name_substrings.len().to_string().yellow()
+            );
             println!(
                 " Implemented       : {}",
-                "SHA-256 file/dir scan; Defender service query; events".green()
+                "SHA-256 scan + local hash/name rules + Defender query + events".green()
             );
             println!(
                 " Not implemented   : {}",
-                "YARA engine, realtime FS shield, cloud defs".red()
+                "full YARA engine, realtime FS shield, cloud defs".red()
             );
             println!(
                 "{}",
@@ -147,15 +229,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 EventAction::Observed,
                 Severity::Info,
                 format!("cyberdefender status defender_active={is_active}"),
-                &[("defender_active", serde_json::json!(is_active))],
+                &[
+                    ("defender_active", serde_json::json!(is_active)),
+                    ("hash_rules", serde_json::json!(rules.blocked_hashes.len())),
+                ],
+                None,
+            );
+        }
+        Commands::UpdateDefs => {
+            let mut rules = load_rules(&cli.rules);
+            if rules.version.is_empty() {
+                rules = LocalRules::seed();
+            }
+            // Ensure seed name rule exists
+            if rules.blocked_name_substrings.is_empty() {
+                rules.blocked_name_substrings.push("eicar".into());
+            }
+            if rules.version.is_empty() {
+                rules.version = "0.1.0".into();
+            }
+            save_rules(&cli.rules, &rules)?;
+            println!(
+                "{}",
+                format!(
+                    "[cyberdefender] wrote local rules {} (hashes={}, names={})",
+                    cli.rules.display(),
+                    rules.blocked_hashes.len(),
+                    rules.blocked_name_substrings.len()
+                )
+                .green()
+                .bold()
+            );
+            emit(
+                &cli.event_log,
+                EventAction::Observed,
+                Severity::Info,
+                "local defender rules updated",
+                &[("rules_path", serde_json::json!(cli.rules.display().to_string()))],
                 None,
             );
         }
         Commands::Scan { path } => {
             let root = PathBuf::from(&path);
+            let rules = load_rules(&cli.rules);
+            let hash_set = rules.hash_set();
             println!(
                 "{}",
-                format!("[cyberdefender] hashing (no YARA yet): '{}'...", root.display()).cyan()
+                format!(
+                    "[cyberdefender] scanning '{}' ({} hash rules)...",
+                    root.display(),
+                    hash_set.len()
+                )
+                .cyan()
             );
 
             let targets = match collect_targets(&root) {
@@ -166,47 +291,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     eprintln!("{}", format!("Scan Error: {e}").red());
-                    emit(
-                        &cli.event_log,
-                        EventAction::Failed,
-                        Severity::Medium,
-                        format!("scan failed: {e}"),
-                        &[("path", serde_json::json!(path))],
-                        None,
-                    );
                     std::process::exit(1);
                 }
             };
 
             let mut hashed = 0u32;
+            let mut blocked = 0u32;
             for t in &targets {
+                if let Some(sub) = rules.name_hit(t) {
+                    blocked += 1;
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                    println!(" Target File  : {}", t.display().to_string().bold());
+                    println!(
+                        " Verdict      : {}",
+                        format!("BLOCKED (name rule: {sub})").red().bold()
+                    );
+                    emit(
+                        &cli.event_log,
+                        EventAction::Blocked,
+                        Severity::High,
+                        format!("name rule hit: {}", t.display()),
+                        &[
+                            ("path", serde_json::json!(t.display().to_string())),
+                            ("rule", serde_json::json!(sub)),
+                            ("verdict", serde_json::json!("blocked_name")),
+                        ],
+                        None,
+                    );
+                    continue;
+                }
+
                 match calculate_file_hash(t) {
                     Ok(hash) => {
                         hashed += 1;
+                        let hit = hash_set.contains(&hash);
+                        if hit {
+                            blocked += 1;
+                        }
                         println!(
                             "{}",
                             "---------------------------------------------------------".cyan()
                         );
                         println!(" Target File  : {}", t.display().to_string().bold());
                         println!(" SHA-256 Hash : {}", hash.yellow());
-                        println!(
-                            " Verdict      : {}",
-                            "hash only — malware match engine not implemented"
-                                .yellow()
-                                .bold()
-                        );
-                        emit(
-                            &cli.event_log,
-                            EventAction::Observed,
-                            Severity::Info,
-                            format!("file hashed: {}", t.display()),
-                            &[
-                                ("path", serde_json::json!(t.display().to_string())),
-                                ("sha256", serde_json::json!(hash)),
-                                ("verdict", serde_json::json!("hash_only")),
-                            ],
-                            Some(Ioc::Hash(hash)),
-                        );
+                        if hit {
+                            println!(
+                                " Verdict      : {}",
+                                "BLOCKED (hash rule)".red().bold()
+                            );
+                            emit(
+                                &cli.event_log,
+                                EventAction::Blocked,
+                                Severity::High,
+                                format!("hash rule hit: {}", t.display()),
+                                &[
+                                    ("path", serde_json::json!(t.display().to_string())),
+                                    ("sha256", serde_json::json!(hash)),
+                                    ("verdict", serde_json::json!("blocked_hash")),
+                                ],
+                                Some(Ioc::Hash(hash)),
+                            );
+                        } else {
+                            println!(
+                                " Verdict      : {}",
+                                "clean (no local rule match)".green()
+                            );
+                            emit(
+                                &cli.event_log,
+                                EventAction::Allowed,
+                                Severity::Info,
+                                format!("file clean: {}", t.display()),
+                                &[
+                                    ("path", serde_json::json!(t.display().to_string())),
+                                    ("sha256", serde_json::json!(hash)),
+                                    ("verdict", serde_json::json!("clean")),
+                                ],
+                                Some(Ioc::Hash(hash)),
+                            );
+                        }
                     }
                     Err(e) => {
                         eprintln!("{}", format!("  skip {}: {e}", t.display()).red());
@@ -217,11 +382,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
-            println!(" Files hashed: {hashed}/{}", targets.len());
-        }
-        Commands::UpdateDefs => {
-            eprintln!("[cyberdefender] signature update not implemented (Phase 2).");
-            std::process::exit(2);
+            println!(" Files hashed: {hashed}/{}  blocked: {blocked}", targets.len());
+            if blocked > 0 {
+                std::process::exit(3);
+            }
         }
         Commands::Realtime { action } => {
             eprintln!(

@@ -1,26 +1,25 @@
-//! S2O CyberDNS — DoH resolve + persistent local blocklist (Phase 2 shell).
+//! S2O CyberDNS — DoH resolve, blocklist, local UDP proxy (Phase 2 shell).
 
+mod blocklist;
+mod serve;
+
+use blocklist::{is_blocked, load_blocklist, normalize_domain, save_blocklist};
 use clap::{Parser, Subcommand};
 use colored::*;
 use serde::Deserialize;
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
-use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "cyberdns")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.2.0")]
-#[command(about = "S2O CyberDNS Guard: DoH resolver + local blocklist (Phase 2 shell)", long_about = None)]
+#[command(version = "0.3.0")]
+#[command(about = "S2O CyberDNS Guard: DoH + blocklist + local UDP proxy", long_about = None)]
 struct Cli {
-    /// Blocklist file (one domain per line)
     #[arg(long, global = true, default_value = ".aegis/dns-blocklist.txt")]
     blocklist: PathBuf,
 
-    /// Event log for Aegis events
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
 
@@ -30,32 +29,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Display CyberDNS status and blocklist metrics
     Status,
-    /// Resolve a domain over DoH (blocked domains are denied)
-    Resolve {
-        domain: String,
-    },
-    /// Add a domain to the local blocklist
-    Block {
-        domain: String,
-    },
-    /// Remove a domain from the local blocklist
-    Unblock {
-        domain: String,
-    },
-    /// List blocked domains
+    Resolve { domain: String },
+    Block { domain: String },
+    Unblock { domain: String },
     List,
-    /// Local proxy serve (not production yet)
+    /// Local UDP DNS proxy (blocklist + DoH A answers)
     Serve {
-        #[arg(short, long, default_value = "127.0.0.1:5353")]
+        /// Prefer high ports (5353 is often blocked on Windows / Hyper-V)
+        #[arg(short, long, default_value = "127.0.0.1:53553")]
         listen: String,
     },
 }
 
 #[derive(Debug, Deserialize)]
 struct DohAnswer {
-    name: String,
     #[serde(rename = "type")]
     record_type: u16,
     #[serde(default)]
@@ -68,57 +56,6 @@ struct DohResponse {
     #[allow(dead_code)]
     Status: u32,
     Answer: Option<Vec<DohAnswer>>,
-}
-
-fn normalize_domain(d: &str) -> String {
-    d.trim().trim_end_matches('.').to_ascii_lowercase()
-}
-
-fn load_blocklist(path: &Path) -> std::io::Result<BTreeSet<String>> {
-    let mut set = BTreeSet::new();
-    if !path.exists() {
-        return Ok(set);
-    }
-    let file = fs::File::open(path)?;
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        set.insert(normalize_domain(line));
-    }
-    Ok(set)
-}
-
-fn save_blocklist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
-    writeln!(file, "# S2O CyberDNS local blocklist")?;
-    for d in set {
-        writeln!(file, "{d}")?;
-    }
-    Ok(())
-}
-
-fn is_blocked(set: &BTreeSet<String>, domain: &str) -> bool {
-    let d = normalize_domain(domain);
-    if set.contains(&d) {
-        return true;
-    }
-    // suffix match: block evil.com also blocks a.evil.com
-    for b in set {
-        if d == *b || d.ends_with(&format!(".{b}")) {
-            return true;
-        }
-    }
-    false
 }
 
 fn host_id() -> String {
@@ -149,6 +86,29 @@ fn emit(
     }
 }
 
+async fn doh_a_records(domain: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let url = format!("https://cloudflare-dns.com/dns-query?name={domain}&type=A");
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .header("accept", "application/dns-json")
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        return Err(format!("DoH HTTP {}", res.status()).into());
+    }
+    let doh: DohResponse = res.json().await?;
+    let mut ips = Vec::new();
+    if let Some(answers) = doh.Answer {
+        for ans in answers {
+            if ans.record_type == 1 && !ans.data.is_empty() {
+                ips.push(ans.data);
+            }
+        }
+    }
+    Ok(ips)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -172,11 +132,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "DoH resolve + persistent file blocklist".green()
+                "DoH resolve + blocklist + local UDP proxy (serve)".green()
             );
             println!(
                 " Not implemented   : {}",
-                "local recursive proxy serve, DoT".red()
+                "DoT, system resolver takeover, full recursive".red()
             );
             println!(
                 " Primary Resolver  : {}",
@@ -184,9 +144,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(" Blocklist path    : {}", cli.blocklist.display());
             println!(" Blocked domains   : {}", set.len());
+            println!(" Event log         : {}", cli.event_log.display());
             println!(
-                " Event log         : {}",
-                cli.event_log.display()
+                " Proxy             : {}",
+                "cyberdns serve --listen 127.0.0.1:53553".yellow()
             );
             println!(
                 "{}",
@@ -273,30 +234,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 format!("[CYBERDNS] Resolving '{d}' via Encrypted DoH...").cyan()
             );
-
-            let url = format!("https://cloudflare-dns.com/dns-query?name={d}&type=A");
-            let client = reqwest::Client::new();
-            let res = client
-                .get(&url)
-                .header("accept", "application/dns-json")
-                .send()
-                .await?;
-
-            if res.status().is_success() {
-                let doh: DohResponse = res.json().await?;
-                println!(
-                    "{}",
-                    "---------------------------------------------------------".cyan()
-                );
-                if let Some(answers) = doh.Answer {
-                    for ans in answers {
-                        println!(" Domain Record : {}", ans.name.bold());
-                        println!(" Type Code     : {}", ans.record_type);
-                        println!(" Resolved IP   : {}", ans.data.green().bold());
-                        println!(
-                            "{}",
-                            "---------------------------------------------------------".cyan()
-                        );
+            match doh_a_records(&d).await {
+                Ok(ips) if !ips.is_empty() => {
+                    for ip in &ips {
+                        println!(" Resolved IP   : {}", ip.green().bold());
                     }
                     emit(
                         &cli.event_log,
@@ -305,11 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("resolve ok: {d}"),
                         &d,
                     );
-                } else {
-                    println!(
-                        "{}",
-                        "NXDOMAIN: No DNS records found for this target.".yellow()
-                    );
+                }
+                Ok(_) => {
+                    println!("{}", "NXDOMAIN / no A records.".yellow());
                     emit(
                         &cli.event_log,
                         EventAction::Observed,
@@ -318,17 +257,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &d,
                     );
                 }
-            } else {
-                println!("{}", format!("DoH HTTP Error: {}", res.status()).red());
-                std::process::exit(1);
+                Err(e) => {
+                    eprintln!("{}", format!("DoH error: {e}").red());
+                    std::process::exit(1);
+                }
             }
         }
         Commands::Serve { listen } => {
-            eprintln!(
-                "[cyberdns] local proxy serve not implemented (requested listen={listen})."
-            );
-            eprintln!("Blocklist + DoH resolve are live; proxy ships later in Phase 2.");
-            std::process::exit(2);
+            serve::run_proxy(&listen, &cli.blocklist, &cli.event_log).await?;
         }
     }
 

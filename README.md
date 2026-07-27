@@ -90,6 +90,11 @@ cargo run -p cyberwall-cli -- status
 ```powershell
 cargo run -p cyberdns -- block evil.example
 cargo run -p cyberdns -- resolve evil.example   # exit 3 if blocked
+# local UDP proxy (blocklist + DoH). Default port 53553 (5353 often blocked on Windows)
+cargo run -p cyberdns -- serve --listen 127.0.0.1:53553
+# other terminal: nslookup -port=53553 example.com 127.0.0.1
+
+cargo run -p cyberdefender -- update-defs
 cargo run -p cyberdefender -- scan Cargo.toml
 cargo run -p cyberedr -- processes --limit 16
 cargo run -p cybersiem -- events
