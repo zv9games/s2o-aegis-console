@@ -1,6 +1,6 @@
 [package]
 name = "cyberztna"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -9,7 +9,7 @@ name = "cyberztna"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 tokio = { version = "1.0", features = ["full"] }
 colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -23,6 +23,9 @@ http = "1"
 http-body-util = "0.1"
 bytes = "1"
 rcgen = "0.13"
+rustls = "0.23"
+rustls-pemfile = "2"
+jsonwebtoken = "9"
 s2o-kernel = { path = "../s2o-kernel" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }

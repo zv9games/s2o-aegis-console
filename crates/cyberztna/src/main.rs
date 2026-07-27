@@ -1,6 +1,7 @@
 //! S2O Gate — posture-gated HTTP reverse proxy (Phase 3 start / T0).
 
 mod config;
+mod jwt;
 mod proxy;
 mod tls;
 
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(name = "cyberztna")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.2.0")]
+#[command(version = "0.4.0")]
 #[command(about = "S2O Gate: posture-gated reverse proxy (ZTNA MVP)", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/gate-routes.json")]
@@ -35,6 +36,16 @@ enum Commands {
     Init,
     /// List configured routes
     Routes,
+    /// Generate lab mTLS CA + server + client certs
+    Mtls {
+        #[command(subcommand)]
+        command: MtlsCmd,
+    },
+    /// Mint / verify local HS256 JWT (OIDC-lite; same secret as serve --jwt-secret)
+    Jwt {
+        #[command(subcommand)]
+        command: JwtCmd,
+    },
     /// Run posture-gated reverse proxy
     Serve {
         /// Override listen address
@@ -53,6 +64,9 @@ enum Commands {
         tls_cert: PathBuf,
         #[arg(long, default_value = ".aegis/gate-key.pem")]
         tls_key: PathBuf,
+        /// Require client certs signed by this CA PEM (implies --tls)
+        #[arg(long)]
+        mtls_ca: Option<PathBuf>,
         /// Append access lines to this file
         #[arg(long, default_value = ".aegis/gate-access.log")]
         access_log: PathBuf,
@@ -64,13 +78,16 @@ enum Commands {
         require_session: bool,
         #[arg(long, default_value = ".aegis/sessions.json")]
         sessions: PathBuf,
+        /// HS256 secret for local JWT Bearer tokens (OIDC-lite)
+        #[arg(long, env = "S2O_GATE_JWT_SECRET")]
+        jwt_secret: Option<String>,
         /// Allow only these client IPs / CIDRs (repeatable). Empty = all.
         #[arg(long = "allow-ip")]
         allow_ips: Vec<String>,
         /// Max requests per client IP per minute (0 = off)
         #[arg(long, default_value_t = 0)]
         rate_limit: u32,
-        /// Reject sessions whose mint-time posture is below min_score
+        /// Reject sessions/JWTs whose mint-time posture is below min_score
         #[arg(long)]
         enforce_session_posture: bool,
     },
@@ -85,6 +102,56 @@ enum Commands {
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum MtlsCmd {
+    /// Write CA + server + client PEMs for lab mTLS
+    Init {
+        #[arg(long, default_value = ".aegis/mtls")]
+        dir: PathBuf,
+        #[arg(long, default_value = "gate-client")]
+        client_cn: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show whether lab PKI files exist
+    Status {
+        #[arg(long, default_value = ".aegis/mtls")]
+        dir: PathBuf,
+    },
+    /// HTTPS request with lab client cert (mTLS smoke; rustls, not Windows schannel)
+    Probe {
+        #[arg(long, default_value = "https://127.0.0.1:18443/")]
+        url: String,
+        #[arg(long, default_value = ".aegis/mtls")]
+        dir: PathBuf,
+        /// Also try without client cert (expect TLS failure when mTLS required)
+        #[arg(long)]
+        also_plain: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum JwtCmd {
+    /// Mint a local HS256 JWT
+    Mint {
+        user: String,
+        #[arg(long, env = "S2O_GATE_JWT_SECRET")]
+        secret: String,
+        #[arg(long, default_value_t = 8)]
+        ttl_hours: i64,
+        #[arg(long)]
+        posture: Option<u32>,
+        #[arg(long, default_value = "s2o-cyberid")]
+        issuer: String,
+    },
+    /// Verify a JWT against secret
+    Verify {
+        token: String,
+        #[arg(long, env = "S2O_GATE_JWT_SECRET")]
+        secret: String,
     },
 }
 
@@ -130,11 +197,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture+session, TLS, allowlist, rate-limit, access log".green()
+                "posture+session+JWT, TLS/mTLS, allowlist, rate-limit, access log".green()
             );
             println!(
                 " Not implemented   : {}",
-                "mTLS client certs, IdP OIDC, multi-POP SASE".red()
+                "full OIDC discovery/JWKS IdP, multi-POP SASE".red()
             );
             println!(" Config            : {}", cli.config.display());
             println!(" Routes            : {}", cfg.routes.len());
@@ -213,6 +280,135 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         }
+        Commands::Mtls { command } => match command {
+            MtlsCmd::Init {
+                dir,
+                client_cn,
+                force,
+            } => {
+                tls::generate_mtls_pki(&dir, &client_cn, force)?;
+            }
+            MtlsCmd::Status { dir } => {
+                let p = tls::MtlsPaths::in_dir(&dir);
+                println!("[gate] mTLS dir {}", dir.display());
+                for (label, path) in [
+                    ("ca", &p.ca_cert),
+                    ("server", &p.server_cert),
+                    ("server-key", &p.server_key),
+                    ("client", &p.client_cert),
+                    ("client-key", &p.client_key),
+                ] {
+                    println!(
+                        "  {label:<10} {} {}",
+                        if path.exists() {
+                            "OK".green()
+                        } else {
+                            "missing".red()
+                        },
+                        path.display()
+                    );
+                }
+            }
+            MtlsCmd::Probe {
+                url,
+                dir,
+                also_plain,
+            } => {
+                let p = tls::MtlsPaths::in_dir(&dir);
+                if !p.client_cert.exists() || !p.client_key.exists() {
+                    eprintln!("[gate] missing client certs — run: cyberztna mtls init --dir {}", dir.display());
+                    std::process::exit(2);
+                }
+                let mut pem = std::fs::read(&p.client_cert)?;
+                pem.extend(std::fs::read(&p.client_key)?);
+                let identity = reqwest::Identity::from_pem(&pem)?;
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(20))
+                    .identity(identity)
+                    .danger_accept_invalid_certs(true)
+                    .build()?;
+                match client.get(&url).send().await {
+                    Ok(res) => {
+                        println!(
+                            "[gate] mTLS probe OK status={} url={url}",
+                            res.status()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[gate] mTLS probe FAIL: {e}");
+                        std::process::exit(3);
+                    }
+                }
+                if also_plain {
+                    let plain = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(10))
+                        .danger_accept_invalid_certs(true)
+                        .build()?;
+                    match plain.get(&url).send().await {
+                        Ok(res) => {
+                            println!(
+                                "[gate] plain TLS (no client cert) status={} (unexpected if mTLS required)",
+                                res.status()
+                            );
+                        }
+                        Err(e) => {
+                            println!(
+                                "[gate] plain TLS without client cert failed as expected: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+        },
+        Commands::Jwt { command } => match command {
+            JwtCmd::Mint {
+                user,
+                secret,
+                ttl_hours,
+                posture,
+                issuer,
+            } => {
+                let token = jwt::mint(&secret, &user, ttl_hours, posture, &issuer)?;
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!("{}", "      Gate JWT minted (HS256 / OIDC-lite)".bold().green());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" User    : {}", user.bold());
+                if let Some(p) = posture {
+                    println!(" Posture : {p}");
+                }
+                println!(" Issuer  : {issuer}");
+                println!(" Token   : {}", token.yellow().bold());
+                println!(" Header  : Authorization: Bearer <token>");
+                emit(
+                    &cli.event_log,
+                    EventAction::Allowed,
+                    Severity::Info,
+                    format!("jwt mint user={user}"),
+                    &[
+                        ("user", serde_json::json!(user)),
+                        ("issuer", serde_json::json!(issuer)),
+                    ],
+                );
+            }
+            JwtCmd::Verify { token, secret } => match jwt::verify(&secret, &token) {
+                Ok(c) => {
+                    println!(
+                        "OK sub={} exp={} posture={:?} iss={:?}",
+                        c.sub, c.exp, c.posture, c.iss
+                    );
+                }
+                Err(e) => {
+                    eprintln!("INVALID: {e}");
+                    std::process::exit(3);
+                }
+            },
+        },
         Commands::Serve {
             listen,
             min_score,
@@ -220,10 +416,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tls,
             tls_cert,
             tls_key,
+            mtls_ca,
             access_log,
             no_access_log,
             require_session,
             sessions,
+            jwt_secret,
             allow_ips,
             rate_limit,
             enforce_session_posture,
@@ -251,18 +449,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if enforce_session_posture {
                 cfg.enforce_session_posture = true;
             }
+            // CLI --require-session wins; else honor policy-written config flag
+            let require_session = require_session || cfg.require_session;
             if cfg.routes.is_empty() {
                 eprintln!("[gate] no routes configured — run cyberztna init or pass --upstream");
                 std::process::exit(2);
             }
-            let scheme = if tls { "https" } else { "http" };
+            let use_tls = tls || mtls_ca.is_some();
+            if mtls_ca.is_some() && !use_tls {
+                eprintln!("[gate] --mtls-ca requires TLS");
+                std::process::exit(2);
+            }
+            let scheme = if use_tls { "https" } else { "http" };
             println!(
-                "[gate] starting on {}://{} min_score={} routes={} tls={}",
+                "[gate] starting on {}://{} min_score={} routes={} tls={} mtls={}",
                 scheme,
                 cfg.listen,
                 cfg.min_score,
                 cfg.routes.len(),
-                tls
+                use_tls,
+                mtls_ca.is_some()
             );
             for r in &cfg.routes {
                 println!("  {} {} -> {}", r.name, r.path_prefix, r.upstream);
@@ -271,11 +477,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &cli.event_log,
                 EventAction::Observed,
                 Severity::Info,
-                format!("gate serve listen={} tls={}", cfg.listen, tls),
+                format!(
+                    "gate serve listen={} tls={} mtls={}",
+                    cfg.listen,
+                    use_tls,
+                    mtls_ca.is_some()
+                ),
                 &[
                     ("listen", serde_json::json!(cfg.listen)),
                     ("min_score", serde_json::json!(cfg.min_score)),
-                    ("tls", serde_json::json!(tls)),
+                    ("tls", serde_json::json!(use_tls)),
+                    ("mtls", serde_json::json!(mtls_ca.is_some())),
                     (
                         "rate_limit",
                         serde_json::json!(cfg.rate_limit_per_minute),
@@ -284,12 +496,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "allow_ips",
                         serde_json::json!(cfg.allow_ips.len()),
                     ),
+                    ("jwt", serde_json::json!(jwt_secret.is_some())),
                 ],
             );
-            let tls_files = if tls {
+            let (tls_cert, tls_key) = if let Some(ref ca) = mtls_ca {
+                // Prefer lab PKI server certs next to CA when defaults missing
+                let ca_path = ca.clone();
+                let dir = ca_path.parent().unwrap_or(Path::new(".aegis"));
+                let lab = tls::MtlsPaths::in_dir(dir);
+                let cert = if tls_cert.exists() {
+                    tls_cert
+                } else if lab.server_cert.exists() {
+                    lab.server_cert
+                } else {
+                    tls_cert
+                };
+                let key = if tls_key.exists() {
+                    tls_key
+                } else if lab.server_key.exists() {
+                    lab.server_key
+                } else {
+                    tls_key
+                };
+                (cert, key)
+            } else {
+                (tls_cert, tls_key)
+            };
+            let tls_files = if use_tls {
                 Some(proxy::TlsFiles {
                     cert: tls_cert,
                     key: tls_key,
+                    mtls_ca,
                 })
             } else {
                 None
@@ -306,6 +543,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "[gate] require session  : {} (header X-Aegis-Session)",
                     sessions.display()
+                );
+            }
+            if let Some(ref s) = jwt_secret {
+                println!(
+                    "[gate] JWT HS256        : enabled (secret len={})",
+                    s.len()
                 );
             }
             if cfg.enforce_session_posture {
@@ -326,16 +569,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.rate_limit_per_minute
                 );
             }
+            let sessions_path = if require_session {
+                Some(sessions)
+            } else {
+                // still load sessions if JWT not sole auth and path exists? only when required
+                None
+            };
             proxy::run(
                 cfg,
                 cli.event_log,
                 tls_files,
                 access,
-                require_session,
-                if require_session {
-                    Some(sessions)
-                } else {
-                    None
+                proxy::AuthOptions {
+                    require_session,
+                    sessions_path,
+                    jwt_secret,
                 },
             )
             .await?;

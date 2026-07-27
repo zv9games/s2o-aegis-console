@@ -27,6 +27,9 @@ pub struct GateConfig {
     /// When true with sessions, reject sessions whose mint posture < min_score
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enforce_session_posture: bool,
+    /// Preferred auth flag from policy pack (CLI --require-session still wins at runtime)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_session: bool,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -45,6 +48,7 @@ pub fn default_config() -> GateConfig {
         allow_ips: vec![],
         rate_limit_per_minute: 0,
         enforce_session_posture: false,
+        require_session: false,
     }
 }
 

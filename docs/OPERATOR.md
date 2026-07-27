@@ -99,7 +99,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Intel | `cyberintel sync\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|show` |
-| Gate | `cyberztna serve [--tls] --upstream URL` |
+| Gate | `cyberztna serve [--tls] [--mtls-ca] [--jwt-secret] --upstream URL` |
 
 ## Gate HTTPS + session
 
@@ -118,6 +118,27 @@ curl -k -H "X-Aegis-Session: aegis_..." https://127.0.0.1:18443/
 ```
 
 Posture score is cached ~15s. Without a valid session (when `--require-session`), Gate returns **401**. Low posture returns **403** with `x-aegis-posture-score`. IP not on allowlist → **403**. Rate limit → **429**. Successful session use updates `last_used` (`cyberid sessions`). Cleanup: `cyberid gc`.
+
+### mTLS + JWT (OIDC-lite)
+
+```powershell
+# Lab PKI
+cargo run -p cyberztna -- mtls init --dir .aegis/mtls --force
+
+# mTLS serve (client must present client.pem)
+cargo run -p cyberztna -- serve --mtls-ca .aegis/mtls/ca.pem `
+  --listen 127.0.0.1:18443 --upstream https://example.com --min-score 40
+
+# Probe with lab client cert (rustls; Windows curl/schannel often cannot load PEM)
+cargo run -p cyberztna -- mtls probe --url https://127.0.0.1:18443/ --also-plain
+
+# Local JWT (not full OIDC discovery)
+cargo run -p cyberztna -- jwt mint alice --secret lab-secret --posture 80
+cargo run -p cyberztna -- serve --jwt-secret lab-secret --upstream https://example.com --min-score 40
+# Authorization: Bearer <jwt>
+```
+
+Policy pack: `aegis policy apply policies/examples/gate-pack.json` writes gate defaults into `.aegis/gate-routes.json`.
 
 ## YARA-lite (not full YARA-X)
 

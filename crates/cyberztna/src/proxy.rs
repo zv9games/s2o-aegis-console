@@ -27,7 +27,10 @@ struct AppState {
     event_log: PathBuf,
     access_log: Option<PathBuf>,
     sessions_path: Option<PathBuf>,
+    /// Require CyberID file session token
     require_session: bool,
+    /// Local HS256 JWT secret (OIDC-lite); Bearer eyJ… tokens
+    jwt_secret: Option<String>,
     /// Cached posture score with TTL
     cache: Arc<RwLock<Option<(Instant, u32)>>>,
     /// Per-IP rate window: (window_start, count)
@@ -38,6 +41,7 @@ struct AppState {
 struct SessionOk {
     user: String,
     posture_score: u32,
+    via: &'static str,
 }
 
 fn extract_session_token(req: &Request<Body>) -> Option<String> {
@@ -70,25 +74,66 @@ fn extract_session_token(req: &Request<Body>) -> Option<String> {
     None
 }
 
-/// Verify session, touch last_used, optionally enforce mint posture >= min_score.
-fn verify_and_touch(
-    path: &Path,
+fn looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_none()
+        && token.starts_with("eyJ")
+}
+
+/// Verify CyberID session or local JWT, optionally enforce mint posture >= min_score.
+fn verify_auth(
     token: &str,
+    sessions_path: Option<&Path>,
+    jwt_secret: Option<&str>,
+    require_session: bool,
     min_score: u32,
     enforce_session_posture: bool,
 ) -> Result<SessionOk, &'static str> {
-    let mut store = SessionStore::load(path);
-    let Some(v) = store.touch(token) else {
-        return Err("session");
-    };
-    if enforce_session_posture && v.posture_score < min_score {
-        return Err("session_posture");
+    // Prefer JWT when it looks like one and secret is configured
+    if let Some(secret) = jwt_secret {
+        if looks_like_jwt(token) {
+            return match crate::jwt::verify(secret, token) {
+                Ok(c) => {
+                    let posture = c.posture.unwrap_or(0);
+                    if enforce_session_posture && posture < min_score {
+                        return Err("session_posture");
+                    }
+                    Ok(SessionOk {
+                        user: c.sub,
+                        posture_score: posture,
+                        via: "jwt",
+                    })
+                }
+                Err(_) => Err("jwt"),
+            };
+        }
     }
-    let _ = store.save(path);
-    Ok(SessionOk {
-        user: v.user,
-        posture_score: v.posture_score,
-    })
+
+    if let Some(path) = sessions_path {
+        let mut store = SessionStore::load(path);
+        if let Some(v) = store.touch(token) {
+            if enforce_session_posture && v.posture_score < min_score {
+                return Err("session_posture");
+            }
+            let _ = store.save(path);
+            return Ok(SessionOk {
+                user: v.user,
+                posture_score: v.posture_score,
+                via: "session",
+            });
+        }
+        if require_session || jwt_secret.is_none() {
+            return Err("session");
+        }
+    }
+
+    if jwt_secret.is_some() {
+        return Err("jwt");
+    }
+    Err("session")
 }
 
 fn access_log_line(path: &Option<PathBuf>, line: &str) {
@@ -253,37 +298,44 @@ async fn proxy_handler(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    // Optional CyberID session gate
+    // Optional CyberID session and/or local JWT (OIDC-lite)
     let mut session_user: Option<String> = None;
     let mut session_score: Option<u32> = None;
-    if state.require_session {
+    let auth_required = state.require_session || state.jwt_secret.is_some();
+    if auth_required {
         let token = extract_session_token(&req);
-        let path = state.sessions_path.as_ref();
-        let result = match (token.as_deref(), path) {
-            (Some(t), Some(p)) => verify_and_touch(
-                p,
+        let result = match token.as_deref() {
+            Some(t) => verify_auth(
                 t,
+                state.sessions_path.as_deref(),
+                state.jwt_secret.as_deref(),
+                state.require_session,
                 state.cfg.min_score,
                 state.cfg.enforce_session_posture,
             ),
-            _ => Err("session"),
+            None => Err("session"),
         };
         match result {
             Ok(ok) => {
                 session_user = Some(ok.user);
                 session_score = Some(ok.posture_score);
+                // stash via in a local for logging via score path
+                let _via = ok.via;
             }
             Err(reason) => {
-                let (status, msg) = if reason == "session_posture" {
-                    (
+                let (status, msg) = match reason {
+                    "session_posture" => (
                         StatusCode::FORBIDDEN,
-                        "S2O Gate DENY: session posture below min_score\n",
-                    )
-                } else {
-                    (
+                        "S2O Gate DENY: token posture below min_score\n",
+                    ),
+                    "jwt" => (
                         StatusCode::UNAUTHORIZED,
-                        "S2O Gate DENY: missing or invalid session (X-Aegis-Session / Bearer)\n",
-                    )
+                        "S2O Gate DENY: missing or invalid JWT (Authorization: Bearer)\n",
+                    ),
+                    _ => (
+                        StatusCode::UNAUTHORIZED,
+                        "S2O Gate DENY: missing or invalid session/JWT (X-Aegis-Session / Bearer)\n",
+                    ),
                 };
                 emit(
                     &state.event_log,
@@ -498,6 +550,14 @@ async fn proxy_handler(
 pub struct TlsFiles {
     pub cert: PathBuf,
     pub key: PathBuf,
+    /// When set, require client certificates signed by this CA (mTLS)
+    pub mtls_ca: Option<PathBuf>,
+}
+
+pub struct AuthOptions {
+    pub require_session: bool,
+    pub sessions_path: Option<PathBuf>,
+    pub jwt_secret: Option<String>,
 }
 
 pub async fn run(
@@ -505,15 +565,15 @@ pub async fn run(
     event_log: PathBuf,
     tls: Option<TlsFiles>,
     access_log: Option<PathBuf>,
-    require_session: bool,
-    sessions_path: Option<PathBuf>,
+    auth: AuthOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         cfg: cfg.clone(),
         event_log,
         access_log,
-        sessions_path,
-        require_session,
+        sessions_path: auth.sessions_path,
+        require_session: auth.require_session,
+        jwt_secret: auth.jwt_secret,
         cache: Arc::new(RwLock::new(None)),
         rate: Arc::new(RwLock::new(HashMap::new())),
         client: reqwest::Client::builder()
@@ -529,15 +589,29 @@ pub async fn run(
     let addr: std::net::SocketAddr = cfg.listen.parse()?;
 
     if let Some(tls) = tls {
-        crate::tls::ensure_self_signed(&tls.cert, &tls.key)?;
+        if tls.mtls_ca.is_none() {
+            crate::tls::ensure_self_signed(&tls.cert, &tls.key)?;
+        }
+        let server_config = crate::tls::build_server_config(
+            &tls.cert,
+            &tls.key,
+            tls.mtls_ca.as_deref(),
+        )?;
         let rustls_config =
-            axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key).await?;
-        println!(
-            "[gate] listening on https://{} (cert {})",
-            cfg.listen,
-            tls.cert.display()
-        );
-        // axum-server ConnectInfo via into_make_service_with_connect_info
+            axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(server_config));
+        if let Some(ref ca) = tls.mtls_ca {
+            println!(
+                "[gate] listening on https://{} (mTLS ca={})",
+                cfg.listen,
+                ca.display()
+            );
+        } else {
+            println!(
+                "[gate] listening on https://{} (cert {})",
+                cfg.listen,
+                tls.cert.display()
+            );
+        }
         axum_server::bind_rustls(addr, rustls_config)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;

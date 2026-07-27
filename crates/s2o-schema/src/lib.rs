@@ -327,6 +327,8 @@ pub struct PolicyDocument {
     pub intel: Option<IntelPolicyIntent>,
     #[serde(default)]
     pub posture: Option<PosturePolicyIntent>,
+    #[serde(default)]
+    pub gate: Option<GatePolicyIntent>,
 }
 
 impl PolicyDocument {
@@ -342,6 +344,7 @@ impl PolicyDocument {
             dns: None,
             intel: None,
             posture: None,
+            gate: None,
         }
     }
 
@@ -366,6 +369,13 @@ impl PolicyDocument {
             }),
             posture: Some(PosturePolicyIntent {
                 min_score: Some(40),
+            }),
+            gate: Some(GatePolicyIntent {
+                min_score: Some(50),
+                require_session: Some(true),
+                rate_limit_per_minute: Some(120),
+                allow_ips: vec!["127.0.0.1".into(), "::1".into()],
+                config_path: Some(".aegis/gate-routes.json".into()),
             }),
         }
     }
@@ -414,6 +424,22 @@ pub struct PosturePolicyIntent {
     /// Minimum posture score (0–100) required after apply.
     #[serde(default)]
     pub min_score: Option<u32>,
+}
+
+/// Gate (ZTNA) config fragment — writes/updates gate-routes.json defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatePolicyIntent {
+    #[serde(default)]
+    pub min_score: Option<u32>,
+    #[serde(default)]
+    pub require_session: Option<bool>,
+    #[serde(default)]
+    pub rate_limit_per_minute: Option<u32>,
+    #[serde(default)]
+    pub allow_ips: Vec<String>,
+    /// Path to gate routes JSON (default `.aegis/gate-routes.json`).
+    #[serde(default)]
+    pub config_path: Option<String>,
 }
 
 /// Result of applying one policy document through the kernel.

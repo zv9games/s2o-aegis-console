@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-gate-pack",
+  "description": "ZTNA gate defaults: min posture, session required, loopback allowlist, rate limit",
+  "posture": {
+    "min_score": 40
+  },
+  "gate": {
+    "min_score": 50,
+    "require_session": true,
+    "rate_limit_per_minute": 120,
+    "allow_ips": ["127.0.0.1", "::1", "10.0.0.0/8"],
+    "config_path": ".aegis/gate-routes.json"
+  }
+}

@@ -4,6 +4,7 @@
 //! Does not own: OS firewall COM / nft details (worlds do).
 
 mod dns_policy;
+mod gate_policy;
 mod host;
 mod intel_policy;
 mod platform;

@@ -57,8 +57,11 @@
 - YARA-lite v1: `substr` / `re:` / `hex:` / severity tags; `patterns list|init|test`
 - Defender `scan --recursive`, directory `watch` poll
 - Linux systemd unit `scripts/s2o-aegisd.service`
+- Gate mTLS: lab PKI (`cyberztna mtls init`) + `--mtls-ca` client cert required
+- Gate JWT HS256 OIDC-lite (`--jwt-secret`, `cyberztna jwt mint|verify`)
+- Policy `gate` fragment + `policies/examples/gate-pack.json`
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
 - System DNS hijack, embedded boringtun
-- Gate mTLS / OIDC IdP
+- Full OIDC discovery / JWKS IdP

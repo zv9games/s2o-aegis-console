@@ -21,5 +21,12 @@
   },
   "posture": {
     "min_score": 40
+  },
+  "gate": {
+    "min_score": 50,
+    "require_session": true,
+    "rate_limit_per_minute": 120,
+    "allow_ips": ["127.0.0.1", "::1"],
+    "config_path": ".aegis/gate-routes.json"
   }
 }

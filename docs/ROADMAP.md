@@ -165,7 +165,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberEDR `watch` (process poll / ETW-lite)  
 - ✅ YARA-lite v1 (substr/re/hex + severity) + Defender watch/recursive  
 - ✅ Linux systemd unit for aegisd  
-- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
+- ✅ Gate mTLS (client CA) + JWT HS256 OIDC-lite + gate policy fragment  
+- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / OIDC discovery (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof
