@@ -62,8 +62,11 @@
 - Policy `gate` fragment + `policies/examples/gate-pack.json`
 - Fleet inventory MVP: `s2o-fleet`, `aegis fleet enroll|heartbeat|list|show|remove|status`
 - aegisd HTTP: `GET /fleet`, `/fleet/summary`, `POST /fleet/heartbeat` + Prometheus fleet gauges
+- Fleet policy distribution: `aegis fleet policy set|show|apply|push|pull`, aegisd `GET/POST /fleet/policy`
+- Heartbeat returns `desired_policy_version` / `policy_stale`; roster tracks host `policy_version`
+- Gate JWT RS256 + JWKS file (`jwt keygen`, `--jwt-jwks`); still no remote OIDC discovery
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
 - System DNS hijack, embedded boringtun
-- Full OIDC discovery / JWKS IdP
+- Full OIDC discovery (remote issuer metadata / live JWKS URL fetch)

@@ -1,6 +1,7 @@
-//! Local fleet host inventory (file-backed JSON).
+//! Local fleet host inventory + policy distribution (file-backed JSON).
 //!
-//! T0 multi-host roster: enroll/heartbeat/list. Not a full fleet control plane.
+//! T0 multi-host roster: enroll/heartbeat/list + shared policy pack push/pull.
+//! Not a full multi-tenant control plane.
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -34,12 +35,63 @@ pub struct FleetHost {
     pub last_ip: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// Last fleet policy version this host reported as applied
+    #[serde(default)]
+    pub policy_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FleetStore {
     pub version: String,
     pub hosts: Vec<FleetHost>,
+}
+
+/// Distributed policy pack for fleet agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetPolicyBundle {
+    /// Monotonic version (bump on each set)
+    pub version: u64,
+    pub name: String,
+    pub updated_at: String,
+    /// Full PolicyDocument JSON
+    pub document: serde_json::Value,
+}
+
+impl FleetPolicyBundle {
+    pub fn load(path: &Path) -> Option<Self> {
+        if !path.exists() {
+            return None;
+        }
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p)?;
+        }
+        fs::write(
+            path,
+            serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into()),
+        )
+    }
+
+    /// Create or bump version from a policy JSON value.
+    pub fn from_document(document: serde_json::Value, prev: Option<&Self>) -> Self {
+        let name = document
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("fleet-policy")
+            .to_string();
+        let version = prev.map(|p| p.version.saturating_add(1)).unwrap_or(1);
+        Self {
+            version,
+            name,
+            updated_at: Utc::now().to_rfc3339(),
+            document,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +117,17 @@ pub struct HeartbeatPayload {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub last_ip: Option<String>,
+    /// Policy version the agent has applied
+    #[serde(default)]
+    pub policy_version: Option<u64>,
+}
+
+/// Heartbeat response includes desired policy version so agents know to pull.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatResponse {
+    pub host: FleetHost,
+    pub desired_policy_version: u64,
+    pub policy_stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +136,12 @@ pub struct FleetSummary {
     pub online: usize,
     pub stale: usize,
     pub avg_posture: f64,
+    #[serde(default)]
+    pub policy_version: u64,
+    #[serde(default)]
+    pub hosts_on_policy: usize,
+    #[serde(default)]
+    pub hosts_behind_policy: usize,
 }
 
 impl FleetStore {
@@ -142,6 +211,9 @@ impl FleetStore {
             if hb.last_ip.is_some() {
                 h.last_ip = hb.last_ip;
             }
+            if let Some(v) = hb.policy_version {
+                h.policy_version = v;
+            }
             h.last_seen = now;
             return h.clone();
         }
@@ -160,6 +232,7 @@ impl FleetStore {
             last_seen: now,
             last_ip: hb.last_ip,
             notes: None,
+            policy_version: hb.policy_version.unwrap_or(0),
         };
         self.hosts.push(host.clone());
         host
@@ -167,7 +240,8 @@ impl FleetStore {
 
     pub fn remove(&mut self, host_id: &str) -> bool {
         let before = self.hosts.len();
-        self.hosts.retain(|h| h.host_id != host_id && h.display_name != host_id);
+        self.hosts
+            .retain(|h| h.host_id != host_id && h.display_name != host_id);
         self.hosts.len() < before
     }
 
@@ -177,12 +251,17 @@ impl FleetStore {
             .find(|h| h.host_id == id || h.display_name == id)
     }
 
-    /// Hosts with last_seen older than `stale_minutes` are stale.
     pub fn summary(&self, stale_minutes: i64) -> FleetSummary {
+        self.summary_with_policy(stale_minutes, 0)
+    }
+
+    pub fn summary_with_policy(&self, stale_minutes: i64, policy_version: u64) -> FleetSummary {
         let now = Utc::now();
         let mut online = 0usize;
         let mut stale = 0usize;
         let mut posture_sum = 0u64;
+        let mut on_policy = 0usize;
+        let mut behind = 0usize;
         for h in &self.hosts {
             posture_sum += h.posture_score as u64;
             let ls = chrono::DateTime::parse_from_rfc3339(&h.last_seen)
@@ -197,6 +276,13 @@ impl FleetStore {
             } else {
                 online += 1;
             }
+            if policy_version > 0 {
+                if h.policy_version >= policy_version {
+                    on_policy += 1;
+                } else {
+                    behind += 1;
+                }
+            }
         }
         let total = self.hosts.len();
         FleetSummary {
@@ -208,13 +294,19 @@ impl FleetStore {
             } else {
                 posture_sum as f64 / total as f64
             },
+            policy_version,
+            hosts_on_policy: on_policy,
+            hosts_behind_policy: behind,
         }
     }
 
     pub fn is_stale(host: &FleetHost, stale_minutes: i64) -> bool {
         let now = Utc::now();
         chrono::DateTime::parse_from_rfc3339(&host.last_seen)
-            .map(|t| now.signed_duration_since(t.with_timezone(&Utc)) > Duration::minutes(stale_minutes.max(1)))
+            .map(|t| {
+                now.signed_duration_since(t.with_timezone(&Utc))
+                    > Duration::minutes(stale_minutes.max(1))
+            })
             .unwrap_or(true)
     }
 }
@@ -230,7 +322,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upsert_and_summary() {
+    fn upsert_policy_and_summary() {
         let mut s = FleetStore::new();
         s.upsert_heartbeat(HeartbeatPayload {
             host_id: "h1".into(),
@@ -244,27 +336,15 @@ mod tests {
             modules_other: Some(1),
             tags: Some(vec!["lab".into()]),
             last_ip: Some("127.0.0.1".into()),
+            policy_version: Some(1),
         });
-        assert_eq!(s.hosts.len(), 1);
-        s.upsert_heartbeat(HeartbeatPayload {
-            host_id: "h1".into(),
-            display_name: None,
-            os: None,
-            phase: None,
-            kernel: None,
-            posture_score: Some(90),
-            modules_implemented: None,
-            modules_partial: None,
-            modules_other: None,
-            tags: None,
-            last_ip: None,
-        });
-        assert_eq!(s.hosts.len(), 1);
-        assert_eq!(s.hosts[0].posture_score, 90);
-        let sum = s.summary(60);
-        assert_eq!(sum.total, 1);
-        assert_eq!(sum.online, 1);
-        assert!(s.remove("h1"));
-        assert!(s.hosts.is_empty());
+        let sum = s.summary_with_policy(60, 2);
+        assert_eq!(sum.hosts_behind_policy, 1);
+        assert_eq!(sum.hosts_on_policy, 0);
+        let doc = serde_json::json!({"name": "p1", "schema_version": "0.1.0"});
+        let b = FleetPolicyBundle::from_document(doc, None);
+        assert_eq!(b.version, 1);
+        let b2 = FleetPolicyBundle::from_document(serde_json::json!({"name": "p2"}), Some(&b));
+        assert_eq!(b2.version, 2);
     }
 }

@@ -48,6 +48,9 @@ enum Commands {
         /// Fleet inventory store path (for /fleet HTTP)
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        /// Fleet policy bundle path (GET/POST /fleet/policy)
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        fleet_policy: PathBuf,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -81,12 +84,13 @@ enum PolicyCmd {
 }
 
 /// Minimal HTTP/1.0 health server: GET /health, /status, /metrics, /fleet
-/// POST /fleet/heartbeat
+/// POST /fleet/heartbeat ; GET/POST /fleet/policy
 async fn health_server(
     bind: String,
     fw: FirewallEngineHandle,
     event_log: PathBuf,
     fleet_path: PathBuf,
+    fleet_policy_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     loop {
@@ -94,6 +98,7 @@ async fn health_server(
         let fw = fw.clone();
         let event_log = event_log.clone();
         let fleet_path = fleet_path.clone();
+        let fleet_policy_path = fleet_policy_path.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 65536];
             let n = match sock.read(&mut buf).await {
@@ -147,7 +152,10 @@ async fn health_server(
                 }
             } else if path == "/fleet/summary" || path.starts_with("/fleet/summary") {
                 let store = s2o_fleet::FleetStore::load(&fleet_path);
-                let sum = store.summary(60);
+                let pv = s2o_fleet::FleetPolicyBundle::load(&fleet_policy_path)
+                    .map(|b| b.version)
+                    .unwrap_or(0);
+                let sum = store.summary_with_policy(60, pv);
                 match serde_json::to_string(&sum) {
                     Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
                     Err(e) => (
@@ -155,6 +163,75 @@ async fn health_server(
                         format!("{{\"error\":\"{e}\"}}\n"),
                         "application/json",
                     ),
+                }
+            } else if path == "/fleet/policy" || path.starts_with("/fleet/policy") {
+                if method == "GET" {
+                    match s2o_fleet::FleetPolicyBundle::load(&fleet_policy_path) {
+                        Some(b) => match serde_json::to_string(&b) {
+                            Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                            Err(e) => (
+                                "500 Internal Server Error",
+                                format!("{{\"error\":\"{e}\"}}\n"),
+                                "application/json",
+                            ),
+                        },
+                        None => (
+                            "404 Not Found",
+                            "{\"error\":\"no fleet policy set\"}\n".into(),
+                            "application/json",
+                        ),
+                    }
+                } else if method == "POST" || method == "PUT" {
+                    // Accept either raw PolicyDocument or full FleetPolicyBundle
+                    match serde_json::from_str::<serde_json::Value>(body_bytes) {
+                        Ok(val) => {
+                            let prev = s2o_fleet::FleetPolicyBundle::load(&fleet_policy_path);
+                            let bundle_res = if val.get("document").is_some()
+                                && val.get("version").is_some()
+                            {
+                                serde_json::from_value::<s2o_fleet::FleetPolicyBundle>(val)
+                                    .map_err(|e| e.to_string())
+                            } else {
+                                Ok(s2o_fleet::FleetPolicyBundle::from_document(
+                                    val,
+                                    prev.as_ref(),
+                                ))
+                            };
+                            match bundle_res {
+                                Ok(bundle) => match bundle.save(&fleet_policy_path) {
+                                    Ok(()) => match serde_json::to_string(&bundle) {
+                                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                                        Err(e) => (
+                                            "500 Internal Server Error",
+                                            format!("{{\"error\":\"{e}\"}}\n"),
+                                            "application/json",
+                                        ),
+                                    },
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!("{{\"error\":\"save: {e}\"}}\n"),
+                                        "application/json",
+                                    ),
+                                },
+                                Err(e) => (
+                                    "400 Bad Request",
+                                    format!("{{\"error\":\"bundle: {e}\"}}\n"),
+                                    "application/json",
+                                ),
+                            }
+                        }
+                        Err(e) => (
+                            "400 Bad Request",
+                            format!("{{\"error\":\"json: {e}\"}}\n"),
+                            "application/json",
+                        ),
+                    }
+                } else {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"GET or POST /fleet/policy\"}\n".into(),
+                        "application/json",
+                    )
                 }
             } else if path == "/fleet/heartbeat" || path.starts_with("/fleet/heartbeat") {
                 if method != "POST" && method != "PUT" {
@@ -178,7 +255,15 @@ async fn health_server(
                                     "application/json",
                                 )
                             } else {
-                                match serde_json::to_string(&host) {
+                                let desired = s2o_fleet::FleetPolicyBundle::load(&fleet_policy_path)
+                                    .map(|b| b.version)
+                                    .unwrap_or(0);
+                                let resp = s2o_fleet::HeartbeatResponse {
+                                    policy_stale: desired > 0 && host.policy_version < desired,
+                                    desired_policy_version: desired,
+                                    host,
+                                };
+                                match serde_json::to_string(&resp) {
                                     Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
                                     Err(e) => (
                                         "500 Internal Server Error",
@@ -219,7 +304,10 @@ async fn health_server(
                     (0, 0)
                 };
                 let fleet = s2o_fleet::FleetStore::load(&fleet_path);
-                let fsum = fleet.summary(60);
+                let pv = s2o_fleet::FleetPolicyBundle::load(&fleet_policy_path)
+                    .map(|b| b.version)
+                    .unwrap_or(0);
+                let fsum = fleet.summary_with_policy(60, pv);
                 let body = format!(
                     "# HELP aegis_up 1 if daemon health endpoint is serving\n\
                      # TYPE aegis_up gauge\n\
@@ -241,18 +329,26 @@ async fn health_server(
                      # HELP aegis_fleet_online Hosts seen within stale window\n\
                      # TYPE aegis_fleet_online gauge\n\
                      aegis_fleet_online {fleet_online}\n\
+                     # HELP aegis_fleet_policy_version Desired fleet policy version\n\
+                     # TYPE aegis_fleet_policy_version gauge\n\
+                     aegis_fleet_policy_version {policy_v}\n\
+                     # HELP aegis_fleet_policy_behind Hosts behind desired policy\n\
+                     # TYPE aegis_fleet_policy_behind gauge\n\
+                     aegis_fleet_policy_behind {policy_behind}\n\
                      # HELP aegis_demo_mode 1 if AEGIS_DEMO is enabled\n\
                      # TYPE aegis_demo_mode gauge\n\
                      aegis_demo_mode {}\n",
                     if st.demo_mode { 1 } else { 0 },
                     fleet_total = fsum.total,
                     fleet_online = fsum.online,
+                    policy_v = pv,
+                    policy_behind = fsum.hosts_behind_policy,
                 );
                 ("200 OK", body, "text/plain; version=0.0.4")
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /metrics /fleet /fleet/summary ; POST /fleet/heartbeat\n".into(),
+                    "try GET /health /status /metrics /fleet /fleet/summary /fleet/policy ; POST /fleet/heartbeat /fleet/policy\n".into(),
                     "text/plain",
                 )
             };
@@ -273,6 +369,7 @@ pub async fn run_daemon(
     no_health: bool,
     as_service: bool,
     fleet_path: PathBuf,
+    fleet_policy_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -367,8 +464,9 @@ pub async fn run_daemon(
         let fw_h = create_firewall_engine();
         let el = event_log.clone();
         let fl = fleet_path.clone();
+        let fp = fleet_policy_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el, fl).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl, fp).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
@@ -377,6 +475,7 @@ pub async fn run_daemon(
             println!("[AEGISD] status JSON     : http://{health_bind}/status");
             println!("[AEGISD] metrics         : http://{health_bind}/metrics");
             println!("[AEGISD] fleet           : http://{health_bind}/fleet");
+            println!("[AEGISD] fleet policy    : GET/POST http://{health_bind}/fleet/policy");
             println!("[AEGISD] fleet heartbeat : POST http://{health_bind}/fleet/heartbeat");
         }
     }
@@ -415,8 +514,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             health_bind,
             no_health,
             fleet,
+            fleet_policy,
         } => {
-            run_daemon(event_log, health_bind, no_health, false, fleet).await?;
+            run_daemon(event_log, health_bind, no_health, false, fleet, fleet_policy).await?;
         }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;

@@ -5,7 +5,7 @@ mod config;
 use clap::{Parser, Subcommand};
 use colored::*;
 use config::SuiteConfig;
-use s2o_fleet::{FleetStore, HeartbeatPayload};
+use s2o_fleet::{FleetPolicyBundle, FleetStore, HeartbeatPayload};
 use s2o_kernel::{
     apply_policy, collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode,
     host_id, load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
@@ -188,8 +188,59 @@ enum FleetCmd {
     Status {
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
         #[arg(long, default_value_t = 60)]
         stale_minutes: i64,
+    },
+    /// Fleet policy distribution (set / show / apply / push / pull)
+    Policy {
+        #[command(subcommand)]
+        command: FleetPolicyCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum FleetPolicyCmd {
+    /// Publish a policy pack as the fleet desired policy (bumps version)
+    Set {
+        path: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+    },
+    /// Show current fleet policy bundle
+    Show {
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+    },
+    /// Apply local fleet policy through the kernel
+    Apply {
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Record applied version onto this host in fleet.json
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+    },
+    /// Upload policy pack to aegisd (POST /fleet/policy)
+    Push {
+        path: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:9090/fleet/policy")]
+        url: String,
+    },
+    /// Download policy from aegisd; optional --apply
+    Pull {
+        #[arg(long, default_value = "http://127.0.0.1:9090/fleet/policy")]
+        url: String,
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+        #[arg(long)]
+        apply: bool,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
     },
 }
 
@@ -637,6 +688,7 @@ async fn build_local_heartbeat(
     host_override: Option<String>,
     name: Option<String>,
     tags: Vec<String>,
+    policy_version: Option<u64>,
 ) -> Result<HeartbeatPayload, Box<dyn std::error::Error>> {
     let st = collect_platform_status(fw).await;
     let posture = compute_posture_score(fw).await?;
@@ -663,7 +715,14 @@ async fn build_local_heartbeat(
         modules_other: Some(other),
         tags: if tags.is_empty() { None } else { Some(tags) },
         last_ip: None,
+        policy_version,
     })
+}
+
+fn local_policy_version(policy_path: &Path) -> u64 {
+    FleetPolicyBundle::load(policy_path)
+        .map(|b| b.version)
+        .unwrap_or(0)
 }
 
 #[tokio::main]
@@ -1348,19 +1407,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name,
                 tag,
             } => {
-                let hb = build_local_heartbeat(&fw, hid, name, tag).await?;
+                let pv = local_policy_version(Path::new(".aegis/fleet-policy.json"));
+                let hb = build_local_heartbeat(&fw, hid, name, tag, Some(pv)).await?;
                 let mut store = FleetStore::load(&fleet);
                 let h = store.upsert_heartbeat(hb);
                 store.save(&fleet)?;
                 println!(
                     "{}",
                     format!(
-                        "[aegis] fleet enrolled host={} posture={} modules={}/{}/{}",
+                        "[aegis] fleet enrolled host={} posture={} modules={}/{}/{} policy_v={}",
                         h.host_id,
                         h.posture_score,
                         h.modules_implemented,
                         h.modules_partial,
-                        h.modules_other
+                        h.modules_other,
+                        h.policy_version
                     )
                     .green()
                     .bold()
@@ -1372,7 +1433,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 host_id: hid,
                 push,
             } => {
-                let hb = build_local_heartbeat(&fw, hid, None, vec![]).await?;
+                let pv = local_policy_version(Path::new(".aegis/fleet-policy.json"));
+                let hb = build_local_heartbeat(&fw, hid, None, vec![], Some(pv)).await?;
                 if let Some(url) = push {
                     let client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(10))
@@ -1389,8 +1451,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let h = store.upsert_heartbeat(hb);
                     store.save(&fleet)?;
                     println!(
-                        "[aegis] fleet heartbeat host={} posture={} last_seen={}",
-                        h.host_id, h.posture_score, h.last_seen
+                        "[aegis] fleet heartbeat host={} posture={} last_seen={} policy_v={}",
+                        h.host_id, h.posture_score, h.last_seen, h.policy_version
                     );
                 }
             }
@@ -1454,17 +1516,173 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             FleetCmd::Status {
                 fleet,
+                policy,
                 stale_minutes,
             } => {
                 let store = FleetStore::load(&fleet);
-                let s = store.summary(stale_minutes);
+                let pv = local_policy_version(&policy);
+                let s = store.summary_with_policy(stale_minutes, pv);
                 println!("{}", "Aegis fleet status".bold().green());
                 println!(" Store   : {}", fleet.display());
                 println!(" Total   : {}", s.total);
                 println!(" Online  : {}", s.online.to_string().green());
                 println!(" Stale   : {}", s.stale.to_string().yellow());
                 println!(" Avg posture : {:.0}", s.avg_posture);
+                println!(" Policy v: {pv}");
+                if pv > 0 {
+                    println!(
+                        " On policy: {}  behind: {}",
+                        s.hosts_on_policy, s.hosts_behind_policy
+                    );
+                }
             }
+            FleetCmd::Policy { command } => match command {
+                FleetPolicyCmd::Set { path, policy } => {
+                    let text = std::fs::read_to_string(&path)?;
+                    let doc: serde_json::Value = serde_json::from_str(&text)?;
+                    let prev = FleetPolicyBundle::load(&policy);
+                    let bundle = FleetPolicyBundle::from_document(doc, prev.as_ref());
+                    bundle.save(&policy)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] fleet policy set name={} version={} -> {}",
+                            bundle.name,
+                            bundle.version,
+                            policy.display()
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
+                FleetPolicyCmd::Show { policy } => match FleetPolicyBundle::load(&policy) {
+                    Some(b) => {
+                        println!("version     : {}", b.version);
+                        println!("name        : {}", b.name);
+                        println!("updated_at  : {}", b.updated_at);
+                        println!("document    :");
+                        println!("{}", serde_json::to_string_pretty(&b.document)?);
+                    }
+                    None => {
+                        println!("[aegis] no fleet policy at {}", policy.display());
+                        println!("  set with: aegis fleet policy set policies/examples/gate-pack.json");
+                    }
+                },
+                FleetPolicyCmd::Apply {
+                    policy,
+                    event_log,
+                    fleet,
+                } => {
+                    let Some(bundle) = FleetPolicyBundle::load(&policy) else {
+                        eprintln!("[aegis] missing {}", policy.display());
+                        std::process::exit(2);
+                    };
+                    let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
+                    let store = Arc::new(EventStore::open(&event_log)?);
+                    let result = apply_policy(&doc, &fw, Some(store)).await?;
+                    if result.ok {
+                        println!(
+                            "{}",
+                            format!(
+                                "[aegis] fleet policy applied v{} name={}",
+                                bundle.version, result.policy_name
+                            )
+                            .green()
+                            .bold()
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format!("[aegis] fleet policy incomplete: {}", result.policy_name)
+                                .yellow()
+                        );
+                    }
+                    for a in &result.applied {
+                        println!("  applied : {}", a.green());
+                    }
+                    for e in &result.errors {
+                        println!("  error   : {}", e.red());
+                    }
+                    // stamp host policy_version
+                    let mut roster = FleetStore::load(&fleet);
+                    let hb = build_local_heartbeat(
+                        &fw,
+                        None,
+                        None,
+                        vec![],
+                        Some(bundle.version),
+                    )
+                    .await?;
+                    roster.upsert_heartbeat(hb);
+                    roster.save(&fleet)?;
+                    if !result.ok {
+                        std::process::exit(1);
+                    }
+                }
+                FleetPolicyCmd::Push { path, url } => {
+                    let text = std::fs::read_to_string(&path)?;
+                    let doc: serde_json::Value = serde_json::from_str(&text)?;
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()?;
+                    let res = client.post(&url).json(&doc).send().await?;
+                    let status = res.status();
+                    let body = res.text().await.unwrap_or_default();
+                    println!("[aegis] fleet policy push {url} -> {status}");
+                    println!("{body}");
+                    if !status.is_success() {
+                        std::process::exit(1);
+                    }
+                }
+                FleetPolicyCmd::Pull {
+                    url,
+                    policy,
+                    apply,
+                    event_log,
+                    fleet,
+                } => {
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()?;
+                    let res = client.get(&url).send().await?;
+                    if !res.status().is_success() {
+                        eprintln!("[aegis] pull failed: {}", res.status());
+                        std::process::exit(1);
+                    }
+                    let bundle: FleetPolicyBundle = res.json().await?;
+                    bundle.save(&policy)?;
+                    println!(
+                        "[aegis] fleet policy pulled v{} name={} -> {}",
+                        bundle.version,
+                        bundle.name,
+                        policy.display()
+                    );
+                    if apply {
+                        let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
+                        let store = Arc::new(EventStore::open(&event_log)?);
+                        let result = apply_policy(&doc, &fw, Some(store)).await?;
+                        println!(
+                            "[aegis] apply ok={} applied={}",
+                            result.ok,
+                            result.applied.len()
+                        );
+                        let mut roster = FleetStore::load(&fleet);
+                        let hb = build_local_heartbeat(
+                            &fw,
+                            None,
+                            None,
+                            vec![],
+                            Some(bundle.version),
+                        )
+                        .await?;
+                        roster.upsert_heartbeat(hb);
+                        roster.save(&fleet)?;
+                        if !result.ok {
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            },
         },
         Commands::Service { command } => {
             if !cfg!(windows) {

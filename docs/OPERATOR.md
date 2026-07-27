@@ -180,6 +180,30 @@ cargo run -p aegis-cli -- fleet heartbeat --push http://127.0.0.1:9090/fleet/hea
 
 Store: `.aegis/fleet.json` (file-backed; not a multi-tenant control plane yet).
 
+### Fleet policy distribution
+
+```powershell
+# Hub: publish desired pack
+cargo run -p aegis-cli -- fleet policy set policies/examples/gate-pack.json
+cargo run -p aegis-cli -- fleet policy show
+cargo run -p aegisd -- start --health-bind 127.0.0.1:9090
+cargo run -p aegis-cli -- fleet policy push policies/examples/gate-pack.json --url http://127.0.0.1:9090/fleet/policy
+
+# Agent: pull + apply
+cargo run -p aegis-cli -- fleet policy pull --url http://127.0.0.1:9090/fleet/policy --apply
+cargo run -p aegis-cli -- fleet heartbeat --push http://127.0.0.1:9090/fleet/heartbeat
+# response includes desired_policy_version + policy_stale
+```
+
+### Gate JWT RS256 / JWKS
+
+```powershell
+cargo run -p cyberztna -- jwt keygen --dir .aegis/jwt --force
+cargo run -p cyberztna -- jwt mint alice --rsa-key .aegis/jwt/jwt-private.pem --posture 80
+cargo run -p cyberztna -- jwt verify <token> --jwks .aegis/jwt/jwks.json
+cargo run -p cyberztna -- serve --jwt-jwks .aegis/jwt/jwks.json --upstream https://example.com --min-score 40
+```
+
 ## Event store
 
 - Default path: `.aegis/events.jsonl`

@@ -29,8 +29,8 @@ struct AppState {
     sessions_path: Option<PathBuf>,
     /// Require CyberID file session token
     require_session: bool,
-    /// Local HS256 JWT secret (OIDC-lite); Bearer eyJ… tokens
-    jwt_secret: Option<String>,
+    /// JWT verifier (HS256 secret and/or RS256 JWKS)
+    jwt_verifier: Option<crate::jwt::JwtVerifier>,
     /// Cached posture score with TTL
     cache: Arc<RwLock<Option<(Instant, u32)>>>,
     /// Per-IP rate window: (window_start, count)
@@ -87,15 +87,15 @@ fn looks_like_jwt(token: &str) -> bool {
 fn verify_auth(
     token: &str,
     sessions_path: Option<&Path>,
-    jwt_secret: Option<&str>,
+    jwt_verifier: Option<&crate::jwt::JwtVerifier>,
     require_session: bool,
     min_score: u32,
     enforce_session_posture: bool,
 ) -> Result<SessionOk, &'static str> {
-    // Prefer JWT when it looks like one and secret is configured
-    if let Some(secret) = jwt_secret {
+    // Prefer JWT when it looks like one and a verifier is configured
+    if let Some(verifier) = jwt_verifier {
         if looks_like_jwt(token) {
-            return match crate::jwt::verify(secret, token) {
+            return match crate::jwt::verify_with(verifier, token) {
                 Ok(c) => {
                     let posture = c.posture.unwrap_or(0);
                     if enforce_session_posture && posture < min_score {
@@ -125,12 +125,12 @@ fn verify_auth(
                 via: "session",
             });
         }
-        if require_session || jwt_secret.is_none() {
+        if require_session || jwt_verifier.is_none() {
             return Err("session");
         }
     }
 
-    if jwt_secret.is_some() {
+    if jwt_verifier.is_some() {
         return Err("jwt");
     }
     Err("session")
@@ -301,14 +301,14 @@ async fn proxy_handler(
     // Optional CyberID session and/or local JWT (OIDC-lite)
     let mut session_user: Option<String> = None;
     let mut session_score: Option<u32> = None;
-    let auth_required = state.require_session || state.jwt_secret.is_some();
+    let auth_required = state.require_session || state.jwt_verifier.is_some();
     if auth_required {
         let token = extract_session_token(&req);
         let result = match token.as_deref() {
             Some(t) => verify_auth(
                 t,
                 state.sessions_path.as_deref(),
-                state.jwt_secret.as_deref(),
+                state.jwt_verifier.as_ref(),
                 state.require_session,
                 state.cfg.min_score,
                 state.cfg.enforce_session_posture,
@@ -557,7 +557,7 @@ pub struct TlsFiles {
 pub struct AuthOptions {
     pub require_session: bool,
     pub sessions_path: Option<PathBuf>,
-    pub jwt_secret: Option<String>,
+    pub jwt_verifier: Option<crate::jwt::JwtVerifier>,
 }
 
 pub async fn run(
@@ -573,7 +573,7 @@ pub async fn run(
         access_log,
         sessions_path: auth.sessions_path,
         require_session: auth.require_session,
-        jwt_secret: auth.jwt_secret,
+        jwt_verifier: auth.jwt_verifier,
         cache: Arc::new(RwLock::new(None)),
         rate: Arc::new(RwLock::new(HashMap::new())),
         client: reqwest::Client::builder()

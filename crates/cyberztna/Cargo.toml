@@ -26,6 +26,11 @@ rcgen = "0.13"
 rustls = "0.23"
 rustls-pemfile = "2"
 jsonwebtoken = "9"
+rsa = { version = "0.9", features = ["pem"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
 s2o-kernel = { path = "../s2o-kernel" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }

@@ -81,6 +81,9 @@ enum Commands {
         /// HS256 secret for local JWT Bearer tokens (OIDC-lite)
         #[arg(long, env = "S2O_GATE_JWT_SECRET")]
         jwt_secret: Option<String>,
+        /// RS256 JWKS JSON or public PEM path (OIDC-lite JWKS)
+        #[arg(long, env = "S2O_GATE_JWT_JWKS")]
+        jwt_jwks: Option<PathBuf>,
         /// Allow only these client IPs / CIDRs (repeatable). Empty = all.
         #[arg(long = "allow-ip")]
         allow_ips: Vec<String>,
@@ -139,7 +142,12 @@ enum JwtCmd {
     Mint {
         user: String,
         #[arg(long, env = "S2O_GATE_JWT_SECRET")]
-        secret: String,
+        secret: Option<String>,
+        /// Use RS256 private key PEM (lab: .aegis/jwt/jwt-private.pem)
+        #[arg(long)]
+        rsa_key: Option<PathBuf>,
+        #[arg(long)]
+        kid: Option<String>,
         #[arg(long, default_value_t = 8)]
         ttl_hours: i64,
         #[arg(long)]
@@ -147,11 +155,22 @@ enum JwtCmd {
         #[arg(long, default_value = "s2o-cyberid")]
         issuer: String,
     },
-    /// Verify a JWT against secret
+    /// Verify a JWT against secret or JWKS/public PEM
     Verify {
         token: String,
         #[arg(long, env = "S2O_GATE_JWT_SECRET")]
-        secret: String,
+        secret: Option<String>,
+        #[arg(long, env = "S2O_GATE_JWT_JWKS")]
+        jwks: Option<PathBuf>,
+    },
+    /// Generate lab RS256 keypair + JWKS under a directory
+    Keygen {
+        #[arg(long, default_value = ".aegis/jwt")]
+        dir: PathBuf,
+        #[arg(long, default_value = "")]
+        kid: String,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -361,19 +380,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Commands::Jwt { command } => match command {
+            JwtCmd::Keygen { dir, kid, force } => {
+                jwt::write_rs256_lab(&dir, &kid, force)?;
+            }
             JwtCmd::Mint {
                 user,
                 secret,
+                rsa_key,
+                kid,
                 ttl_hours,
                 posture,
                 issuer,
             } => {
-                let token = jwt::mint(&secret, &user, ttl_hours, posture, &issuer)?;
+                let (token, alg) = if let Some(key_path) = rsa_key {
+                    let pem = std::fs::read_to_string(&key_path)?;
+                    // Prefer explicit --kid, else sibling jwks.json kid, else omit kid
+                    let kid = kid.or_else(|| {
+                        key_path.parent().and_then(|dir| {
+                            let jwks_path = dir.join("jwks.json");
+                            std::fs::read_to_string(jwks_path)
+                                .ok()
+                                .and_then(|t| serde_json::from_str::<jwt::JwksDoc>(&t).ok())
+                                .and_then(|j| j.keys.first().cloned())
+                                .and_then(|k| {
+                                    k.get("kid")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        })
+                    });
+                    (
+                        jwt::mint_rs256(&pem, kid.as_deref(), &user, ttl_hours, posture, &issuer)?,
+                        "RS256",
+                    )
+                } else if let Some(secret) = secret {
+                    (
+                        jwt::mint(&secret, &user, ttl_hours, posture, &issuer)?,
+                        "HS256",
+                    )
+                } else {
+                    eprintln!("[gate] jwt mint needs --secret or --rsa-key");
+                    std::process::exit(2);
+                };
                 println!(
                     "{}",
                     "=========================================================".cyan()
                 );
-                println!("{}", "      Gate JWT minted (HS256 / OIDC-lite)".bold().green());
+                println!(
+                    "{}",
+                    format!("      Gate JWT minted ({alg} / OIDC-lite)")
+                        .bold()
+                        .green()
+                );
                 println!(
                     "{}",
                     "=========================================================".cyan()
@@ -383,31 +441,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!(" Posture : {p}");
                 }
                 println!(" Issuer  : {issuer}");
+                println!(" Alg     : {alg}");
                 println!(" Token   : {}", token.yellow().bold());
                 println!(" Header  : Authorization: Bearer <token>");
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
                     Severity::Info,
-                    format!("jwt mint user={user}"),
+                    format!("jwt mint user={user} alg={alg}"),
                     &[
                         ("user", serde_json::json!(user)),
                         ("issuer", serde_json::json!(issuer)),
+                        ("alg", serde_json::json!(alg)),
                     ],
                 );
             }
-            JwtCmd::Verify { token, secret } => match jwt::verify(&secret, &token) {
-                Ok(c) => {
-                    println!(
-                        "OK sub={} exp={} posture={:?} iss={:?}",
-                        c.sub, c.exp, c.posture, c.iss
-                    );
+            JwtCmd::Verify {
+                token,
+                secret,
+                jwks,
+            } => {
+                let result = if let Some(path) = jwks {
+                    let v = jwt::rs256_verifier_from_path(&path)?;
+                    jwt::verify_with(&v, &token)
+                } else if let Some(secret) = secret {
+                    jwt::verify(&secret, &token)
+                } else {
+                    eprintln!("[gate] jwt verify needs --secret or --jwks");
+                    std::process::exit(2);
+                };
+                match result {
+                    Ok(c) => {
+                        println!(
+                            "OK sub={} exp={} posture={:?} iss={:?}",
+                            c.sub, c.exp, c.posture, c.iss
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("INVALID: {e}");
+                        std::process::exit(3);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("INVALID: {e}");
-                    std::process::exit(3);
-                }
-            },
+            }
         },
         Commands::Serve {
             listen,
@@ -422,6 +497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             require_session,
             sessions,
             jwt_secret,
+            jwt_jwks,
             allow_ips,
             rate_limit,
             enforce_session_posture,
@@ -496,7 +572,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "allow_ips",
                         serde_json::json!(cfg.allow_ips.len()),
                     ),
-                    ("jwt", serde_json::json!(jwt_secret.is_some())),
+                    ("jwt", serde_json::json!(jwt_secret.is_some() || jwt_jwks.is_some())),
                 ],
             );
             let (tls_cert, tls_key) = if let Some(ref ca) = mtls_ca {
@@ -545,12 +621,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sessions.display()
                 );
             }
-            if let Some(ref s) = jwt_secret {
+            let jwt_verifier = if let Some(path) = jwt_jwks {
+                let v = jwt::rs256_verifier_from_path(&path)?;
+                println!("[gate] JWT RS256/JWKS  : {}", path.display());
+                Some(v)
+            } else if let Some(ref s) = jwt_secret {
                 println!(
                     "[gate] JWT HS256        : enabled (secret len={})",
                     s.len()
                 );
-            }
+                Some(jwt::JwtVerifier::Hs256(s.clone()))
+            } else {
+                None
+            };
             if cfg.enforce_session_posture {
                 println!(
                     "[gate] session posture  : enforce mint score >= {}",
@@ -583,7 +666,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 proxy::AuthOptions {
                     require_session,
                     sessions_path,
-                    jwt_secret,
+                    jwt_verifier,
                 },
             )
             .await?;

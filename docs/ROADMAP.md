@@ -167,7 +167,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Linux systemd unit for aegisd  
 - ✅ Gate mTLS (client CA) + JWT HS256 OIDC-lite + gate policy fragment  
 - ✅ Fleet inventory MVP (`aegis fleet` + aegisd `/fleet`)  
-- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / OIDC discovery (later)  
+- ✅ Fleet policy push/pull/apply + Gate RS256/JWKS file JWT  
+- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / OIDC discovery URL (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof
