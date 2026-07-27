@@ -18,6 +18,7 @@ use s2o_schema::{
     AegisEvent, EventAction, EventKind, HealthState, ProductId, Severity, SCHEMA_VERSION,
 };
 use s2o_store::EventStore;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -51,6 +52,9 @@ enum Commands {
         /// Fleet policy bundle path (GET/POST /fleet/policy)
         #[arg(long, default_value = ".aegis/fleet-policy.json")]
         fleet_policy: PathBuf,
+        /// Mesh peer directory for /mesh/peers
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        mesh_peers: PathBuf,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -91,6 +95,7 @@ async fn health_server(
     event_log: PathBuf,
     fleet_path: PathBuf,
     fleet_policy_path: PathBuf,
+    mesh_peers_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     loop {
@@ -99,6 +104,7 @@ async fn health_server(
         let event_log = event_log.clone();
         let fleet_path = fleet_path.clone();
         let fleet_policy_path = fleet_policy_path.clone();
+        let mesh_peers_path = mesh_peers_path.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 65536];
             let n = match sock.read(&mut buf).await {
@@ -109,12 +115,15 @@ async fn health_server(
             let first = req.lines().next().unwrap_or("");
             let mut parts = first.split_whitespace();
             let method = parts.next().unwrap_or("GET");
-            let path = parts
-                .next()
-                .unwrap_or("/")
-                .split('?')
-                .next()
-                .unwrap_or("/");
+            let raw_path = parts.next().unwrap_or("/");
+            // strip query
+            let path_q = raw_path;
+            let path = path_q.split('?').next().unwrap_or("/");
+            // console API aliases
+            let path = path
+                .strip_prefix("/api/v1")
+                .unwrap_or(path);
+            let path = if path.is_empty() { "/" } else { path };
 
             // body after headers
             let body_bytes = req
@@ -122,6 +131,21 @@ async fn health_server(
                 .nth(1)
                 .or_else(|| req.split("\n\n").nth(1))
                 .unwrap_or("");
+
+            // query helpers
+            let limit = path_q
+                .split('?')
+                .nth(1)
+                .and_then(|q| {
+                    q.split('&').find_map(|p| {
+                        let mut kv = p.splitn(2, '=');
+                        match (kv.next(), kv.next()) {
+                            (Some("limit"), Some(v)) => v.parse::<usize>().ok(),
+                            _ => None,
+                        }
+                    })
+                })
+                .unwrap_or(20);
 
             let (code, body, ctype) = if path == "/health" || path.starts_with("/health/") {
                 (
@@ -139,6 +163,151 @@ async fn health_server(
                         format!("{{\"error\":\"{e}\"}}\n"),
                         "application/json",
                     ),
+                }
+            } else if path == "/posture" || path.starts_with("/posture") {
+                match s2o_kernel::compute_posture_score(&fw).await {
+                    Ok(p) => match serde_json::to_string(&p) {
+                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            format!("{{\"error\":\"{e}\"}}\n"),
+                            "application/json",
+                        ),
+                    },
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
+                }
+            } else if path == "/events" || path.starts_with("/events") {
+                match EventStore::open(&event_log) {
+                    Ok(store) => match store.recent(limit) {
+                        Ok(evs) => match serde_json::to_string(&evs) {
+                            Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                            Err(e) => (
+                                "500 Internal Server Error",
+                                format!("{{\"error\":\"{e}\"}}\n"),
+                                "application/json",
+                            ),
+                        },
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            format!("{{\"error\":\"{e}\"}}\n"),
+                            "application/json",
+                        ),
+                    },
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{{\"error\":\"{e}\"}}\n"),
+                        "application/json",
+                    ),
+                }
+            } else if path == "/mesh/peers" || path.starts_with("/mesh/peers") {
+                if method == "GET" {
+                    if mesh_peers_path.exists() {
+                        match fs::read_to_string(&mesh_peers_path) {
+                            Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                            Err(e) => (
+                                "500 Internal Server Error",
+                                format!("{{\"error\":\"{e}\"}}\n"),
+                                "application/json",
+                            ),
+                        }
+                    } else {
+                        (
+                            "200 OK",
+                            "{\"version\":\"0.1.0\",\"peers\":[]}\n".into(),
+                            "application/json",
+                        )
+                    }
+                } else if method == "POST" || method == "PUT" {
+                    // accept single MeshPeer JSON and upsert into registry
+                    #[derive(serde::Deserialize, serde::Serialize, Clone)]
+                    struct MeshPeerIn {
+                        name: String,
+                        public_key: String,
+                        #[serde(default)]
+                        endpoint: Option<String>,
+                        #[serde(default = "default_allowed_ips")]
+                        allowed_ips: String,
+                        #[serde(default = "default_ka")]
+                        keepalive: u16,
+                        #[serde(default)]
+                        notes: Option<String>,
+                    }
+                    fn default_allowed_ips() -> String {
+                        "10.220.0.0/24".into()
+                    }
+                    fn default_ka() -> u16 {
+                        25
+                    }
+                    #[derive(serde::Deserialize, serde::Serialize, Clone, Default)]
+                    struct MeshReg {
+                        #[serde(default = "default_ver")]
+                        version: String,
+                        #[serde(default)]
+                        peers: Vec<MeshPeerIn>,
+                    }
+                    fn default_ver() -> String {
+                        "0.1.0".into()
+                    }
+                    match serde_json::from_str::<MeshPeerIn>(body_bytes) {
+                        Ok(peer) => {
+                            let mut reg: MeshReg = if mesh_peers_path.exists() {
+                                fs::read_to_string(&mesh_peers_path)
+                                    .ok()
+                                    .and_then(|t| serde_json::from_str(&t).ok())
+                                    .unwrap_or_default()
+                            } else {
+                                MeshReg::default()
+                            };
+                            if let Some(p) = reg.peers.iter_mut().find(|p| p.name == peer.name) {
+                                *p = peer.clone();
+                            } else {
+                                reg.peers.push(peer.clone());
+                            }
+                            if reg.version.is_empty() {
+                                reg.version = "0.1.0".into();
+                            }
+                            if let Some(parent) = mesh_peers_path.parent() {
+                                let _ = fs::create_dir_all(parent);
+                            }
+                            match serde_json::to_string_pretty(&reg) {
+                                Ok(text) => match fs::write(&mesh_peers_path, text) {
+                                    Ok(()) => match serde_json::to_string(&peer) {
+                                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                                        Err(e) => (
+                                            "500 Internal Server Error",
+                                            format!("{{\"error\":\"{e}\"}}\n"),
+                                            "application/json",
+                                        ),
+                                    },
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!("{{\"error\":\"save: {e}\"}}\n"),
+                                        "application/json",
+                                    ),
+                                },
+                                Err(e) => (
+                                    "500 Internal Server Error",
+                                    format!("{{\"error\":\"{e}\"}}\n"),
+                                    "application/json",
+                                ),
+                            }
+                        }
+                        Err(e) => (
+                            "400 Bad Request",
+                            format!("{{\"error\":\"json: {e}\"}}\n"),
+                            "application/json",
+                        ),
+                    }
+                } else {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"GET or POST /mesh/peers\"}\n".into(),
+                        "application/json",
+                    )
                 }
             } else if path == "/fleet" || path == "/fleet/" {
                 let store = s2o_fleet::FleetStore::load(&fleet_path);
@@ -348,7 +517,7 @@ async fn health_server(
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /metrics /fleet /fleet/summary /fleet/policy ; POST /fleet/heartbeat /fleet/policy\n".into(),
+                    "try GET /health /status /posture /events /metrics /fleet /fleet/summary /fleet/policy /mesh/peers (also under /api/v1/*)\n".into(),
                     "text/plain",
                 )
             };
@@ -370,6 +539,7 @@ pub async fn run_daemon(
     as_service: bool,
     fleet_path: PathBuf,
     fleet_policy_path: PathBuf,
+    mesh_peers_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -465,18 +635,23 @@ pub async fn run_daemon(
         let el = event_log.clone();
         let fl = fleet_path.clone();
         let fp = fleet_policy_path.clone();
+        let mp = mesh_peers_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el, fl, fp).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
         if !as_service {
             println!("[AEGISD] health HTTP     : http://{health_bind}/health");
             println!("[AEGISD] status JSON     : http://{health_bind}/status");
+            println!("[AEGISD] posture         : http://{health_bind}/posture");
+            println!("[AEGISD] events          : http://{health_bind}/events?limit=20");
             println!("[AEGISD] metrics         : http://{health_bind}/metrics");
             println!("[AEGISD] fleet           : http://{health_bind}/fleet");
             println!("[AEGISD] fleet policy    : GET/POST http://{health_bind}/fleet/policy");
             println!("[AEGISD] fleet heartbeat : POST http://{health_bind}/fleet/heartbeat");
+            println!("[AEGISD] mesh peers      : GET/POST http://{health_bind}/mesh/peers");
+            println!("[AEGISD] console API     : http://{health_bind}/api/v1/* (aliases)");
         }
     }
 
@@ -515,8 +690,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             no_health,
             fleet,
             fleet_policy,
+            mesh_peers,
         } => {
-            run_daemon(event_log, health_bind, no_health, false, fleet, fleet_policy).await?;
+            run_daemon(
+                event_log,
+                health_bind,
+                no_health,
+                false,
+                fleet,
+                fleet_policy,
+                mesh_peers,
+            )
+            .await?;
         }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;

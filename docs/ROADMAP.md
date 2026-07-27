@@ -168,7 +168,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate mTLS (client CA) + JWT HS256 OIDC-lite + gate policy fragment  
 - ✅ Fleet inventory MVP (`aegis fleet` + aegisd `/fleet`)  
 - ✅ Fleet policy push/pull/apply + Gate RS256/JWKS file JWT  
-- ⏳ Full YARA-X / kernel ETW / system DNS hijack / embedded WG / OIDC discovery URL (later)  
+- ✅ Gate remote JWKS URL + mesh multi-peer registry + `/api/v1` console surface  
+- ⏳ Full YARA-X / kernel ETW / system DNS hijack / boringtun / OIDC well-known (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

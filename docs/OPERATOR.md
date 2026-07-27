@@ -202,6 +202,29 @@ cargo run -p cyberztna -- jwt keygen --dir .aegis/jwt --force
 cargo run -p cyberztna -- jwt mint alice --rsa-key .aegis/jwt/jwt-private.pem --posture 80
 cargo run -p cyberztna -- jwt verify <token> --jwks .aegis/jwt/jwks.json
 cargo run -p cyberztna -- serve --jwt-jwks .aegis/jwt/jwks.json --upstream https://example.com --min-score 40
+# Remote JWKS at start (caches to file):
+cargo run -p cyberztna -- serve --jwt-jwks-url http://127.0.0.1:9090/api/v1/jwks --upstream https://example.com
+cargo run -p cyberztna -- jwt fetch-jwks --url https://example.com/.well-known/jwks.json
+```
+
+### Mesh multi-peer
+
+```powershell
+cargo run -p cybermesh -- genkey --write-private .aegis/wg0.key --write-public .aegis/wg0.pub
+cargo run -p cybermesh -- peers add hub <BASE64_PUB> --endpoint hub.example:51820
+cargo run -p cybermesh -- peers list
+cargo run -p cybermesh -- config --private-key-file .aegis/wg0.key --address 10.220.0.2/32
+# Peer directory via aegisd:
+cargo run -p cybermesh -- peers publish .aegis/wg0.pub --endpoint 1.2.3.4:51820
+cargo run -p cybermesh -- peers pull --merge
+```
+
+### Console API (aegisd)
+
+```text
+GET  /api/v1/health | /status | /posture | /events?limit=20 | /fleet | /metrics
+GET/POST /api/v1/mesh/peers
+GET/POST /api/v1/fleet/policy
 ```
 
 ## Event store

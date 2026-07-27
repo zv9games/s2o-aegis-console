@@ -1042,12 +1042,13 @@ dependencies = [
 
 [[package]]
 name = "cybermesh"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
  "colored",
  "rand_core",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

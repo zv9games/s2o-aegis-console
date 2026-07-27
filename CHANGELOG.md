@@ -65,8 +65,11 @@
 - Fleet policy distribution: `aegis fleet policy set|show|apply|push|pull`, aegisd `GET/POST /fleet/policy`
 - Heartbeat returns `desired_policy_version` / `policy_stale`; roster tracks host `policy_version`
 - Gate JWT RS256 + JWKS file (`jwt keygen`, `--jwt-jwks`); still no remote OIDC discovery
+- Gate remote JWKS URL (`--jwt-jwks-url`, `jwt fetch-jwks`) with multi-key JWKS set
+- CyberMesh peer registry: `peers list|add|remove|live|publish|pull` + multi-peer conf
+- aegisd console API aliases `/api/v1/*`, `/posture`, `/events`, `/mesh/peers`
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
 - System DNS hijack, embedded boringtun
-- Full OIDC discovery (remote issuer metadata / live JWKS URL fetch)
+- Full OIDC discovery (issuer metadata `.well-known`)

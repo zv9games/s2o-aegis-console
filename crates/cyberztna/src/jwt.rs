@@ -27,10 +27,15 @@ pub enum JwtVerifier {
         public_pem: String,
         kid: Option<String>,
     },
-    /// First/matching JWK from a JWKS file
+    /// Single JWK
+    #[allow(dead_code)]
     Rs256Jwk {
         jwk: serde_json::Value,
         kid: Option<String>,
+    },
+    /// Full JWKS key set (match by kid, else try each)
+    Rs256JwkSet {
+        keys: Vec<serde_json::Value>,
     },
 }
 
@@ -101,7 +106,15 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
             .map_err(|e| e.to_string())
         }
         JwtVerifier::Rs256Pem { public_pem, kid } => {
-            check_rs256_header(token, kid.as_deref())?;
+            check_rs256_alg(token)?;
+            if let Some(expected) = kid {
+                let header = decode_header(token).map_err(|e| e.to_string())?;
+                if let Some(ref tk) = header.kid {
+                    if tk != expected {
+                        return Err(format!("kid mismatch: token={tk} expected={expected}"));
+                    }
+                }
+            }
             let mut validation = Validation::new(Algorithm::RS256);
             validation.validate_exp = true;
             let key =
@@ -111,32 +124,70 @@ pub fn verify_with(verifier: &JwtVerifier, token: &str) -> Result<GateClaims, St
                 .map_err(|e| e.to_string())
         }
         JwtVerifier::Rs256Jwk { jwk, kid } => {
-            check_rs256_header(token, kid.as_deref())?;
-            let mut validation = Validation::new(Algorithm::RS256);
-            validation.validate_exp = true;
-            let jwk: jsonwebtoken::jwk::Jwk =
-                serde_json::from_value(jwk.clone()).map_err(|e| format!("jwk: {e}"))?;
-            let key = DecodingKey::from_jwk(&jwk).map_err(|e| format!("jwk key: {e}"))?;
-            decode::<GateClaims>(token, &key, &validation)
-                .map(|d| d.claims)
-                .map_err(|e| e.to_string())
+            check_rs256_alg(token)?;
+            if let Some(expected) = kid {
+                let header = decode_header(token).map_err(|e| e.to_string())?;
+                if let Some(ref tk) = header.kid {
+                    if tk != expected {
+                        return Err(format!("kid mismatch: token={tk} expected={expected}"));
+                    }
+                }
+            }
+            decode_with_jwk(token, jwk)
+        }
+        JwtVerifier::Rs256JwkSet { keys } => {
+            check_rs256_alg(token)?;
+            let header = decode_header(token).map_err(|e| e.to_string())?;
+            let token_kid = header.kid.clone();
+            // Prefer key with matching kid
+            let ordered: Vec<&serde_json::Value> = if let Some(ref kid) = token_kid {
+                let mut matched: Vec<_> = keys
+                    .iter()
+                    .filter(|k| k.get("kid").and_then(|v| v.as_str()) == Some(kid.as_str()))
+                    .collect();
+                if matched.is_empty() {
+                    keys.iter().collect()
+                } else {
+                    // append others as fallback
+                    for k in keys {
+                        if k.get("kid").and_then(|v| v.as_str()) != Some(kid.as_str()) {
+                            matched.push(k);
+                        }
+                    }
+                    matched
+                }
+            } else {
+                keys.iter().collect()
+            };
+            let mut last_err = "no jwks keys".to_string();
+            for jwk in ordered {
+                match decode_with_jwk(token, jwk) {
+                    Ok(c) => return Ok(c),
+                    Err(e) => last_err = e,
+                }
+            }
+            Err(last_err)
         }
     }
 }
 
-fn check_rs256_header(token: &str, expected_kid: Option<&str>) -> Result<(), String> {
+fn check_rs256_alg(token: &str) -> Result<(), String> {
     let header = decode_header(token).map_err(|e| e.to_string())?;
     if header.alg != Algorithm::RS256 {
         return Err(format!("expected RS256, got {:?}", header.alg));
     }
-    if let Some(expected) = expected_kid {
-        if let Some(ref kid) = header.kid {
-            if kid != expected {
-                return Err(format!("kid mismatch: token={kid} expected={expected}"));
-            }
-        }
-    }
     Ok(())
+}
+
+fn decode_with_jwk(token: &str, jwk: &serde_json::Value) -> Result<GateClaims, String> {
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.validate_exp = true;
+    let jwk: jsonwebtoken::jwk::Jwk =
+        serde_json::from_value(jwk.clone()).map_err(|e| format!("jwk: {e}"))?;
+    let key = DecodingKey::from_jwk(&jwk).map_err(|e| format!("jwk key: {e}"))?;
+    decode::<GateClaims>(token, &key, &validation)
+        .map(|d| d.claims)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,30 +247,68 @@ fn base64_url_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
-/// Load RS256 verifier from JWKS JSON or public PEM path.
-pub fn rs256_verifier_from_path(path: &Path) -> Result<JwtVerifier, String> {
-    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+/// Load RS256 verifier from JWKS JSON text or public PEM text.
+pub fn rs256_verifier_from_text(text: &str) -> Result<JwtVerifier, String> {
     if text.contains("BEGIN PUBLIC KEY") || text.contains("BEGIN RSA PUBLIC KEY") {
         return Ok(JwtVerifier::Rs256Pem {
-            public_pem: text,
+            public_pem: text.to_string(),
             kid: None,
         });
     }
-    let jwks: JwksDoc = serde_json::from_str(&text).map_err(|e| format!("jwks: {e}"))?;
-    let key0 = jwks.keys.first().cloned().ok_or_else(|| "jwks empty".to_string())?;
-    let kid = key0
-        .get("kid")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    // Prefer sibling jwt-public.pem if present
+    let jwks: JwksDoc = serde_json::from_str(text).map_err(|e| format!("jwks: {e}"))?;
+    if jwks.keys.is_empty() {
+        return Err("jwks empty".into());
+    }
+    Ok(JwtVerifier::Rs256JwkSet { keys: jwks.keys })
+}
+
+/// Load RS256 verifier from JWKS JSON or public PEM path.
+pub fn rs256_verifier_from_path(path: &Path) -> Result<JwtVerifier, String> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    // Prefer sibling jwt-public.pem when loading jwks.json for dual use
     if let Some(parent) = path.parent() {
         let pem_path = parent.join("jwt-public.pem");
-        if pem_path.exists() {
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.contains("jwks"))
+            .unwrap_or(false)
+            && pem_path.exists()
+        {
+            // still load full JWKS set for multi-key; PEM alone is fine for single-key labs
+            if let Ok(v) = rs256_verifier_from_text(&text) {
+                return Ok(v);
+            }
             let public_pem = fs::read_to_string(pem_path).map_err(|e| e.to_string())?;
-            return Ok(JwtVerifier::Rs256Pem { public_pem, kid });
+            return Ok(JwtVerifier::Rs256Pem {
+                public_pem,
+                kid: None,
+            });
         }
     }
-    Ok(JwtVerifier::Rs256Jwk { jwk: key0, kid })
+    rs256_verifier_from_text(&text)
+}
+
+/// Fetch JWKS (or PEM) from HTTP(S) URL. Optional cache write path.
+pub async fn fetch_jwks_url(
+    url: &str,
+    cache_path: Option<&Path>,
+) -> Result<JwtVerifier, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?;
+    let res = client.get(url).send().await?;
+    if !res.status().is_success() {
+        return Err(format!("jwks url HTTP {}", res.status()).into());
+    }
+    let text = res.text().await?;
+    if let Some(path) = cache_path {
+        if let Some(p) = path.parent() {
+            let _ = fs::create_dir_all(p);
+        }
+        let _ = fs::write(path, &text);
+    }
+    Ok(rs256_verifier_from_text(&text)?)
 }
 
 /// Write lab RS256 files under dir: jwt-private.pem, jwt-public.pem, jwks.json
@@ -287,9 +376,8 @@ mod tests {
         assert_eq!(verify_with(&v, &t).unwrap().sub, "bob");
 
         let jwks: JwksDoc = serde_json::from_str(&mat.jwks_json).unwrap();
-        let v2 = JwtVerifier::Rs256Jwk {
-            jwk: jwks.keys[0].clone(),
-            kid: Some(mat.kid),
+        let v2 = JwtVerifier::Rs256JwkSet {
+            keys: jwks.keys.clone(),
         };
         assert_eq!(verify_with(&v2, &t).unwrap().posture, Some(70));
     }

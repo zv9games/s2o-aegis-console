@@ -84,6 +84,12 @@ enum Commands {
         /// RS256 JWKS JSON or public PEM path (OIDC-lite JWKS)
         #[arg(long, env = "S2O_GATE_JWT_JWKS")]
         jwt_jwks: Option<PathBuf>,
+        /// Fetch JWKS from HTTP(S) URL at serve start (OIDC-lite remote JWKS)
+        #[arg(long, env = "S2O_GATE_JWT_JWKS_URL")]
+        jwt_jwks_url: Option<String>,
+        /// Optional cache file when using --jwt-jwks-url
+        #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
+        jwt_jwks_cache: PathBuf,
         /// Allow only these client IPs / CIDRs (repeatable). Empty = all.
         #[arg(long = "allow-ip")]
         allow_ips: Vec<String>,
@@ -171,6 +177,13 @@ enum JwtCmd {
         kid: String,
         #[arg(long)]
         force: bool,
+    },
+    /// Download remote JWKS (or PEM) to a file
+    FetchJwks {
+        #[arg(long)]
+        url: String,
+        #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
+        out: PathBuf,
     },
 }
 
@@ -383,6 +396,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             JwtCmd::Keygen { dir, kid, force } => {
                 jwt::write_rs256_lab(&dir, &kid, force)?;
             }
+            JwtCmd::FetchJwks { url, out } => {
+                let v = jwt::fetch_jwks_url(&url, Some(&out)).await?;
+                let n = match &v {
+                    jwt::JwtVerifier::Rs256JwkSet { keys } => keys.len(),
+                    _ => 1,
+                };
+                println!(
+                    "[gate] fetched JWKS from {url} -> {} (keys~{n})",
+                    out.display()
+                );
+            }
             JwtCmd::Mint {
                 user,
                 secret,
@@ -498,6 +522,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sessions,
             jwt_secret,
             jwt_jwks,
+            jwt_jwks_url,
+            jwt_jwks_cache,
             allow_ips,
             rate_limit,
             enforce_session_posture,
@@ -572,7 +598,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "allow_ips",
                         serde_json::json!(cfg.allow_ips.len()),
                     ),
-                    ("jwt", serde_json::json!(jwt_secret.is_some() || jwt_jwks.is_some())),
+                    (
+                        "jwt",
+                        serde_json::json!(
+                            jwt_secret.is_some() || jwt_jwks.is_some() || jwt_jwks_url.is_some()
+                        ),
+                    ),
                 ],
             );
             let (tls_cert, tls_key) = if let Some(ref ca) = mtls_ca {
@@ -621,7 +652,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sessions.display()
                 );
             }
-            let jwt_verifier = if let Some(path) = jwt_jwks {
+            let jwt_verifier = if let Some(url) = jwt_jwks_url {
+                println!("[gate] JWT JWKS URL    : {url}");
+                println!("[gate] JWT JWKS cache  : {}", jwt_jwks_cache.display());
+                Some(jwt::fetch_jwks_url(&url, Some(&jwt_jwks_cache)).await?)
+            } else if let Some(path) = jwt_jwks {
                 let v = jwt::rs256_verifier_from_path(&path)?;
                 println!("[gate] JWT RS256/JWKS  : {}", path.display());
                 Some(v)

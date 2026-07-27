@@ -1,6 +1,6 @@
 [package]
 name = "cybermesh"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -17,3 +17,4 @@ serde_json = "1.0"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64 = "0.22"
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
