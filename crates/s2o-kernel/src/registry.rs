@@ -56,9 +56,9 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             os,
             CapabilityTier::T1,
             if matches!(os, OsFamily::Windows) {
-                "partial: TCP table + process inventory + heuristic alerts; no ETW/eBPF"
+                "partial: TCP + process inventory + baseline/drift + heuristics; no ETW/eBPF"
             } else {
-                "partial: process inventory (ps); TCP needs Windows net_lib"
+                "partial: process inventory/baseline (ps); TCP needs Windows net_lib"
             },
         ),
         ProductId::CyberLog => ModuleStatus::new(

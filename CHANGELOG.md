@@ -39,6 +39,9 @@
 - `aegis playbook init|run` dry-run/apply response rules
 - `aegis backup` / `restore`, `aegis selftest`
 - CyberLog syslog export with optional UDP ship
+- `aegis setup` bootstrap for .aegis data + starter configs
+- CyberEDR process baseline/drift
+- Playbook `webhook` action (POST JSON)
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

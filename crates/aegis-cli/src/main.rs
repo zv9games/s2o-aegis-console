@@ -97,6 +97,17 @@ enum Commands {
         #[arg(long, default_value_t = 40)]
         min_posture: u32,
     },
+    /// First-time bootstrap of .aegis data + starter policy/playbooks/gate
+    Setup {
+        #[arg(long, default_value = ".aegis")]
+        data_dir: PathBuf,
+        /// Apply edge policy pack after seeding
+        #[arg(long, default_value_t = true)]
+        apply_policy: bool,
+        /// Skip policy apply
+        #[arg(long)]
+        no_policy: bool,
+    },
     /// Run a product CLI if on PATH / target/debug (best-effort shim)
     Run {
         /// Product binary: cyberwall, cyberdns, cyberdefender, cyberedr, ...
@@ -176,6 +187,9 @@ struct PlaybookAction {
     attr: Option<String>,
     #[serde(default)]
     domain: Option<String>,
+    /// Webhook URL for action_type = webhook
+    #[serde(default)]
+    url: Option<String>,
 }
 
 fn default_playbooks() -> PlaybookFile {
@@ -194,6 +208,7 @@ fn default_playbooks() -> PlaybookFile {
                     action_type: "log".into(),
                     attr: None,
                     domain: None,
+                    url: None,
                 }],
             },
             PlaybookRule {
@@ -209,6 +224,23 @@ fn default_playbooks() -> PlaybookFile {
                     action_type: "dns_block_attr".into(),
                     attr: Some("domain".into()),
                     domain: None,
+                    url: None,
+                }],
+            },
+            PlaybookRule {
+                name: "webhook-on-high-block".into(),
+                enabled: false,
+                when: PlaybookWhen {
+                    product: None,
+                    action: Some("blocked".into()),
+                    severity: Some("high".into()),
+                    message_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "webhook".into(),
+                    attr: None,
+                    domain: None,
+                    url: Some("http://127.0.0.1:9999/hook".into()),
                 }],
             },
         ],
@@ -731,6 +763,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                "webhook" => {
+                                    let url = act.url.clone().unwrap_or_default();
+                                    if url.is_empty() {
+                                        println!("    -> webhook skipped (no url)");
+                                    } else if apply {
+                                        let body = serde_json::json!({
+                                            "rule": rule.name,
+                                            "event_id": ev.id.to_string(),
+                                            "product": ev.product.as_str(),
+                                            "action": format!("{:?}", ev.action),
+                                            "severity": format!("{:?}", ev.severity),
+                                            "message": ev.message,
+                                            "attrs": ev.attrs,
+                                            "host_id": ev.host_id,
+                                            "ts": ev.ts.to_rfc3339(),
+                                        });
+                                        match reqwest::Client::new()
+                                            .post(&url)
+                                            .json(&body)
+                                            .timeout(std::time::Duration::from_secs(5))
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(r) => println!(
+                                                "    -> webhook {} status={}",
+                                                url,
+                                                r.status()
+                                            ),
+                                            Err(e) => {
+                                                println!("    -> webhook {} ERROR {e}", url)
+                                            }
+                                        }
+                                    } else {
+                                        println!("    -> webhook {url} (dry-run)");
+                                    }
+                                }
                                 other => println!("    -> unknown action {other}"),
                             }
                         }
@@ -739,6 +807,128 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[aegis] playbook complete: {fired} rule hits");
             }
         },
+        Commands::Setup {
+            data_dir,
+            apply_policy,
+            no_policy,
+        } => {
+            std::fs::create_dir_all(&data_dir)?;
+            println!(
+                "{}",
+                format!("[aegis] setup data dir {}", data_dir.display())
+                    .green()
+                    .bold()
+            );
+
+            // Touch event log
+            let event_log = data_dir.join("events.jsonl");
+            let _ = EventStore::open(&event_log)?;
+
+            // DNS blocklist seed
+            let bl = data_dir.join("dns-blocklist.txt");
+            if !bl.exists() {
+                std::fs::write(
+                    &bl,
+                    "# S2O CyberDNS blocklist\nmalware.test.s2o\nphishing.test.s2o\n",
+                )?;
+                println!("  + {}", bl.display());
+            }
+
+            // Defender rules
+            let rules = data_dir.join("defender-rules.json");
+            if !rules.exists() {
+                let seed = serde_json::json!({
+                    "version": "0.1.0",
+                    "blocked_hashes": [],
+                    "blocked_name_substrings": ["eicar"]
+                });
+                std::fs::write(&rules, serde_json::to_string_pretty(&seed)?)?;
+                println!("  + {}", rules.display());
+            }
+
+            // yara-lite
+            let yara = data_dir.join("yara-lite.rules");
+            if !yara.exists() {
+                std::fs::write(
+                    &yara,
+                    "# name: needle\n# eicar_string: EICAR-STANDARD-ANTIVIRUS-TEST-FILE\n",
+                )?;
+                println!("  + {}", yara.display());
+            }
+
+            // playbooks
+            let pb = data_dir.join("playbooks.json");
+            if !pb.exists() {
+                std::fs::write(&pb, serde_json::to_string_pretty(&default_playbooks())?)?;
+                println!("  + {}", pb.display());
+            }
+
+            // gate routes
+            let gate = data_dir.join("gate-routes.json");
+            if !gate.exists() {
+                let g = serde_json::json!({
+                    "listen": "127.0.0.1:18443",
+                    "min_score": 50,
+                    "routes": [{
+                        "name": "demo",
+                        "path_prefix": "/",
+                        "upstream": "https://example.com"
+                    }]
+                });
+                std::fs::write(&gate, serde_json::to_string_pretty(&g)?)?;
+                println!("  + {}", gate.display());
+            }
+
+            // IOC store empty
+            let ioc = data_dir.join("ioc-store.json");
+            if !ioc.exists() {
+                let s = serde_json::json!({
+                    "version": "0.1.0",
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                    "entries": []
+                });
+                std::fs::write(&ioc, serde_json::to_string_pretty(&s)?)?;
+                println!("  + {}", ioc.display());
+            }
+
+            // edge policy example copy
+            let policy_src = PathBuf::from("policies/examples/edge-pack.json");
+            let policy_dst = data_dir.join("edge-pack.json");
+            if policy_src.exists() && !policy_dst.exists() {
+                std::fs::copy(&policy_src, &policy_dst)?;
+                println!("  + {}", policy_dst.display());
+            }
+
+            let do_policy = apply_policy && !no_policy;
+            if do_policy {
+                let path = if policy_dst.exists() {
+                    policy_dst
+                } else {
+                    policy_src
+                };
+                if path.exists() {
+                    println!("[aegis] applying policy {} ...", path.display());
+                    let doc = load_policy_file(&path)?;
+                    let store = Arc::new(EventStore::open(&event_log)?);
+                    let result = s2o_kernel::apply_policy(&doc, &fw, Some(store)).await?;
+                    if result.ok {
+                        println!("{}", "[aegis] policy OK".green().bold());
+                    } else {
+                        println!("{}", "[aegis] policy incomplete".yellow().bold());
+                        for e in &result.errors {
+                            println!("  error: {e}");
+                        }
+                    }
+                }
+            }
+
+            println!("{}", "[aegis] setup complete".green().bold());
+            println!("Next:");
+            println!("  aegis doctor");
+            println!("  aegis selftest");
+            println!("  aegis status");
+            println!("  cyberztna serve --tls");
+        }
         Commands::Backup { data_dir, out } => {
             if !data_dir.exists() {
                 eprintln!("[aegis] data dir missing: {}", data_dir.display());

@@ -3,6 +3,7 @@
 ## One front door
 
 ```powershell
+cargo run -p aegis-cli -- setup
 cargo run -p aegis-cli -- version
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- status
@@ -76,7 +77,7 @@ curl http://127.0.0.1:9090/status
 | Firewall | `cyberwall status\|enable\|lock` |
 | DNS | `cyberdns resolve\|block\|serve` |
 | Defender | `cyberdefender scan\|update-defs` |
-| EDR | `cyberedr processes\|ps\|alerts` |
+| EDR | `cyberedr processes\|ps\|baseline\|drift\|alerts` |
 | SIEM | `cybersiem stats\|correlate\|events` |
 | Intel | `cyberintel sync\|lookup\|add` |
 | Identity | `cyberid posture` |

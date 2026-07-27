@@ -151,6 +151,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ `aegis backup` / `restore` for data dir  
 - ✅ CyberLog syslog export (+ optional UDP)  
 - ✅ `aegis selftest`  
+- ✅ `aegis setup` first-time bootstrap  
+- ✅ EDR process baseline + drift  
+- ✅ Playbook webhook action  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

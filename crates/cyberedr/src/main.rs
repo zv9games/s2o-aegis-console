@@ -2,20 +2,25 @@
 
 use clap::{Parser, Subcommand};
 use colored::*;
+use serde::{Deserialize, Serialize};
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
 use s2o_store::EventStore;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "cyberedr")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.3.0")]
-#[command(about = "S2O CyberEDR: userspace telemetry + heuristics (Phase 2 shell)", long_about = None)]
+#[command(version = "0.4.0")]
+#[command(about = "S2O CyberEDR: userspace telemetry + heuristics + baseline", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
+
+    #[arg(long, global = true, default_value = ".aegis/edr-baseline.json")]
+    baseline: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -36,9 +41,28 @@ enum Commands {
         #[arg(long, default_value_t = 40)]
         limit: usize,
     },
+    /// Snapshot process image names into baseline file
+    Baseline {
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    /// Compare live process names to baseline (exit 3 if new images found)
+    Drift {
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
     /// Heuristic alerts from TCP snapshot (no ETW yet)
     Alerts,
     Trace,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProcessBaseline {
+    version: String,
+    captured_at: String,
+    host_id: String,
+    /// Sorted unique process image names (lowercase)
+    images: Vec<String>,
 }
 
 fn host_id() -> String {
@@ -69,6 +93,21 @@ fn emit(
         }
         let _ = store.append(&ev);
     }
+}
+
+fn process_images(limit: usize) -> BTreeSet<String> {
+    list_processes(limit)
+        .into_iter()
+        .map(|(_, name)| {
+            // strip path if present; keep basename
+            let base = Path::new(&name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&name);
+            base.to_ascii_lowercase()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn list_processes(limit: usize) -> Vec<(u32, String)> {
@@ -145,11 +184,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, process inventory, heuristic alerts, events".green()
+                "TCP table, process inventory, baseline/drift, heuristic alerts".green()
             );
             println!(
                 " Not implemented   : {}",
                 "ETW/eBPF kernel hooks, behavioral ML".red()
+            );
+            println!(
+                " Baseline file     : {} ({})",
+                cli.baseline.display(),
+                if cli.baseline.exists() {
+                    "present".green().to_string()
+                } else {
+                    "missing".yellow().to_string()
+                }
             );
             println!(
                 " Kernel hooks      : {}",
@@ -268,6 +316,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("process inventory count={}", rows.len()),
                 &[("count", serde_json::json!(rows.len()))],
             );
+        }
+        Commands::Baseline { limit } => {
+            let images: Vec<String> = process_images(limit).into_iter().collect();
+            let bl = ProcessBaseline {
+                version: "0.1.0".into(),
+                captured_at: chrono::Utc::now().to_rfc3339(),
+                host_id: host_id(),
+                images: images.clone(),
+            };
+            if let Some(p) = cli.baseline.parent() {
+                fs::create_dir_all(p)?;
+            }
+            fs::write(&cli.baseline, serde_json::to_string_pretty(&bl)?)?;
+            println!(
+                "{}",
+                format!(
+                    "[cyberedr] baseline wrote {} ({} images)",
+                    cli.baseline.display(),
+                    images.len()
+                )
+                .green()
+                .bold()
+            );
+            emit(
+                &cli.event_log,
+                EventKind::Process,
+                EventAction::Observed,
+                Severity::Info,
+                format!("process baseline captured n={}", images.len()),
+                &[
+                    ("path", serde_json::json!(cli.baseline.display().to_string())),
+                    ("images", serde_json::json!(images.len())),
+                ],
+            );
+        }
+        Commands::Drift { limit } => {
+            if !cli.baseline.exists() {
+                eprintln!(
+                    "[cyberedr] no baseline at {} — run: cyberedr baseline",
+                    cli.baseline.display()
+                );
+                std::process::exit(2);
+            }
+            let bl: ProcessBaseline =
+                serde_json::from_str(&fs::read_to_string(&cli.baseline)?)?;
+            let base: BTreeSet<String> = bl.images.into_iter().collect();
+            let live = process_images(limit);
+            let new: Vec<_> = live.difference(&base).cloned().collect();
+            let gone: Vec<_> = base.difference(&live).cloned().collect();
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "       Process baseline drift                            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(" Baseline images : {}", base.len());
+            println!(" Live images     : {}", live.len());
+            println!(" New             : {}", new.len());
+            println!(" Missing         : {}", gone.len());
+            for n in new.iter().take(32) {
+                println!("  + {}", n.yellow());
+            }
+            for g in gone.iter().take(16) {
+                println!("  - {}", g.dimmed());
+            }
+            emit(
+                &cli.event_log,
+                EventKind::Alert,
+                if new.is_empty() {
+                    EventAction::Observed
+                } else {
+                    EventAction::Blocked
+                },
+                if new.is_empty() {
+                    Severity::Info
+                } else {
+                    Severity::Medium
+                },
+                format!(
+                    "process drift new={} missing={}",
+                    new.len(),
+                    gone.len()
+                ),
+                &[
+                    ("new_count", serde_json::json!(new.len())),
+                    ("missing_count", serde_json::json!(gone.len())),
+                    ("new_sample", serde_json::json!(new.iter().take(10).cloned().collect::<Vec<_>>())),
+                ],
+            );
+            if !new.is_empty() {
+                std::process::exit(3);
+            }
         }
         Commands::Alerts => {
             let conns = tokio::task::spawn_blocking(|| {

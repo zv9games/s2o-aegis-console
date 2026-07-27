@@ -76,6 +76,7 @@ cargo build -p aegisd -p cyberwall-cli -p cyberdns -p cybersiem
 ### 3. One front door (`aegis`)
 
 ```powershell
+cargo run -p aegis-cli -- setup
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- status
 cargo run -p aegis-cli -- report --out .aegis/report.md
@@ -100,6 +101,8 @@ cargo run -p cyberdefender -- scan Cargo.toml
 cargo run -p cyberdefender -- scan suspect.bin --quarantine
 cargo run -p cyberedr -- processes --limit 16
 cargo run -p cyberedr -- ps --limit 20
+cargo run -p cyberedr -- baseline
+cargo run -p cyberedr -- drift
 cargo run -p cyberedr -- alerts
 cargo run -p cyberintel -- sync
 cargo run -p cyberintel -- lookup malware.test.s2o
