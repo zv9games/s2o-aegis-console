@@ -7,6 +7,7 @@
 
 #[cfg(windows)]
 mod service;
+mod oauth;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -58,6 +59,12 @@ enum Commands {
         /// Lab JWKS path for /.well-known OIDC stub (optional)
         #[arg(long, default_value = ".aegis/jwt/jwks.json")]
         jwks: PathBuf,
+        /// RSA private key PEM for OAuth access_token mint (optional; falls back to HS)
+        #[arg(long, default_value = ".aegis/jwt/jwt-private.pem")]
+        jwt_private: PathBuf,
+        /// Device-code store path
+        #[arg(long, default_value = ".aegis/oauth-devices.json")]
+        oauth_devices: PathBuf,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -100,6 +107,8 @@ async fn health_server(
     fleet_policy_path: PathBuf,
     mesh_peers_path: PathBuf,
     jwks_path: PathBuf,
+    jwt_private: PathBuf,
+    oauth_devices: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     let public_base = format!("http://{bind}");
@@ -111,6 +120,8 @@ async fn health_server(
         let fleet_policy_path = fleet_policy_path.clone();
         let mesh_peers_path = mesh_peers_path.clone();
         let jwks_path = jwks_path.clone();
+        let jwt_private = jwt_private.clone();
+        let oauth_devices = oauth_devices.clone();
         let public_base = public_base.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 65536];
@@ -164,9 +175,14 @@ async fn health_server(
                     "jwks_uri": jwks_uri,
                     "authorization_endpoint": format!("{issuer}/oauth/authorize"),
                     "token_endpoint": format!("{issuer}/oauth/token"),
-                    "response_types_supported": ["id_token", "token"],
+                    "device_authorization_endpoint": format!("{issuer}/oauth/device_authorization"),
+                    "grant_types_supported": [
+                        "urn:ietf:params:oauth:grant-type:device_code",
+                        "refresh_token"
+                    ],
+                    "response_types_supported": ["id_token", "token", "code"],
                     "subject_types_supported": ["public"],
-                    "id_token_signing_alg_values_supported": ["RS256"],
+                    "id_token_signing_alg_values_supported": ["RS256", "HS256"],
                     "scopes_supported": ["openid", "profile"],
                     "claims_supported": ["sub", "iss", "exp", "iat", "posture"],
                 });
@@ -197,6 +213,231 @@ async fn health_server(
                         "{\"error\":\"no lab JWKS — run: cyberztna jwt keygen --dir .aegis/jwt\"}\n".into(),
                         "application/json",
                     )
+                }
+            } else if path == "/oauth/device_authorization"
+                || path == "/oauth/device/code"
+            {
+                if method != "POST" {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"invalid_request\",\"error_description\":\"POST required\"}\n".into(),
+                        "application/json",
+                    )
+                } else {
+                    let form = oauth::parse_form(body_bytes);
+                    let client_id = form
+                        .get("client_id")
+                        .cloned()
+                        .unwrap_or_else(|| "s2o-gate".into());
+                    let mut store = oauth::DeviceStore::load(&oauth_devices);
+                    let d = store.create(&client_id, 600);
+                    let _ = store.save(&oauth_devices);
+                    let issuer = public_base.trim_end_matches('/');
+                    let body = serde_json::json!({
+                        "device_code": d.device_code,
+                        "user_code": d.user_code,
+                        "verification_uri": format!("{issuer}/oauth/device"),
+                        "verification_uri_complete": format!("{issuer}/oauth/device?user_code={}", d.user_code),
+                        "expires_in": 600,
+                        "interval": 2,
+                    });
+                    match serde_json::to_string(&body) {
+                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            format!("{{\"error\":\"{e}\"}}\n"),
+                            "application/json",
+                        ),
+                    }
+                }
+            } else if path == "/oauth/device" || path.starts_with("/oauth/device?") {
+                // GET form; user_code from query
+                let uc = path_q.split('?').nth(1).and_then(|q| {
+                    q.split('&').find_map(|p| {
+                        let mut kv = p.splitn(2, '=');
+                        match (kv.next(), kv.next()) {
+                            (Some("user_code"), Some(v)) => Some(oauth::parse_form(&format!("user_code={v}"))
+                                .get("user_code")
+                                .cloned()
+                                .unwrap_or_else(|| v.to_string())),
+                            _ => None,
+                        }
+                    })
+                });
+                let html = oauth::device_approve_page(uc.as_deref(), None);
+                ("200 OK", html, "text/html; charset=utf-8")
+            } else if path == "/oauth/device_approve" {
+                if method != "POST" {
+                    (
+                        "405 Method Not Allowed",
+                        "POST form required\n".into(),
+                        "text/plain",
+                    )
+                } else {
+                    let form = oauth::parse_form(body_bytes);
+                    // also accept JSON
+                    let (user_code, user) = if let Ok(v) = serde_json::from_str::<serde_json::Value>(body_bytes) {
+                        (
+                            v.get("user_code").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            v.get("user").and_then(|x| x.as_str()).unwrap_or("operator").to_string(),
+                        )
+                    } else {
+                        (
+                            form.get("user_code").cloned().unwrap_or_default(),
+                            form.get("user").cloned().unwrap_or_else(|| "operator".into()),
+                        )
+                    };
+                    let mut store = oauth::DeviceStore::load(&oauth_devices);
+                    match store.approve(&user_code, &user) {
+                        Ok(d) => {
+                            let code = d.user_code.clone();
+                            let _ = store.save(&oauth_devices);
+                            let html = oauth::device_approve_page(
+                                Some(&code),
+                                Some(&format!("Approved for user '{user}'. Return to your device.")),
+                            );
+                            ("200 OK", html, "text/html; charset=utf-8")
+                        }
+                        Err(e) => {
+                            let html = oauth::device_approve_page(
+                                Some(&user_code),
+                                Some(&format!("Error: {e}")),
+                            );
+                            ("400 Bad Request", html, "text/html; charset=utf-8")
+                        }
+                    }
+                }
+            } else if path == "/oauth/token" {
+                if method != "POST" {
+                    (
+                        "405 Method Not Allowed",
+                        "{\"error\":\"invalid_request\"}\n".into(),
+                        "application/json",
+                    )
+                } else {
+                    let form = oauth::parse_form(body_bytes);
+                    let json_body: Option<serde_json::Value> =
+                        serde_json::from_str(body_bytes).ok();
+                    let grant = form
+                        .get("grant_type")
+                        .cloned()
+                        .or_else(|| {
+                            json_body
+                                .as_ref()
+                                .and_then(|v| v.get("grant_type"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default();
+                    let device_code = form
+                        .get("device_code")
+                        .cloned()
+                        .or_else(|| {
+                            json_body
+                                .as_ref()
+                                .and_then(|v| v.get("device_code"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default();
+                    if grant != "urn:ietf:params:oauth:grant-type:device_code"
+                        && grant != "device_code"
+                    {
+                        (
+                            "400 Bad Request",
+                            "{\"error\":\"unsupported_grant_type\"}\n".into(),
+                            "application/json",
+                        )
+                    } else {
+                        let mut store = oauth::DeviceStore::load(&oauth_devices);
+                        let now = chrono::Utc::now();
+                        let outcome: Result<(String, String), (String, String)> = {
+                            let d = store.find_device_code(&device_code);
+                            match d {
+                                None => Err((
+                                    "invalid_grant".into(),
+                                    "unknown device_code".into(),
+                                )),
+                                Some(d) => {
+                                    let exp = chrono::DateTime::parse_from_rfc3339(&d.expires_at)
+                                        .map(|t| t.with_timezone(&chrono::Utc))
+                                        .ok();
+                                    if exp.map(|e| e <= now).unwrap_or(true) {
+                                        Err((
+                                            "expired_token".into(),
+                                            "device_code expired".into(),
+                                        ))
+                                    } else if d.status == oauth::DeviceStatus::Pending {
+                                        Err((
+                                            "authorization_pending".into(),
+                                            "waiting for user".into(),
+                                        ))
+                                    } else if d.status == oauth::DeviceStatus::Denied {
+                                        Err(("access_denied".into(), "user denied".into()))
+                                    } else if d.status == oauth::DeviceStatus::Approved {
+                                        if let Some(ref t) = d.access_token {
+                                            Ok((t.clone(), d.user.clone().unwrap_or_default()))
+                                        } else {
+                                            let user =
+                                                d.user.clone().unwrap_or_else(|| "operator".into());
+                                            let issuer =
+                                                public_base.trim_end_matches('/').to_string();
+                                            match oauth::mint_access_token(
+                                                &user,
+                                                &issuer,
+                                                8,
+                                                &jwt_private,
+                                                None,
+                                            ) {
+                                                Ok(tok) => Ok((tok, user)),
+                                                Err(e) => Err(("server_error".into(), e)),
+                                            }
+                                        }
+                                    } else {
+                                        Err((
+                                            "invalid_grant".into(),
+                                            "device not usable".into(),
+                                        ))
+                                    }
+                                }
+                            }
+                        };
+                        match outcome {
+                            Ok((tok, user)) => {
+                                store.set_token(&device_code, tok.clone());
+                                let _ = store.save(&oauth_devices);
+                                let body = serde_json::json!({
+                                    "access_token": tok,
+                                    "token_type": "Bearer",
+                                    "expires_in": 28800,
+                                    "scope": "openid profile",
+                                    "sub": user,
+                                });
+                                match serde_json::to_string(&body) {
+                                    Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!("{{\"error\":\"{e}\"}}\n"),
+                                        "application/json",
+                                    ),
+                                }
+                            }
+                            Err((code, desc)) => {
+                                let body = serde_json::json!({
+                                    "error": code,
+                                    "error_description": desc,
+                                });
+                                (
+                                    "400 Bad Request",
+                                    format!(
+                                        "{}\n",
+                                        serde_json::to_string(&body).unwrap_or_default()
+                                    ),
+                                    "application/json",
+                                )
+                            }
+                        }
+                    }
                 }
             } else if path == "/health" || path.starts_with("/health/") {
                 (
@@ -568,7 +809,7 @@ async fn health_server(
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /posture /events /metrics /fleet /jwks.json /.well-known/openid-configuration /mesh/peers (also /api/v1/*)\n".into(),
+                    "try GET /health /status /oauth/device /jwks.json /.well-known/openid-configuration ; POST /oauth/device_authorization /oauth/token /oauth/device_approve\n".into(),
                     "text/plain",
                 )
             };
@@ -592,6 +833,8 @@ pub async fn run_daemon(
     fleet_policy_path: PathBuf,
     mesh_peers_path: PathBuf,
     jwks_path: PathBuf,
+    jwt_private: PathBuf,
+    oauth_devices: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -689,8 +932,10 @@ pub async fn run_daemon(
         let fp = fleet_policy_path.clone();
         let mp = mesh_peers_path.clone();
         let jw = jwks_path.clone();
+        let jp = jwt_private.clone();
+        let od = oauth_devices.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp, jw).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp, jw, jp, od).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
@@ -706,6 +951,8 @@ pub async fn run_daemon(
             println!("[AEGISD] mesh peers      : GET/POST http://{health_bind}/mesh/peers");
             println!("[AEGISD] OIDC discovery  : http://{health_bind}/.well-known/openid-configuration");
             println!("[AEGISD] JWKS            : http://{health_bind}/jwks.json");
+            println!("[AEGISD] OAuth device    : POST http://{health_bind}/oauth/device_authorization");
+            println!("[AEGISD] OAuth approve   : http://{health_bind}/oauth/device");
             println!("[AEGISD] console API     : http://{health_bind}/api/v1/* (aliases)");
         }
     }
@@ -747,6 +994,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             fleet_policy,
             mesh_peers,
             jwks,
+            jwt_private,
+            oauth_devices,
         } => {
             run_daemon(
                 event_log,
@@ -757,6 +1006,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 fleet_policy,
                 mesh_peers,
                 jwks,
+                jwt_private,
+                oauth_devices,
             )
             .await?;
         }

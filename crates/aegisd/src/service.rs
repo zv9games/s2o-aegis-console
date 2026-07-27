@@ -58,8 +58,17 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         process_id: None,
     })?;
 
-    let (event_log, health_bind, no_health, fleet, fleet_policy, mesh_peers, jwks) =
-        service_start_config();
+    let (
+        event_log,
+        health_bind,
+        no_health,
+        fleet,
+        fleet_policy,
+        mesh_peers,
+        jwks,
+        jwt_private,
+        oauth_devices,
+    ) = service_start_config();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -86,6 +95,8 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         fleet_policy,
         mesh_peers,
         jwks,
+        jwt_private,
+        oauth_devices,
     );
     rt.block_on(async {
         tokio::select! {
@@ -108,7 +119,18 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 /// Parse start-like flags from the process command line after `--run-as-service`.
-fn service_start_config() -> (PathBuf, String, bool, PathBuf, PathBuf, PathBuf, PathBuf) {
+fn service_start_config(
+) -> (
+    PathBuf,
+    String,
+    bool,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+) {
     let args: Vec<String> = std::env::args().collect();
     let mut event_log = default_event_log();
     let mut health_bind = "127.0.0.1:9090".to_string();
@@ -117,6 +139,8 @@ fn service_start_config() -> (PathBuf, String, bool, PathBuf, PathBuf, PathBuf, 
     let mut fleet_policy = default_fleet_policy_path();
     let mut mesh_peers = default_mesh_peers_path();
     let mut jwks = default_jwks_path();
+    let mut jwt_private = default_jwt_private_path();
+    let mut oauth_devices = default_oauth_devices_path();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -153,6 +177,18 @@ fn service_start_config() -> (PathBuf, String, bool, PathBuf, PathBuf, PathBuf, 
             "--jwks" => {
                 if let Some(v) = args.get(i + 1) {
                     jwks = PathBuf::from(v);
+                    i += 1;
+                }
+            }
+            "--jwt-private" => {
+                if let Some(v) = args.get(i + 1) {
+                    jwt_private = PathBuf::from(v);
+                    i += 1;
+                }
+            }
+            "--oauth-devices" => {
+                if let Some(v) = args.get(i + 1) {
+                    oauth_devices = PathBuf::from(v);
                     i += 1;
                 }
             }
@@ -199,6 +235,8 @@ fn service_start_config() -> (PathBuf, String, bool, PathBuf, PathBuf, PathBuf, 
         fleet_policy,
         mesh_peers,
         jwks,
+        jwt_private,
+        oauth_devices,
     )
 }
 
@@ -256,4 +294,27 @@ fn default_jwks_path() -> PathBuf {
             .join("jwks.json");
     }
     PathBuf::from(r"C:\ProgramData\S2O\Aegis\jwt\jwks.json")
+}
+
+fn default_jwt_private_path() -> PathBuf {
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(base)
+            .join("S2O")
+            .join("Aegis")
+            .join("data")
+            .join("jwt")
+            .join("jwt-private.pem");
+    }
+    PathBuf::from(r"C:\ProgramData\S2O\Aegis\jwt\jwt-private.pem")
+}
+
+fn default_oauth_devices_path() -> PathBuf {
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(base)
+            .join("S2O")
+            .join("Aegis")
+            .join("data")
+            .join("oauth-devices.json");
+    }
+    PathBuf::from(r"C:\ProgramData\S2O\Aegis\oauth-devices.json")
 }

@@ -171,7 +171,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate remote JWKS URL + mesh multi-peer registry + `/api/v1` console surface  
 - ✅ OIDC well-known discovery + lab IdP stub on aegisd  
 - ✅ CyberDNS system-dns bind + EDR rich process intel (cmdline/ppid)  
-- ⏳ Full YARA-X / kernel ETW / boringtun / OAuth code flow (later)  
+- ✅ OAuth device-code lab flow (RFC 8628) on aegisd + Gate client  
+- ⏳ Full YARA-X / kernel ETW / boringtun / browser OAuth code UI (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

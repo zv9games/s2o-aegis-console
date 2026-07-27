@@ -212,6 +212,12 @@ cargo run -p aegisd -- start --health-bind 127.0.0.1:9090 --jwks .aegis/jwt/jwks
 cargo run -p cyberztna -- jwt oidc-discover http://127.0.0.1:9090 --fetch-jwks
 cargo run -p cyberztna -- jwt mint alice --rsa-key .aegis/jwt/jwt-private.pem --issuer http://127.0.0.1:9090
 cargo run -p cyberztna -- serve --oidc-issuer http://127.0.0.1:9090 --upstream https://example.com --min-score 40
+
+# OAuth device-code (RFC 8628 lab):
+# terminal A: cyberztna oauth device --issuer http://127.0.0.1:9090
+# terminal B: cyberztna oauth approve ABCD-EFGH --user alice --issuer http://127.0.0.1:9090
+# (or open verification_uri in a browser)
+# Use access_token as: Authorization: Bearer …
 ```
 
 ### Mesh multi-peer

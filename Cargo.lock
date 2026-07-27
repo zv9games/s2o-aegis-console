@@ -50,6 +50,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "jsonwebtoken",
  "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",

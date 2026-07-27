@@ -46,6 +46,11 @@ enum Commands {
         #[command(subcommand)]
         command: JwtCmd,
     },
+    /// OAuth 2.0 device-code client (RFC 8628 lab flow against aegisd)
+    Oauth {
+        #[command(subcommand)]
+        command: OauthCmd,
+    },
     /// Run posture-gated reverse proxy
     Serve {
         /// Override listen address
@@ -209,6 +214,28 @@ enum JwtCmd {
         fetch_jwks: bool,
         #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
         jwks_out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum OauthCmd {
+    /// Start device authorization and poll until approved (prints access_token)
+    Device {
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        issuer: String,
+        #[arg(long, default_value = "s2o-gate")]
+        client_id: String,
+        /// Max seconds to poll
+        #[arg(long, default_value_t = 120)]
+        timeout_secs: u64,
+    },
+    /// Approve a user_code on the issuer (lab operator step)
+    Approve {
+        user_code: String,
+        #[arg(long, default_value = "operator")]
+        user: String,
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        issuer: String,
     },
 }
 
@@ -587,6 +614,133 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("INVALID: {e}");
                         std::process::exit(3);
                     }
+                }
+            }
+        },
+        Commands::Oauth { command } => match command {
+            OauthCmd::Device {
+                issuer,
+                client_id,
+                timeout_secs,
+            } => {
+                let base = issuer.trim_end_matches('/');
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(20))
+                    .build()?;
+                let start = client
+                    .post(format!("{base}/oauth/device_authorization"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(format!("client_id={client_id}&scope=openid"))
+                    .send()
+                    .await?;
+                if !start.status().is_success() {
+                    eprintln!(
+                        "[gate] device_authorization failed: {} {}",
+                        start.status(),
+                        start.text().await.unwrap_or_default()
+                    );
+                    std::process::exit(1);
+                }
+                let body: serde_json::Value = start.json().await?;
+                let device_code = body["device_code"].as_str().unwrap_or("").to_string();
+                let user_code = body["user_code"].as_str().unwrap_or("").to_string();
+                let verify_uri = body["verification_uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                let interval = body["interval"].as_u64().unwrap_or(2).max(1);
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      OAuth device login                               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" User code : {}", user_code.yellow().bold());
+                println!(" Open      : {verify_uri}");
+                println!(" Or run    : cyberztna oauth approve {user_code} --issuer {base}");
+                println!(" Polling token endpoint...");
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+                loop {
+                    if std::time::Instant::now() > deadline {
+                        eprintln!("[gate] device login timed out");
+                        std::process::exit(1);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                    let tok = client
+                        .post(format!("{base}/oauth/token"))
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(format!(
+                            "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code={device_code}&client_id={client_id}"
+                        ))
+                        .send()
+                        .await?;
+                    let status = tok.status();
+                    let text = tok.text().await.unwrap_or_default();
+                    if status.is_success() {
+                        let v: serde_json::Value =
+                            serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+                        let access = v["access_token"].as_str().unwrap_or("");
+                        println!(
+                            "{}",
+                            format!("[gate] access_token issued (sub={:?})", v.get("sub"))
+                                .green()
+                                .bold()
+                        );
+                        println!("{access}");
+                        println!(" Header : Authorization: Bearer <token>");
+                        break;
+                    }
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        let err = v["error"].as_str().unwrap_or("");
+                        if err == "authorization_pending" {
+                            eprint!(".");
+                            continue;
+                        }
+                        eprintln!("\n[gate] token error: {text}");
+                        std::process::exit(1);
+                    }
+                    eprintln!("\n[gate] token HTTP {status}: {text}");
+                    std::process::exit(1);
+                }
+            }
+            OauthCmd::Approve {
+                user_code,
+                user,
+                issuer,
+            } => {
+                let base = issuer.trim_end_matches('/');
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()?;
+                let res = client
+                    .post(format!("{base}/oauth/device_approve"))
+                    .json(&serde_json::json!({
+                        "user_code": user_code,
+                        "user": user,
+                    }))
+                    .send()
+                    .await?;
+                let status = res.status();
+                let body = res.text().await.unwrap_or_default();
+                if status.is_success() {
+                    println!(
+                        "{}",
+                        format!("[gate] approved user_code={user_code} user={user}")
+                            .green()
+                            .bold()
+                    );
+                } else {
+                    eprintln!("[gate] approve failed {status}: {body}");
+                    std::process::exit(1);
                 }
             }
         },

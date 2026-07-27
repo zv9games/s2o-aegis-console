@@ -72,8 +72,9 @@
 - aegisd lab IdP stub: `/.well-known/openid-configuration` + `/jwks.json`
 - CyberDNS `system-dns show|backup|set|restore` (OS resolver bind + backup)
 - CyberEDR `ps --rich` / `watch --rich` (cmdline + parent PID via WMI/ps)
+- OAuth 2.0 device-code (RFC 8628 lab): aegisd `/oauth/device_*` + `cyberztna oauth device|approve`
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, kernel ETW/eBPF hooks
 - Transparent DNS redirector, embedded boringtun
-- Full OAuth authorization-code login UI
+- Full browser OAuth authorization-code UI
