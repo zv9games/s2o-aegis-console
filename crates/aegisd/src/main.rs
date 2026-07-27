@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use s2o_kernel::{
     apply_policy, collect_platform_status, create_firewall_engine, demo_mode, host_id,
-    load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
+    load_policy_file, FirewallEngineHandle, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
 };
 use s2o_schema::{
     AegisEvent, EventAction, EventKind, HealthState, ProductId, Severity, SCHEMA_VERSION,
@@ -15,6 +15,8 @@ use s2o_schema::{
 use s2o_store::EventStore;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 #[derive(Parser)]
 #[command(name = "aegisd")]
@@ -32,6 +34,12 @@ enum Commands {
     Start {
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        /// Local health HTTP bind (empty to disable). Example: 127.0.0.1:9090
+        #[arg(long, default_value = "127.0.0.1:9090")]
+        health_bind: String,
+        /// Disable the health HTTP endpoint
+        #[arg(long)]
+        no_health: bool,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -64,20 +72,82 @@ enum PolicyCmd {
     },
 }
 
+/// Minimal HTTP/1.0 health server (no extra deps): GET /health, GET /status
+async fn health_server(
+    bind: String,
+    fw: FirewallEngineHandle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = TcpListener::bind(&bind).await?;
+    loop {
+        let (mut sock, _) = listener.accept().await?;
+        let fw = fw.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            let n = match sock.read(&mut buf).await {
+                Ok(n) if n > 0 => n,
+                _ => return,
+            };
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("/");
+
+            let (code, body, ctype) = if path.starts_with("/health") {
+                (
+                    "200 OK",
+                    format!(
+                        "{{\"ok\":true,\"platform\":\"S2O Aegis\",\"phase\":\"{PHASE_LABEL}\",\"kernel\":\"{KERNEL_VERSION}\"}}\n"
+                    ),
+                    "application/json",
+                )
+            } else if path.starts_with("/status") {
+                match collect_platform_status(&fw).await {
+                    st => match serde_json::to_string(&st) {
+                        Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            format!("{{\"error\":\"{e}\"}}\n"),
+                            "application/json",
+                        ),
+                    },
+                }
+            } else {
+                (
+                    "404 Not Found",
+                    "try GET /health or /status\n".into(),
+                    "text/plain",
+                )
+            };
+
+            let resp = format!(
+                "HTTP/1.0 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+        });
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let fw = create_firewall_engine();
 
     match cli.command {
-        Commands::Start { event_log } => {
+        Commands::Start {
+            event_log,
+            health_bind,
+            no_health,
+        } => {
             println!(
                 "{}",
                 "=========================================================".cyan()
             );
             println!(
                 "{}",
-                "     S2O AEGIS MASTER DAEMON  (Phase 1 foundation)       "
+                "     S2O AEGIS MASTER DAEMON  (Phase 2/3 shell)          "
                     .bold()
                     .green()
             );
@@ -144,13 +214,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             store.append(&ev)?;
             println!("[AEGISD] health event written to store");
 
+            if !no_health && !health_bind.is_empty() {
+                let bind = health_bind.clone();
+                let fw_h = create_firewall_engine();
+                tokio::spawn(async move {
+                    if let Err(e) = health_server(bind, fw_h).await {
+                        eprintln!("[AEGISD] health server error: {e}");
+                    }
+                });
+                println!("[AEGISD] health HTTP     : http://{health_bind}/health");
+                println!("[AEGISD] status JSON     : http://{health_bind}/status");
+            }
+
             println!(
                 "{}",
                 "=========================================================".cyan()
             );
             println!(
                 "{}",
-                "  Phase 1: kernel + 9-world matrix + Cyberwall T0. Ctrl+C to stop."
+                "  Suite kernel live. Ctrl+C to stop."
                     .bold()
                     .yellow()
             );

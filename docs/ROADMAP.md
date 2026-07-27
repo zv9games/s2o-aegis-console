@@ -142,6 +142,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ `scripts/dev-smoke.ps1` suite smoke  
 - ✅ Gate HTTPS self-signed (`cyberztna serve --tls`)  
 - ✅ Operator install script + OPERATOR.md + CHANGELOG  
+- ✅ `aegis report` audit (markdown/JSON)  
+- ✅ `aegisd` local health HTTP (`/health`, `/status`)  
+- ✅ ThreatGrid `--online` feed sync (capped)  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

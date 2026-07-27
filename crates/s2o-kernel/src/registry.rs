@@ -7,7 +7,7 @@ use s2o_schema::{
 use crate::host::demo_mode;
 
 /// Phase label for status envelopes.
-pub const PHASE_LABEL: &str = "phase2_shell";
+pub const PHASE_LABEL: &str = "phase3_access";
 
 /// Active tier ceiling for this milestone (T0 only).
 pub const TIER_CEILING: CapabilityTier = CapabilityTier::T0;
@@ -41,7 +41,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: SHA-256 + local hash/name rules + Defender probe; no full YARA/RT shield",
+            "partial: SHA-256 + local/IOC hash rules + yara-lite + Defender probe; no full YARA-X/RT",
         ),
 
         ProductId::CyberEdr => ModuleStatus::new(

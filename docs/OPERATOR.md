@@ -6,9 +6,21 @@
 cargo run -p aegis-cli -- version
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- status
+cargo run -p aegis-cli -- report
+cargo run -p aegis-cli -- report --json --out .aegis/report.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
 cargo run -p aegis-cli -- events --limit 20
 cargo run -p aegis-cli -- rotate
+```
+
+### Daemon health endpoint
+
+```powershell
+cargo run -p aegisd -- start
+# other terminal:
+curl http://127.0.0.1:9090/health
+curl http://127.0.0.1:9090/status
+# disable: cargo run -p aegisd -- start --no-health
 ```
 
 ## First-time host setup

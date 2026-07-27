@@ -31,6 +31,9 @@
 - `scripts/setup-net-lib.ps1`, `dev-smoke.ps1`, `install-aegis-tools.ps1`
 - GitHub Actions CI (portable Ubuntu + optional Windows net-lib)
 - `docs/OPERATOR.md`
+- `aegis report` markdown/JSON audit
+- `aegisd start` health HTTP on `127.0.0.1:9090` (`/health`, `/status`)
+- ThreatGrid `sync --online` (URLHaus text feed, capped)
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

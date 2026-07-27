@@ -42,9 +42,15 @@ enum Commands {
     Sync {
         #[arg(long, default_value = ".aegis/dns-blocklist.txt")]
         blocklist: PathBuf,
-        /// Optional URL of domain list (one per line)
+        /// Optional URL of domain list (one per line / hosts-style)
         #[arg(long)]
         feed_url: Option<String>,
+        /// Fetch default public URLHaus domain list (capped)
+        #[arg(long)]
+        online: bool,
+        /// Max domains imported from online/feed (safety cap)
+        #[arg(long, default_value_t = 2000)]
+        max_import: usize,
     },
     /// List IOCs (optional kind filter)
     List {
@@ -89,6 +95,44 @@ fn parse_kind(s: &str) -> Option<IocKind> {
         "url" | "uri" => Some(IocKind::Url),
         _ => None,
     }
+}
+
+/// Convert hosts-style / URL lines into domain-per-line, capped.
+fn cap_domain_feed(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut n = 0usize;
+    for line in text.lines() {
+        if n >= max {
+            break;
+        }
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        // hosts: "0.0.0.0 evil.com" or plain domain or full URL
+        let mut token = line
+            .split_whitespace()
+            .last()
+            .unwrap_or(line)
+            .trim()
+            .to_string();
+        if let Some(rest) = token.strip_prefix("http://").or_else(|| token.strip_prefix("https://"))
+        {
+            token = rest.split('/').next().unwrap_or(rest).to_string();
+        }
+        token = token.trim_end_matches('.').to_ascii_lowercase();
+        if token.is_empty() || token.contains(' ') || !token.contains('.') {
+            continue;
+        }
+        // skip pure IPs in domain import
+        if token.parse::<std::net::IpAddr>().is_ok() {
+            continue;
+        }
+        out.push_str(&token);
+        out.push('\n');
+        n += 1;
+    }
+    out
 }
 
 fn guess_kind(target: &str) -> IocKind {
@@ -232,18 +276,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
             );
         }
-        Commands::Sync { blocklist, feed_url } => {
+        Commands::Sync {
+            blocklist,
+            feed_url,
+            online,
+            max_import,
+        } => {
             let mut store = IocStore::load(&cli.store)?;
             let mut imported = store.import_domain_list(&blocklist, "dns-blocklist")?;
-            if let Some(url) = feed_url {
-                println!("[threatgrid] fetching feed {url}...");
-                let client = reqwest::Client::new();
-                let text = client.get(&url).send().await?.text().await?;
-                let tmp = default_store_path().with_extension("feed.tmp");
-                std::fs::write(&tmp, &text)?;
-                imported += store.import_domain_list(&tmp, "feed_url")?;
-                let _ = std::fs::remove_file(&tmp);
+
+            // Prefer explicit URL; --online uses a small public malicious-domain text feed.
+            // Cap imports to avoid unbounded growth.
+            let url = feed_url.or_else(|| {
+                if online {
+                    Some(
+                        "https://urlhaus.abuse.ch/downloads/text_online/"
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            });
+
+            if let Some(url) = url {
+                println!("[threatgrid] fetching feed {url} (max_import={max_import})...");
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .user_agent("S2O-ThreatGrid/0.2 (+local IOC sync)")
+                    .build()?;
+                match client.get(&url).send().await {
+                    Ok(res) if res.status().is_success() => {
+                        let text = res.text().await?;
+                        let capped = cap_domain_feed(&text, max_import);
+                        let tmp = default_store_path().with_extension("feed.tmp");
+                        std::fs::write(&tmp, &capped)?;
+                        let n = store.import_domain_list(&tmp, "online_feed")?;
+                        imported += n;
+                        let _ = std::fs::remove_file(&tmp);
+                        println!("[threatgrid] online feed imported +{n}");
+                    }
+                    Ok(res) => {
+                        eprintln!(
+                            "[threatgrid] feed HTTP {} — continuing with local blocklist only",
+                            res.status()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[threatgrid] feed fetch failed ({e}) — continuing with local only"
+                        );
+                    }
+                }
             }
+
             // Seed a couple of lab domains if empty
             if store.entries.is_empty() {
                 store.upsert(IocEntry {
@@ -274,6 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &[
                     ("imported", serde_json::json!(imported)),
                     ("total", serde_json::json!(store.entries.len())),
+                    ("online", serde_json::json!(online)),
                 ],
                 None,
             );

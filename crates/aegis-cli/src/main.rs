@@ -3,12 +3,12 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use s2o_kernel::{
-    apply_policy, collect_platform_status, create_firewall_engine, demo_mode, host_id,
-    load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
+    apply_policy, collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode,
+    host_id, load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
 };
 use s2o_schema::{HealthState, PolicyDocument, SCHEMA_VERSION};
 use s2o_store::EventStore;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -33,6 +33,14 @@ enum Commands {
     },
     /// Kernel / host doctor
     Doctor,
+    /// Full audit report (status + posture + data files)
+    Report {
+        #[arg(long)]
+        json: bool,
+        /// Write report to path (in addition to stdout)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Policy operations
     Policy {
         #[command(subcommand)]
@@ -186,6 +194,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bl.display(),
                 if bl.exists() { "present" } else { "missing" }
             );
+        }
+        Commands::Report { json, out } => {
+            let status = collect_platform_status(&fw).await;
+            let posture = compute_posture_score(&fw).await?;
+            let event_log = PathBuf::from(".aegis/events.jsonl");
+            let event_count = if event_log.exists() {
+                EventStore::open(&event_log)?.count().unwrap_or(0)
+            } else {
+                0
+            };
+            let event_bytes = if event_log.exists() {
+                EventStore::open(&event_log)?.len_bytes().unwrap_or(0)
+            } else {
+                0
+            };
+            let files = [
+                (".aegis/events.jsonl", event_log.exists()),
+                (".aegis/dns-blocklist.txt", Path::new(".aegis/dns-blocklist.txt").exists()),
+                (".aegis/ioc-store.json", Path::new(".aegis/ioc-store.json").exists()),
+                (".aegis/gate-routes.json", Path::new(".aegis/gate-routes.json").exists()),
+                (".aegis/wg0.conf", Path::new(".aegis/wg0.conf").exists()),
+                (".aegis/defender-rules.json", Path::new(".aegis/defender-rules.json").exists()),
+            ];
+            let by_state = {
+                let mut m = std::collections::BTreeMap::new();
+                for modu in &status.modules {
+                    *m.entry(modu.state.as_str().to_string()).or_insert(0u32) += 1;
+                }
+                m
+            };
+            let report = serde_json::json!({
+                "generated_at": chrono::Utc::now().to_rfc3339(),
+                "platform": status,
+                "posture": posture,
+                "event_log": {
+                    "path": event_log.display().to_string(),
+                    "events": event_count,
+                    "bytes": event_bytes,
+                },
+                "data_files": files.iter().map(|(p, ok)| serde_json::json!({"path": p, "present": ok})).collect::<Vec<_>>(),
+                "module_state_counts": by_state,
+                "kernel_version": KERNEL_VERSION,
+                "schema_version": SCHEMA_VERSION,
+                "phase": PHASE_LABEL,
+                "tier_ceiling": TIER_CEILING.as_str(),
+            });
+            let text = if json {
+                serde_json::to_string_pretty(&report)?
+            } else {
+                let mut md = String::new();
+                md.push_str("# S2O Aegis Audit Report\n\n");
+                md.push_str(&format!("- **Host:** {}\n", status.host_id));
+                md.push_str(&format!("- **OS:** {}\n", status.os.as_str()));
+                md.push_str(&format!("- **Phase:** {}\n", status.phase));
+                md.push_str(&format!("- **Tier:** {}\n", status.tier_ceiling.as_str()));
+                md.push_str(&format!(
+                    "- **Posture:** {} / {} {}\n",
+                    posture.score,
+                    posture.max_score,
+                    if posture.passes(50) { "PASS@50" } else { "BELOW 50" }
+                ));
+                md.push_str(&format!("- **Events:** {event_count} ({event_bytes} bytes)\n\n"));
+                md.push_str("## Modules\n\n");
+                md.push_str("| ID | State | Detail |\n|----|-------|--------|\n");
+                for m in &status.modules {
+                    md.push_str(&format!(
+                        "| {} | {} | {} |\n",
+                        m.id,
+                        m.state.as_str(),
+                        m.detail.replace('|', "/")
+                    ));
+                }
+                md.push_str("\n## Data files\n\n");
+                for (p, ok) in &files {
+                    md.push_str(&format!(
+                        "- `{}`: {}\n",
+                        p,
+                        if *ok { "present" } else { "missing" }
+                    ));
+                }
+                md.push_str("\n## Posture checks\n\n");
+                for c in &posture.checks {
+                    md.push_str(&format!(
+                        "- [{}] **{}** ({}) — {}\n",
+                        if c.pass { "PASS" } else { "FAIL" },
+                        c.id,
+                        c.weight,
+                        c.detail
+                    ));
+                }
+                md
+            };
+            if let Some(path) = out {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, &text)?;
+                eprintln!("[aegis] wrote {}", path.display());
+            }
+            print!("{text}");
+            if !text.ends_with('\n') {
+                println!();
+            }
         }
         Commands::Policy { command } => match command {
             PolicyCmd::Example { kind } => {
