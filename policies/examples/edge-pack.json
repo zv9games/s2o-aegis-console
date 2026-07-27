@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "name": "example-edge-pack",
-  "description": "Enable host firewall and seed DNS blocklist",
+  "description": "Enable host firewall, seed DNS blocklist, sync ThreatGrid IOCs, posture gate",
   "firewall": {
     "enabled": true,
     "outbound_block": false
@@ -13,5 +13,13 @@
       "phishing.test.s2o"
     ],
     "unblock_domains": []
+  },
+  "intel": {
+    "sync_blocklist": true,
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "ioc_store_path": ".aegis/ioc-store.json"
+  },
+  "posture": {
+    "min_score": 40
   }
 }

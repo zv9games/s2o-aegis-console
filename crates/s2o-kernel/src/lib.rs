@@ -5,8 +5,10 @@
 
 mod dns_policy;
 mod host;
+mod intel_policy;
 mod platform;
 mod policy;
+mod posture_policy;
 mod registry;
 mod status;
 mod wall;

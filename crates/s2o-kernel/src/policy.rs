@@ -88,7 +88,26 @@ pub async fn apply_policy(
         skipped.push("dns: no fragment".into());
     }
 
-    skipped.push("other worlds: not routed in policy v0".into());
+    if let Some(intel_intent) = &doc.intel {
+        match crate::intel_policy::apply_intel_intent(intel_intent, store_ref) {
+            Ok(lines) if !lines.is_empty() => applied.extend(lines),
+            Ok(_) => skipped.push("intel: empty fragment".into()),
+            Err(e) => errors.push(format!("intel: {e}")),
+        }
+    } else {
+        skipped.push("intel: no fragment".into());
+    }
+
+    if let Some(posture_intent) = &doc.posture {
+        match crate::posture_policy::apply_posture_intent(posture_intent, fw, store_ref).await {
+            Ok(lines) => applied.extend(lines),
+            Err(e) => errors.push(format!("posture: {e}")),
+        }
+    } else {
+        skipped.push("posture: no fragment".into());
+    }
+
+    skipped.push("mesh/gate: not routed in policy v0".into());
 
     let ok = errors.is_empty() && !applied.is_empty();
     let result = PolicyApplyResult {

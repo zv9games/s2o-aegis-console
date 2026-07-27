@@ -66,7 +66,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             HealthState::Partial,
             os,
             CapabilityTier::T0,
-            "partial: local JSONL store reader; no collectors/correlation",
+            "partial: JSONL read/export/filter/stats/correlate; no live collectors",
         ),
         ProductId::ThreatGrid => ModuleStatus::new(
             product,
@@ -83,20 +83,24 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             product,
             if demo {
                 HealthState::Demo
-            } else if matches!(os, OsFamily::Windows) {
-                HealthState::Partial
             } else {
-                HealthState::NotImplemented
+                HealthState::Partial
             },
             os,
             CapabilityTier::T0,
-            if matches!(os, OsFamily::Windows) {
-                "partial: posture from firewall/Defender signals only"
-            } else {
-                "not implemented on this OS yet"
-            },
+            "partial: posture score (firewall/defender/IOC/DNS/encryption hint); no OIDC/FIDO2",
         ),
-        ProductId::CyberMesh => stub(product, os, demo, "not implemented (Phase 3); orchestrate WireGuard later"),
+        ProductId::CyberMesh => ModuleStatus::new(
+            product,
+            if demo {
+                HealthState::Demo
+            } else {
+                HealthState::Partial
+            },
+            os,
+            CapabilityTier::T0,
+            "partial: real X25519 WireGuard genkey; tunnel up/mesh not implemented",
+        ),
         ProductId::Gate => stub(product, os, demo, "not implemented (Phase 3); ZT app access later"),
         ProductId::Aegis => ModuleStatus::new(
             product,

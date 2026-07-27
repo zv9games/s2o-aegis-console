@@ -41,13 +41,13 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | # | World | Binary | State (typical Windows) |
 |---|--------|--------|-------------------------|
 | 1 | Cyberwall | `cyberwall` | **implemented** — COM INetFwPolicy2 via `s2o_net_lib` |
-| 2 | CyberDNS | `cyberdns` | **partial** — DoH + file blocklist; no full proxy |
-| 3 | CyberDefender | `cyberdefender` | **partial** — SHA-256 scan scaffold |
-| 4 | CyberEDR | `cyberedr` | **partial** — IP Helper TCP table |
-| 5 | CyberLog | `cybersiem` | **partial** — JSONL reader/export |
+| 2 | CyberDNS | `cyberdns` | **partial** — DoH + blocklist + IOC + UDP proxy |
+| 3 | CyberDefender | `cyberdefender` | **partial** — hash/name/yara-lite + IOC hashes |
+| 4 | CyberEDR | `cyberedr` | **partial** — TCP + process inventory + heuristics |
+| 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats/correlate |
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
-| 7 | CyberID | `cyberid` | **partial** — posture from FW/Defender |
-| 8 | CyberMesh | `cybermesh` | **not_implemented** |
+| 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
+| 8 | CyberMesh | `cybermesh` | **partial** — real X25519 genkey (no tunnel yet) |
 | 9 | Gate | `cyberztna` | **not_implemented** |
 | — | Kernel | `aegisd` | **implemented** — status, policy, start |
 

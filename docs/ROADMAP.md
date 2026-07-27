@@ -132,7 +132,11 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ DNS + Defender consume ThreatGrid IOCs  
 - ✅ CyberEDR process inventory + heuristic alerts  
 - ✅ yara-lite content patterns (not full YARA-X)  
-- ⏳ Full YARA-X / ETW hooks / system DNS hijack (later)  
+- ✅ CyberID posture score + events + min_score gate  
+- ✅ CyberLog stats / filter / correlate  
+- ✅ Policy intel sync + posture gate fragments  
+- ✅ CyberMesh real X25519 WireGuard keygen  
+- ⏳ Full YARA-X / ETW / system DNS hijack / WG tunnel up (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

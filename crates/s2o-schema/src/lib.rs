@@ -323,6 +323,10 @@ pub struct PolicyDocument {
     pub firewall: Option<FirewallPolicyIntent>,
     #[serde(default)]
     pub dns: Option<DnsPolicyIntent>,
+    #[serde(default)]
+    pub intel: Option<IntelPolicyIntent>,
+    #[serde(default)]
+    pub posture: Option<PosturePolicyIntent>,
 }
 
 impl PolicyDocument {
@@ -336,6 +340,8 @@ impl PolicyDocument {
                 outbound_block: Some(false),
             }),
             dns: None,
+            intel: None,
+            posture: None,
         }
     }
 
@@ -343,7 +349,7 @@ impl PolicyDocument {
         Self {
             schema_version: POLICY_SCHEMA_VERSION.to_string(),
             name: "example-edge-pack".into(),
-            description: Some("Enable firewall + seed DNS blocklist".into()),
+            description: Some("Enable firewall + seed DNS blocklist + IOC sync".into()),
             firewall: Some(FirewallPolicyIntent {
                 enabled: Some(true),
                 outbound_block: Some(false),
@@ -352,6 +358,14 @@ impl PolicyDocument {
                 blocklist_path: Some(".aegis/dns-blocklist.txt".into()),
                 block_domains: vec!["malware.test.s2o".into(), "phishing.test.s2o".into()],
                 unblock_domains: vec![],
+            }),
+            intel: Some(IntelPolicyIntent {
+                sync_blocklist: true,
+                blocklist_path: Some(".aegis/dns-blocklist.txt".into()),
+                ioc_store_path: Some(".aegis/ioc-store.json".into()),
+            }),
+            posture: Some(PosturePolicyIntent {
+                min_score: Some(40),
             }),
         }
     }
@@ -380,6 +394,26 @@ pub struct DnsPolicyIntent {
     /// Domains to remove from the blocklist.
     #[serde(default)]
     pub unblock_domains: Vec<String>,
+}
+
+/// ThreatGrid / local IOC intents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntelPolicyIntent {
+    /// Import DNS blocklist into IOC store.
+    #[serde(default)]
+    pub sync_blocklist: bool,
+    #[serde(default)]
+    pub blocklist_path: Option<String>,
+    #[serde(default)]
+    pub ioc_store_path: Option<String>,
+}
+
+/// Posture gate intent (CyberID signals via kernel).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PosturePolicyIntent {
+    /// Minimum posture score (0–100) required after apply.
+    #[serde(default)]
+    pub min_score: Option<u32>,
 }
 
 /// Result of applying one policy document through the kernel.
