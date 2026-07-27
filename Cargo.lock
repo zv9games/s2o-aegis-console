@@ -19,6 +19,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c71b1793ee61086797f5c80b6efa2b8ffa6d5dd703f118545808a7f2e27f7046"
 
 [[package]]
+name = "aegis-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "colored",
+ "s2o-kernel",
+ "s2o-schema",
+ "s2o-store",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aegisd"
 version = "0.1.0"
 dependencies = [
@@ -759,10 +772,12 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
 name = "cyberdefender"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "colored",
+ "s2o-schema",
+ "s2o-store",
  "s2o_net_lib",
  "serde",
  "serde_json",
@@ -786,11 +801,13 @@ dependencies = [
 
 [[package]]
 name = "cyberedr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",
  "colored",
+ "s2o-schema",
+ "s2o-store",
  "s2o_net_lib",
  "serde",
  "serde_json",

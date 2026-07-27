@@ -321,6 +321,8 @@ pub struct PolicyDocument {
     pub description: Option<String>,
     #[serde(default)]
     pub firewall: Option<FirewallPolicyIntent>,
+    #[serde(default)]
+    pub dns: Option<DnsPolicyIntent>,
 }
 
 impl PolicyDocument {
@@ -332,6 +334,24 @@ impl PolicyDocument {
             firewall: Some(FirewallPolicyIntent {
                 enabled: Some(true),
                 outbound_block: Some(false),
+            }),
+            dns: None,
+        }
+    }
+
+    pub fn example_edge_pack() -> Self {
+        Self {
+            schema_version: POLICY_SCHEMA_VERSION.to_string(),
+            name: "example-edge-pack".into(),
+            description: Some("Enable firewall + seed DNS blocklist".into()),
+            firewall: Some(FirewallPolicyIntent {
+                enabled: Some(true),
+                outbound_block: Some(false),
+            }),
+            dns: Some(DnsPolicyIntent {
+                blocklist_path: Some(".aegis/dns-blocklist.txt".into()),
+                block_domains: vec!["malware.test.s2o".into(), "phishing.test.s2o".into()],
+                unblock_domains: vec![],
             }),
         }
     }
@@ -346,6 +366,20 @@ pub struct FirewallPolicyIntent {
     /// Outbound isolation / airplane-style block.
     #[serde(default)]
     pub outbound_block: Option<bool>,
+}
+
+/// DNS intents — local file blocklist (CyberDNS / kernel).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsPolicyIntent {
+    /// Blocklist file path (default `.aegis/dns-blocklist.txt` when applying).
+    #[serde(default)]
+    pub blocklist_path: Option<String>,
+    /// Domains to add to the blocklist.
+    #[serde(default)]
+    pub block_domains: Vec<String>,
+    /// Domains to remove from the blocklist.
+    #[serde(default)]
+    pub unblock_domains: Vec<String>,
 }
 
 /// Result of applying one policy document through the kernel.

@@ -78,8 +78,16 @@ pub async fn apply_policy(
         skipped.push("firewall: no fragment".into());
     }
 
-    // DNS blocklist is CLI-driven in Phase 2; policy routing later.
-    skipped.push("dns: use cyberdns block/unblock (policy DNS fragment later)".into());
+    if let Some(dns_intent) = &doc.dns {
+        match crate::dns_policy::apply_dns_intent(dns_intent, store_ref) {
+            Ok(lines) if !lines.is_empty() => applied.extend(lines),
+            Ok(_) => skipped.push("dns: empty fragment".into()),
+            Err(e) => errors.push(format!("dns: {e}")),
+        }
+    } else {
+        skipped.push("dns: no fragment".into());
+    }
+
     skipped.push("other worlds: not routed in policy v0".into());
 
     let ok = errors.is_empty() && !applied.is_empty();

@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Portable suite crates (no Windows-only s2o_net_lib)
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check portable crates
+        run: |
+          cargo check \
+            -p s2o-schema \
+            -p s2o-store \
+            -p s2o-bus \
+            -p s2o-kernel \
+            -p cyberwall-core \
+            -p cyberwall-backend-linux \
+            -p cyberwall-backend-macos \
+            -p cyberwall-cli \
+            -p cyberdns \
+            -p cybersiem \
+            -p cyberintel \
+            -p cybermesh \
+            -p cyberztna \
+            -p aegisd \
+            -p aegis-cli
+      - name: Test schema/store
+        run: cargo test -p s2o-schema -p s2o-store
+
+  # Full Windows suite when net-lib is available as a sibling checkout
+  windows-suite:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aegis-console
+      # Optional: checkout net-lib if public; skip gracefully if missing
+      - name: Try checkout net-lib
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: zv9games/s2o-net-lib
+          path: net-lib
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check if net-lib present
+        id: netlib
+        shell: pwsh
+        run: |
+          if (Test-Path net-lib/Cargo.toml) {
+            echo "present=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "present=false" >> $env:GITHUB_OUTPUT
+            Write-Host "net-lib not available; running portable subset only"
+          }
+      - name: Portable check on Windows
+        working-directory: aegis-console
+        shell: pwsh
+        run: |
+          cargo check -p s2o-schema -p s2o-store -p s2o-bus -p cyberwall-core -p cyberdns -p cybersiem
+      - name: Full Windows engines
+        if: steps.netlib.outputs.present == 'true'
+        working-directory: aegis-console
+        shell: pwsh
+        run: |
+          # path deps expect ../net-lib from worktree parent; structure:
+          # runner/
+          #   aegis-console/
+          #   net-lib/
+          cargo check -p s2o-kernel -p aegisd -p aegis-cli -p cyberwall-cli -p cyberdefender -p cyberedr -p cyberid

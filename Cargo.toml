@@ -19,6 +19,7 @@ members = [
     "crates/cyberid",
     "crates/cyberztna",
     "crates/aegisd",
+    "crates/aegis-cli",
 ]
 # Suite crates first — legacy egui root is optional / frozen.
 default-members = [
@@ -40,6 +41,7 @@ default-members = [
     "crates/cyberid",
     "crates/cyberztna",
     "crates/aegisd",
+    "crates/aegis-cli",
 ]
 
 [package]

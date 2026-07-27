@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-edge-pack",
+  "description": "Enable host firewall and seed DNS blocklist",
+  "firewall": {
+    "enabled": true,
+    "outbound_block": false
+  },
+  "dns": {
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "block_domains": [
+      "malware.test.s2o",
+      "phishing.test.s2o"
+    ],
+    "unblock_domains": []
+  }
+}

@@ -3,6 +3,7 @@
 //! Owns: host identity, honesty matrix, policy routing, event emission hooks.
 //! Does not own: OS firewall COM / nft details (worlds do).
 
+mod dns_policy;
 mod host;
 mod platform;
 mod policy;

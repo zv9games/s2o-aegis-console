@@ -121,7 +121,12 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 
 - ✅ Cyberwall actions emit `AegisEvent` (CLI + policy apply)  
 - ✅ CyberDNS DoH + persistent file blocklist + events  
-- ⏳ Defender / EDR deepen; more events from real actions  
+- ✅ DNS policy fragment in kernel (`dns.block_domains`)  
+- ✅ Defender hash scan + Defender service probe + events  
+- ✅ EDR TCP snapshot + summary events  
+- ✅ `aegis` meta-CLI (`doctor` / `status` / `policy` / `events`)  
+- ✅ GitHub Actions CI (portable Ubuntu + optional Windows+net-lib)  
+- ⏳ YARA / ETW / DNS local proxy (later in P2)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

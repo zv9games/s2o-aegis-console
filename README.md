@@ -73,22 +73,25 @@ cargo check
 cargo build -p aegisd -p cyberwall-cli -p cyberdns -p cybersiem
 ```
 
-### 3. Status & policy
+### 3. One front door (`aegis`)
 
 ```powershell
-cargo run -p aegisd -- status
+cargo run -p aegis-cli -- doctor
+cargo run -p aegis-cli -- status
+cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
+cargo run -p aegis-cli -- events --limit 20
+# deep CLIs still available:
 cargo run -p aegisd -- status --json
 cargo run -p cyberwall-cli -- status
-cargo run -p aegisd -- policy apply policies/examples/wall-enable.json
 ```
 
-### 4. DNS blocklist + resolve
+### 4. DNS / Defender / EDR
 
 ```powershell
 cargo run -p cyberdns -- block evil.example
 cargo run -p cyberdns -- resolve evil.example   # exit 3 if blocked
-cargo run -p cyberdns -- resolve example.com
-cargo run -p cyberdns -- list
+cargo run -p cyberdefender -- scan Cargo.toml
+cargo run -p cyberedr -- processes --limit 16
 cargo run -p cybersiem -- events
 ```
 

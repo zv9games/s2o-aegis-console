@@ -57,7 +57,11 @@ enum PolicyCmd {
         event_log: PathBuf,
     },
     /// Print an example policy document
-    Example,
+    Example {
+        /// wall | edge
+        #[arg(long, default_value = "edge")]
+        kind: String,
+    },
 }
 
 #[tokio::main]
@@ -210,8 +214,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Policy { command } => match command {
-            PolicyCmd::Example => {
-                let doc = s2o_schema::PolicyDocument::example_wall_enable();
+            PolicyCmd::Example { kind } => {
+                let doc = if kind.eq_ignore_ascii_case("wall") {
+                    s2o_schema::PolicyDocument::example_wall_enable()
+                } else {
+                    s2o_schema::PolicyDocument::example_edge_pack()
+                };
                 println!("{}", serde_json::to_string_pretty(&doc)?);
             }
             PolicyCmd::Apply { path, event_log } => {
