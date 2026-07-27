@@ -47,7 +47,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats + UDP syslog collect |
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC + capped multi-feed online sync |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
-| 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + WG conf; optional system wg |
+| 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + conf/peers + doctor; optional system wg |
 | 9 | Gate | `cyberztna` | **partial** — posture proxy + mTLS/JWT/OIDC + OAuth device/auth-code lab |
 | — | Kernel | `aegisd` | **implemented** — status, policy, start |
 
