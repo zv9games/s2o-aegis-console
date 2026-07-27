@@ -33,6 +33,7 @@ jobs:
             -p cyberintel \
             -p cybermesh \
             -p cyberztna \
+            -p cybermesh \
             -p aegisd \
             -p aegis-cli
       - name: Test schema/store/ioc

@@ -136,7 +136,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberLog stats / filter / correlate  
 - ✅ Policy intel sync + posture gate fragments  
 - ✅ CyberMesh real X25519 WireGuard keygen  
-- ⏳ Full YARA-X / ETW / system DNS hijack / WG tunnel up (later)  
+- ✅ Gate MVP: posture-gated HTTP reverse proxy (`cyberztna serve`)  
+- ⏳ Full YARA-X / ETW / system DNS hijack / WG tunnel up / mTLS Gate (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

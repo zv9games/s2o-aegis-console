@@ -101,7 +101,17 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             CapabilityTier::T0,
             "partial: real X25519 WireGuard genkey; tunnel up/mesh not implemented",
         ),
-        ProductId::Gate => stub(product, os, demo, "not implemented (Phase 3); ZT app access later"),
+        ProductId::Gate => ModuleStatus::new(
+            product,
+            if demo {
+                HealthState::Demo
+            } else {
+                HealthState::Partial
+            },
+            os,
+            CapabilityTier::T0,
+            "partial: posture-gated HTTP reverse proxy (cyberztna serve); no mTLS/OIDC",
+        ),
         ProductId::Aegis => ModuleStatus::new(
             product,
             HealthState::Implemented,
@@ -112,6 +122,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
     }
 }
 
+#[allow(dead_code)]
 fn stub(product: ProductId, os: OsFamily, demo: bool, detail: &str) -> ModuleStatus {
     ModuleStatus::new(
         product,

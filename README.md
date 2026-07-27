@@ -48,7 +48,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
 | 8 | CyberMesh | `cybermesh` | **partial** — real X25519 genkey (no tunnel yet) |
-| 9 | Gate | `cyberztna` | **not_implemented** |
+| 9 | Gate | `cyberztna` | **partial** — posture-gated HTTP reverse proxy |
 | — | Kernel | `aegisd` | **implemented** — status, policy, start |
 
 `AEGIS_DEMO=1` can label stubs as demo — **never the default**.
@@ -102,6 +102,11 @@ cargo run -p cyberedr -- alerts
 cargo run -p cyberintel -- sync
 cargo run -p cyberintel -- lookup malware.test.s2o
 cargo run -p cybersiem -- events
+
+# Gate (ZTNA MVP) — posture-gated reverse proxy
+cargo run -p cyberztna -- init
+cargo run -p cyberztna -- check --min-score 50
+cargo run -p cyberztna -- serve --upstream https://example.com --listen 127.0.0.1:18443
 ```
 
 ---
