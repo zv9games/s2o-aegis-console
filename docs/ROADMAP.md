@@ -176,6 +176,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ YARA-X engine in CyberDefender  
 - ✅ Windows Cyberwall declarative `apply_policy` (managed `S2O-Aegis-*` netsh rules)  
 - ✅ OAuth authorization-code lab grant (aegisd + Gate client; not prod IdP UI)  
+- ✅ CyberLog UDP syslog collect + ThreatGrid multi-feed online sync (capped)  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

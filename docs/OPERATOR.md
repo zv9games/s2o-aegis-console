@@ -32,6 +32,12 @@ cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
 cargo run -p cybersiem -- export --format syslog --limit 20
 # send UDP (listener must accept)
 cargo run -p cybersiem -- export --format syslog --syslog-udp 127.0.0.1:5514 --limit 20
+# live collect (UDP syslog → JSONL)
+cargo run -p cybersiem -- collect --listen 127.0.0.1:5514 --max-events 10
+# lab inject without network:
+echo "<14>lab test message" | cargo run -p cybersiem -- collect --stdin-once
+# multi-feed IOC sync (capped)
+cargo run -p cyberintel -- sync --online --max-import 200
 ```
 
 ### Daemon health endpoint
@@ -99,8 +105,8 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
-| SIEM | `cybersiem stats\|correlate\|events` |
-| Intel | `cyberintel sync\|lookup\|add` |
+| SIEM | `cybersiem stats\|correlate\|events\|collect\|follow` |
+| Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|show` |
 | Gate | `cyberztna serve [--tls] [--mtls-ca] [--jwt-secret] --upstream URL` |

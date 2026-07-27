@@ -44,8 +44,8 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 2 | CyberDNS | `cyberdns` | **partial** — DoH + blocklist + IOC + UDP proxy |
 | 3 | CyberDefender | `cyberdefender` | **partial** — hash/name + yara-lite + YARA-X lab rules + IOC |
 | 4 | CyberEDR | `cyberedr` | **partial** — TCP + process inventory + heuristics |
-| 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats/correlate |
-| 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
+| 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats + UDP syslog collect |
+| 6 | ThreatGrid | `cyberintel` | **partial** — local IOC + capped multi-feed online sync |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
 | 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + WG conf; optional system wg |
 | 9 | Gate | `cyberztna` | **partial** — posture proxy + mTLS/JWT/OIDC + OAuth device/auth-code lab |

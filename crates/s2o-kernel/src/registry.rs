@@ -66,7 +66,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             HealthState::Partial,
             os,
             CapabilityTier::T0,
-            "partial: JSONL read/export/filter/stats/correlate; no live collectors",
+            "partial: JSONL read/export/filter/stats/correlate + UDP syslog collect; no remote EPS",
         ),
         ProductId::ThreatGrid => ModuleStatus::new(
             product,
@@ -77,7 +77,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: local JSON IOC store (lookup/add/sync); no cloud feeds/ML",
+            "partial: local IOC + capped multi-feed online sync (URLHaus/OpenPhish); no commercial TIP/ML",
         ),
         ProductId::CyberId => ModuleStatus::new(
             product,

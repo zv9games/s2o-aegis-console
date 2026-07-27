@@ -38,19 +38,22 @@ enum Commands {
         #[arg(long, default_value = "manual")]
         source: String,
     },
-    /// Import domains from DNS blocklist + optional URL feed
+    /// Import domains from DNS blocklist + optional URL feed(s)
     Sync {
         #[arg(long, default_value = ".aegis/dns-blocklist.txt")]
         blocklist: PathBuf,
-        /// Optional URL of domain list (one per line / hosts-style)
+        /// Optional URL of domain list (one per line / hosts-style / URL feed)
         #[arg(long)]
         feed_url: Option<String>,
-        /// Fetch default public URLHaus domain list (capped)
+        /// Fetch default public multi-feed set (URLHaus + OpenPhish, capped each)
         #[arg(long)]
         online: bool,
-        /// Max domains imported from online/feed (safety cap)
+        /// Max domains imported **per** online/feed URL (safety cap)
         #[arg(long, default_value_t = 2000)]
         max_import: usize,
+        /// Extra feed URLs (repeatable); combined with --online / --feed-url
+        #[arg(long = "feed")]
+        feeds: Vec<String>,
     },
     /// List IOCs (optional kind filter)
     List {
@@ -184,11 +187,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "local JSON IOC store, lookup, add, sync from blocklist/feed".green()
+                "local JSON IOC store, lookup, add, multi-feed online sync (capped)".green()
             );
             println!(
                 " Not implemented   : {}",
-                "cloud ML scoring, 2.4M commercial feed".red()
+                "cloud ML scoring, commercial mega-feed, real-time TIP".red()
             );
             println!(
                 "{}",
@@ -281,52 +284,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             feed_url,
             online,
             max_import,
+            feeds,
         } => {
             let mut store = IocStore::load(&cli.store)?;
             let mut imported = store.import_domain_list(&blocklist, "dns-blocklist")?;
 
-            // Prefer explicit URL; --online uses a small public malicious-domain text feed.
-            // Cap imports to avoid unbounded growth.
-            let url = feed_url.or_else(|| {
-                if online {
-                    Some(
-                        "https://urlhaus.abuse.ch/downloads/text_online/"
-                            .to_string(),
-                    )
-                } else {
-                    None
-                }
-            });
+            // Build feed URL list: --feed-url, --feed*, and --online defaults.
+            let mut urls: Vec<(String, String)> = Vec::new();
+            if let Some(u) = feed_url {
+                urls.push((u, "feed_url".into()));
+            }
+            for (i, u) in feeds.into_iter().enumerate() {
+                urls.push((u, format!("feed_{i}")));
+            }
+            if online {
+                // Public lab feeds (capped). Not a commercial TIP.
+                urls.push((
+                    "https://urlhaus.abuse.ch/downloads/text_online/".into(),
+                    "urlhaus".into(),
+                ));
+                urls.push((
+                    "https://openphish.com/feed.txt".into(),
+                    "openphish".into(),
+                ));
+            }
 
-            if let Some(url) = url {
-                println!("[threatgrid] fetching feed {url} (max_import={max_import})...");
+            if !urls.is_empty() {
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(60))
-                    .user_agent("S2O-ThreatGrid/0.2 (+local IOC sync)")
+                    .user_agent("S2O-ThreatGrid/0.3 (+local IOC multi-feed sync)")
                     .build()?;
+                for (url, source) in urls {
+                println!(
+                    "[threatgrid] fetching feed {url} source={source} (max_import={max_import})..."
+                );
                 match client.get(&url).send().await {
                     Ok(res) if res.status().is_success() => {
                         let text = res.text().await?;
                         let capped = cap_domain_feed(&text, max_import);
-                        let tmp = default_store_path().with_extension("feed.tmp");
+                        let tmp = default_store_path().with_extension(format!("{source}.tmp"));
                         std::fs::write(&tmp, &capped)?;
-                        let n = store.import_domain_list(&tmp, "online_feed")?;
+                        let n = store.import_domain_list(&tmp, &source)?;
                         imported += n;
                         let _ = std::fs::remove_file(&tmp);
-                        println!("[threatgrid] online feed imported +{n}");
+                        println!("[threatgrid] feed {source} imported +{n}");
                     }
                     Ok(res) => {
                         eprintln!(
-                            "[threatgrid] feed HTTP {} — continuing with local blocklist only",
+                            "[threatgrid] feed {source} HTTP {} — continuing",
                             res.status()
                         );
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[threatgrid] feed fetch failed ({e}) — continuing with local only"
-                        );
+                        eprintln!("[threatgrid] feed {source} fetch failed ({e}) — continuing");
                     }
                 }
+                } // for each feed url
             }
 
             // Seed a couple of lab domains if empty

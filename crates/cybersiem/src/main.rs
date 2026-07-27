@@ -1,17 +1,18 @@
-//! S2O CyberLog — local event store reader + stats + light correlation.
+//! S2O CyberLog — local event store reader + stats + light correlation + UDP collect.
 
 use clap::{Parser, Subcommand};
 use colored::*;
-use s2o_schema::{EventKind, ProductId, Severity};
+use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
 use s2o_store::EventStore;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "cybersiem")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.2.0")]
-#[command(about = "S2O CyberLog: local JSONL SIEM reader (Phase 2 shell)", long_about = None)]
+#[command(version = "0.3.0")]
+#[command(about = "S2O CyberLog: JSONL SIEM + UDP syslog collect (Phase 2/3)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -23,7 +24,20 @@ enum Commands {
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
     },
-    Collect,
+    /// Live collector: UDP syslog → Aegis JSONL event store
+    Collect {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// UDP bind (default high port for lab; 514 needs elevation)
+        #[arg(long, default_value = "127.0.0.1:5514")]
+        listen: String,
+        /// Stop after N ingested events (0 = run until Ctrl+C)
+        #[arg(long, default_value_t = 0)]
+        max_events: u64,
+        /// Also accept one line from stdin as a test inject then exit
+        #[arg(long)]
+        stdin_once: bool,
+    },
     Export {
         /// json | syslog
         #[arg(long, default_value = "json")]
@@ -94,6 +108,80 @@ fn kind_matches(k: EventKind, filter: &str) -> bool {
         || format!("{:?}", k).to_ascii_lowercase().contains(&filter.to_ascii_lowercase())
 }
 
+fn host_id() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown-host".into())
+}
+
+/// Strip leading `<PRI>` and optional RFC5424/3164 header noise for message body.
+fn strip_syslog_pri(line: &str) -> (Option<u8>, &str) {
+    let b = line.as_bytes();
+    if b.first() == Some(&b'<') {
+        if let Some(end) = b.iter().position(|&c| c == b'>') {
+            if end > 1 && end < 6 {
+                if let Ok(pri) = std::str::from_utf8(&b[1..end]).unwrap_or("").parse::<u8>() {
+                    return (Some(pri), line[end + 1..].trim_start());
+                }
+            }
+        }
+    }
+    (None, line.trim())
+}
+
+fn severity_from_pri(pri: Option<u8>) -> Severity {
+    // severity = PRI % 8 (RFC 5424)
+    match pri.map(|p| p % 8) {
+        Some(0..=2) => Severity::Critical,
+        Some(3) => Severity::High,
+        Some(4) => Severity::Medium,
+        Some(5) => Severity::Medium,
+        Some(6) => Severity::Info,
+        Some(7) => Severity::Info,
+        _ => Severity::Info,
+    }
+}
+
+fn syslog_to_event(peer: Option<SocketAddr>, line: &str) -> AegisEvent {
+    let (pri, body) = strip_syslog_pri(line);
+    let sev = severity_from_pri(pri);
+    let mut ev = AegisEvent::new(
+        host_id(),
+        ProductId::CyberLog,
+        EventKind::NetFlow,
+        EventAction::Observed,
+        sev,
+        body.to_string(),
+    )
+    .with_attr("transport", serde_json::json!("udp_syslog"))
+    .with_attr("raw", serde_json::json!(line));
+    if let Some(p) = pri {
+        ev = ev.with_attr("pri", serde_json::json!(p));
+        ev = ev.with_attr("facility", serde_json::json!(p / 8));
+        ev = ev.with_attr("syslog_severity", serde_json::json!(p % 8));
+    }
+    if let Some(addr) = peer {
+        ev = ev.with_attr("source", serde_json::json!(addr.to_string()));
+    } else {
+        ev = ev.with_attr("source", serde_json::json!("stdin"));
+    }
+    ev
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_pri_and_severity() {
+        let (pri, body) = strip_syslog_pri("<14>1 host app - hello world");
+        assert_eq!(pri, Some(14));
+        assert!(body.contains("hello world"));
+        assert!(matches!(severity_from_pri(Some(14)), Severity::Info));
+        assert!(matches!(severity_from_pri(Some(3)), Severity::High));
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -106,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 "{}",
-                "       S2O CyberLog (Phase 2 shell)                      "
+                "       S2O CyberLog (Phase 2/3 shell)                    "
                     .bold()
                     .green()
             );
@@ -116,11 +204,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "JSONL read/export, filter, stats, correlate".green()
+                "JSONL read/export, filter, stats, correlate, UDP syslog collect".green()
             );
             println!(
                 " Not implemented   : {}",
-                "live collectors, remote EPS, multi-tenant".red()
+                "remote EPS, multi-tenant, full RFC5424 parser".red()
             );
             if event_log.exists() {
                 let store = EventStore::open(&event_log)?;
@@ -133,14 +221,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             println!(
+                " Collect default   : {}",
+                "cybersiem collect --listen 127.0.0.1:5514".yellow()
+            );
+            println!(
                 "{}",
                 "=========================================================".cyan()
             );
         }
-        Commands::Collect => {
-            eprintln!("[cyberlog] live collect not implemented.");
-            eprintln!("Emit via aegisd / cyberwall / cyberdns / cyberintel / …");
-            std::process::exit(2);
+        Commands::Collect {
+            event_log,
+            listen,
+            max_events,
+            stdin_once,
+        } => {
+            if let Some(p) = event_log.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let store = EventStore::open(&event_log)?;
+
+            if stdin_once {
+                use std::io::{self, Read};
+                let mut buf = String::new();
+                io::stdin().read_to_string(&mut buf)?;
+                let line = buf.lines().next().unwrap_or(buf.trim());
+                if line.is_empty() {
+                    eprintln!("[cyberlog] empty stdin");
+                    std::process::exit(2);
+                }
+                let ev = syslog_to_event(None, line);
+                store.append(&ev)?;
+                println!(
+                    "{}",
+                    format!("[cyberlog] ingested stdin → {}", event_log.display())
+                        .green()
+                        .bold()
+                );
+                println!("  {}", ev.message);
+                return Ok(());
+            }
+
+            let sock = tokio::net::UdpSocket::bind(&listen).await?;
+            println!(
+                "{}",
+                format!(
+                    "[cyberlog] collect UDP syslog on {listen} → {} (Ctrl+C to stop)",
+                    event_log.display()
+                )
+                .cyan()
+            );
+            let mut buf = vec![0u8; 65535];
+            let mut n = 0u64;
+            loop {
+                let (len, peer) = sock.recv_from(&mut buf).await?;
+                let raw = String::from_utf8_lossy(&buf[..len]);
+                for line in raw.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let ev = syslog_to_event(Some(peer), line);
+                    store.append(&ev)?;
+                    n += 1;
+                    println!(
+                        "[{}] {:?} from {} | {}",
+                        n.to_string().yellow(),
+                        ev.severity,
+                        peer,
+                        ev.message
+                    );
+                    if max_events > 0 && n >= max_events {
+                        println!(
+                            "{}",
+                            format!("[cyberlog] max_events={max_events} reached")
+                                .green()
+                                .bold()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
         }
         Commands::Export {
             format,
