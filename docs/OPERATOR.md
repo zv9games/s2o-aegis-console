@@ -91,7 +91,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 |-----|---------|
 | Firewall | `cyberwall status\|enable\|lock` |
 | DNS | `cyberdns resolve\|block\|serve\|system-dns` |
-| Defender | `cyberdefender scan\|watch\|patterns\|update-defs` |
+| Defender | `cyberdefender scan\|watch\|patterns\|yara\|update-defs` |
 | EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
@@ -140,17 +140,26 @@ cargo run -p cyberztna -- serve --jwt-secret lab-secret --upstream https://examp
 
 Policy pack: `aegis policy apply policies/examples/gate-pack.json` writes gate defaults into `.aegis/gate-routes.json`.
 
-## YARA-lite (not full YARA-X)
+## YARA-lite + YARA-X
 
 ```powershell
+# yara-lite (substr / re: / hex:)
 cargo run -p cyberdefender -- patterns init --force
 cargo run -p cyberdefender -- patterns list
 cargo run -p cyberdefender -- patterns test --text "EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
-cargo run -p cyberdefender -- scan .aegis --recursive --max-files 64
-cargo run -p cyberdefender -- watch .aegis --interval-ms 3000
+
+# YARA-X (real .yar rules via pure-Rust yara-x)
+cargo run -p cyberdefender -- yara init --force
+cargo run -p cyberdefender -- yara list
+cargo run -p cyberdefender -- yara test --text "EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
+cargo run -p cyberdefender -- yara scan .aegis --recursive --max-files 64
+cargo run -p cyberdefender -- scan .aegis --recursive --yara --max-files 64
+cargo run -p cyberdefender -- scan path\to\file --yara-only
+cargo run -p cyberdefender -- watch .aegis --interval-ms 3000 --yara
 ```
 
-Rule lines: `name: needle`, `name: re:regex`, `name: hex:90 90`, optional `[high] name: ...`.
+YARA-lite rule lines: `name: needle`, `name: re:regex`, `name: hex:90 90`, optional `[high] name: ...`.  
+YARA-X rules: place `*.yar` / `*.yara` under `.aegis/yara` (seed via `yara init`). Not a cloud signature feed.
 
 ## Linux systemd
 

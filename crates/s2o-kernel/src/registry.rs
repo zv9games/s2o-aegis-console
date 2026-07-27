@@ -41,7 +41,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: SHA-256 + local/IOC hash rules + yara-lite + Defender probe; no full YARA-X/RT",
+            "partial: SHA-256 + IOC + yara-lite + YARA-X lab rules + Defender probe; no minifilter/cloud feed",
         ),
 
         ProductId::CyberEdr => ModuleStatus::new(

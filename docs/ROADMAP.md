@@ -131,7 +131,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ ThreatGrid local IOC store (`s2o-ioc`) + lookup/add/sync  
 - ✅ DNS + Defender consume ThreatGrid IOCs  
 - ✅ CyberEDR process inventory + heuristic alerts  
-- ✅ yara-lite content patterns (not full YARA-X)  
+- ✅ yara-lite content patterns  
+- ✅ YARA-X engine (`yara-x` crate) + lab seed rules + CLI
 - ✅ CyberID posture score + events + min_score gate  
 - ✅ CyberLog stats / filter / correlate  
 - ✅ Policy intel sync + posture gate fragments  
@@ -172,7 +173,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ OIDC well-known discovery + lab IdP stub on aegisd  
 - ✅ CyberDNS system-dns bind + EDR rich process intel (cmdline/ppid)  
 - ✅ OAuth device-code lab flow (RFC 8628) on aegisd + Gate client  
-- ⏳ Full YARA-X / kernel ETW / boringtun / browser OAuth code UI (later)  
+- ⏳ Kernel ETW / boringtun / browser OAuth code UI / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 
 ### P3 — Roof

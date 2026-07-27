@@ -1,6 +1,6 @@
 [package]
 name = "cyberdefender"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -17,6 +17,12 @@ serde_json = "1.0"
 sha2 = "0.10"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
+# Pure-Rust YARA engine (VirusTotal YARA-X)
+yara-x = { version = "1.19", default-features = false, features = [
+    "constant-folding",
+    "exact-atoms",
+    "fast-regexp",
+] }
 s2o_net_lib = { path = "../../../net-lib" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }

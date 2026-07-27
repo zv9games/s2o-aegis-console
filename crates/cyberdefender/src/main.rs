@@ -1,6 +1,7 @@
-//! S2O CyberDefender — hash scan + local rules + yara-lite + Defender probe.
+//! S2O CyberDefender — hash scan + local rules + yara-lite + YARA-X + Defender probe.
 
 mod yara_lite;
+mod yara_x_engine;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -14,12 +15,13 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use yara_lite::{content_pattern_hit, load_patterns, match_buffer, Pattern};
+use yara_x_engine::YaraEngine;
 
 #[derive(Parser)]
 #[command(name = "cyberdefender")]
 #[command(author = "Split2ops Software <support@split2ops.com>")]
-#[command(version = "0.4.0")]
-#[command(about = "S2O CyberDefender: hash + yara-lite (substr/re/hex) scan", long_about = None)]
+#[command(version = "0.5.0")]
+#[command(about = "S2O CyberDefender: hash + yara-lite + YARA-X scan", long_about = None)]
 struct Cli {
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
@@ -36,6 +38,10 @@ struct Cli {
     #[arg(long, global = true, default_value = ".aegis/yara-lite.rules")]
     patterns: PathBuf,
 
+    /// YARA-X rule directory (*.yar / *.yara)
+    #[arg(long, global = true, default_value = ".aegis/yara")]
+    yara_dir: PathBuf,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -43,7 +49,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Status,
-    /// SHA-256 + yara-lite scan a file or directory
+    /// SHA-256 + yara-lite (+ optional YARA-X) scan a file or directory
     Scan {
         path: String,
         /// Move blocked files into quarantine dir
@@ -56,16 +62,27 @@ enum Commands {
         recursive: bool,
         #[arg(long, default_value_t = 256)]
         max_files: usize,
-        /// Max bytes read per file for yara-lite (default 2 MiB)
+        /// Max bytes read per file for content scanners (default 2 MiB)
         #[arg(long, default_value_t = 2 * 1024 * 1024)]
         max_bytes: usize,
+        /// Also scan with YARA-X rules from --yara-dir
+        #[arg(long)]
+        yara: bool,
+        /// Only run YARA-X (skip name/hash/yara-lite)
+        #[arg(long)]
+        yara_only: bool,
     },
-    /// Write / refresh local rules + yara-lite seed
+    /// Write / refresh local rules + yara-lite + YARA-X seed
     UpdateDefs,
     /// Manage / inspect yara-lite patterns
     Patterns {
         #[command(subcommand)]
         command: PatternsCmd,
+    },
+    /// Manage / scan with YARA-X (.yar) rules
+    Yara {
+        #[command(subcommand)]
+        command: YaraCmd,
     },
     /// Poll a directory for new/changed files and scan them
     Watch {
@@ -83,6 +100,9 @@ enum Commands {
         quarantine: bool,
         #[arg(long, default_value = ".aegis/quarantine")]
         quarantine_dir: PathBuf,
+        /// Include YARA-X in watch scans
+        #[arg(long)]
+        yara: bool,
     },
     Realtime {
         action: String,
@@ -104,6 +124,37 @@ enum PatternsCmd {
         path: Option<PathBuf>,
         #[arg(long)]
         text: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum YaraCmd {
+    /// Write seed .yar rules into --yara-dir
+    Init {
+        #[arg(long)]
+        force: bool,
+    },
+    /// List rule files and compiled rule count
+    List,
+    /// Test YARA-X against a file or --text
+    Test {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        text: Option<String>,
+    },
+    /// Scan path with YARA-X only
+    Scan {
+        path: String,
+        #[arg(long)]
+        recursive: bool,
+        #[arg(long, default_value_t = 256)]
+        max_files: usize,
+        #[arg(long, default_value_t = 2 * 1024 * 1024)]
+        max_bytes: usize,
+        #[arg(long)]
+        quarantine: bool,
+        #[arg(long, default_value = ".aegis/quarantine")]
+        quarantine_dir: PathBuf,
     },
 }
 
@@ -313,6 +364,8 @@ struct ScanCtx<'a> {
     rules: &'a LocalRules,
     hash_set: &'a BTreeSet<String>,
     patterns: &'a [Pattern],
+    yara: Option<&'a YaraEngine>,
+    yara_only: bool,
     event_log: &'a Path,
     max_bytes: usize,
     quarantine: bool,
@@ -350,71 +403,131 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
         }
     };
 
-    if let Some(sub) = ctx.rules.name_hit(t) {
-        st.blocked += 1;
-        println!(
-            "{}",
-            "---------------------------------------------------------".cyan()
-        );
-        println!(" Target File  : {}", t.display().to_string().bold());
-        println!(
-            " Verdict      : {}",
-            format!("BLOCKED (name rule: {sub})").red().bold()
-        );
-        let qpath = maybe_q(t);
-        if qpath.is_some() {
-            st.quarantined += 1;
+    if !ctx.yara_only {
+        if let Some(sub) = ctx.rules.name_hit(t) {
+            st.blocked += 1;
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
+            println!(" Target File  : {}", t.display().to_string().bold());
+            println!(
+                " Verdict      : {}",
+                format!("BLOCKED (name rule: {sub})").red().bold()
+            );
+            let qpath = maybe_q(t);
+            if qpath.is_some() {
+                st.quarantined += 1;
+            }
+            emit(
+                ctx.event_log,
+                EventAction::Quarantined,
+                Severity::High,
+                format!("name rule hit: {}", t.display()),
+                &[
+                    ("path", serde_json::json!(t.display().to_string())),
+                    ("rule", serde_json::json!(sub)),
+                    ("verdict", serde_json::json!("blocked_name")),
+                    (
+                        "quarantined",
+                        serde_json::json!(qpath.map(|p| p.display().to_string())),
+                    ),
+                ],
+                None,
+            );
+            return st;
         }
-        emit(
-            ctx.event_log,
-            EventAction::Quarantined,
-            Severity::High,
-            format!("name rule hit: {}", t.display()),
-            &[
-                ("path", serde_json::json!(t.display().to_string())),
-                ("rule", serde_json::json!(sub)),
-                ("verdict", serde_json::json!("blocked_name")),
-                (
-                    "quarantined",
-                    serde_json::json!(qpath.map(|p| p.display().to_string())),
-                ),
-            ],
-            None,
-        );
-        return st;
+
+        if let Some((rule, sev)) = content_pattern_hit(t, ctx.patterns, ctx.max_bytes) {
+            st.blocked += 1;
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
+            println!(" Target File  : {}", t.display().to_string().bold());
+            println!(
+                " Verdict      : {}",
+                format!("BLOCKED (yara-lite: {rule})").red().bold()
+            );
+            let qpath = maybe_q(t);
+            if qpath.is_some() {
+                st.quarantined += 1;
+            }
+            emit(
+                ctx.event_log,
+                EventAction::Quarantined,
+                sev,
+                format!("yara-lite hit: {}", t.display()),
+                &[
+                    ("path", serde_json::json!(t.display().to_string())),
+                    ("rule", serde_json::json!(rule)),
+                    ("verdict", serde_json::json!("blocked_pattern")),
+                    (
+                        "quarantined",
+                        serde_json::json!(qpath.map(|p| p.display().to_string())),
+                    ),
+                ],
+                None,
+            );
+            return st;
+        }
     }
 
-    if let Some((rule, sev)) = content_pattern_hit(t, ctx.patterns, ctx.max_bytes) {
-        st.blocked += 1;
-        println!(
-            "{}",
-            "---------------------------------------------------------".cyan()
-        );
-        println!(" Target File  : {}", t.display().to_string().bold());
-        println!(
-            " Verdict      : {}",
-            format!("BLOCKED (yara-lite: {rule})").red().bold()
-        );
-        let qpath = maybe_q(t);
-        if qpath.is_some() {
-            st.quarantined += 1;
+    if let Some(eng) = ctx.yara {
+        match eng.scan_file(t, ctx.max_bytes) {
+            Ok(hits) if !hits.is_empty() => {
+                st.blocked += 1;
+                let rule = hits.join(",");
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Target File  : {}", t.display().to_string().bold());
+                println!(
+                    " Verdict      : {}",
+                    format!("BLOCKED (yara-x: {rule})").red().bold()
+                );
+                let qpath = maybe_q(t);
+                if qpath.is_some() {
+                    st.quarantined += 1;
+                }
+                emit(
+                    ctx.event_log,
+                    EventAction::Quarantined,
+                    Severity::High,
+                    format!("yara-x hit: {}", t.display()),
+                    &[
+                        ("path", serde_json::json!(t.display().to_string())),
+                        ("rule", serde_json::json!(rule)),
+                        ("rules", serde_json::json!(hits)),
+                        ("verdict", serde_json::json!("blocked_yara_x")),
+                        (
+                            "quarantined",
+                            serde_json::json!(qpath.map(|p| p.display().to_string())),
+                        ),
+                    ],
+                    None,
+                );
+                return st;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("{}", format!("  yara-x skip {}: {e}", t.display()).yellow());
+            }
         }
-        emit(
-            ctx.event_log,
-            EventAction::Quarantined,
-            sev,
-            format!("yara-lite hit: {}", t.display()),
-            &[
-                ("path", serde_json::json!(t.display().to_string())),
-                ("rule", serde_json::json!(rule)),
-                ("verdict", serde_json::json!("blocked_pattern")),
-                (
-                    "quarantined",
-                    serde_json::json!(qpath.map(|p| p.display().to_string())),
-                ),
-            ],
-            None,
-        );
+        if ctx.yara_only {
+            if !quiet_clean {
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Target File  : {}", t.display().to_string().bold());
+                println!(" Verdict      : {}", "clean (yara-x)".green());
+            }
+            return st;
+        }
+    } else if ctx.yara_only {
+        eprintln!("[cyberdefender] --yara-only requires compiled YARA-X rules");
         return st;
     }
 
@@ -484,6 +597,18 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
     st
 }
 
+fn try_load_yara(dir: &Path, require: bool) -> Option<YaraEngine> {
+    match YaraEngine::compile_dir(dir) {
+        Ok(eng) => Some(eng),
+        Err(e) => {
+            if require {
+                eprintln!("{}", format!("[cyberdefender] yara-x: {e}").red());
+            }
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -496,6 +621,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
             let rules = load_rules(&cli.rules);
             let (patterns, perrs) = load_patterns(&cli.patterns);
+            let yara_files = yara_x_engine::collect_rule_files(&cli.yara_dir);
+            let yara_eng = try_load_yara(&cli.yara_dir, false);
 
             println!(
                 "{}",
@@ -541,12 +668,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(" pattern errors    : {}", perrs.len().to_string().red());
             }
             println!(
+                " YARA-X engine     : {} (yara-x {})",
+                "enabled".green(),
+                yara_x_engine::engine_version()
+            );
+            println!(" YARA-X rules dir  : {}", cli.yara_dir.display());
+            println!(
+                " YARA-X rule files : {}",
+                yara_files.len().to_string().yellow()
+            );
+            if let Some(ref eng) = yara_eng {
+                println!(
+                    " YARA-X rules      : {}",
+                    eng.rule_count.to_string().yellow()
+                );
+            } else if yara_files.is_empty() {
+                println!(
+                    " YARA-X rules      : {}",
+                    "none (run: cyberdefender yara init)".yellow()
+                );
+            } else {
+                println!(
+                    " YARA-X rules      : {}",
+                    "compile failed".red()
+                );
+            }
+            println!(
                 " Implemented       : {}",
-                "SHA-256 + name + yara-lite (substr/re/hex) + IOC + Defender".green()
+                "SHA-256 + name + yara-lite + YARA-X + IOC + Defender".green()
             );
             println!(
                 " Not implemented   : {}",
-                "full YARA-X engine, realtime FS minifilter, cloud defs".red()
+                "realtime FS minifilter, cloud signature feed".red()
             );
             println!(
                 "{}",
@@ -562,6 +715,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ("defender_active", serde_json::json!(is_active)),
                     ("hash_rules", serde_json::json!(rules.blocked_hashes.len())),
                     ("patterns", serde_json::json!(patterns.len())),
+                    ("yara_files", serde_json::json!(yara_files.len())),
+                    (
+                        "yara_rules",
+                        serde_json::json!(yara_eng.as_ref().map(|e| e.rule_count).unwrap_or(0)),
+                    ),
                 ],
                 None,
             );
@@ -584,14 +742,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let _ = fs::write(&cli.patterns, yara_lite::default_seed());
             }
+            let yara_seed = yara_x_engine::write_seed_rules(&cli.yara_dir, false)?;
             println!(
                 "{}",
                 format!(
-                    "[cyberdefender] wrote local rules {} (hashes={}, names={}); patterns {}",
+                    "[cyberdefender] wrote local rules {} (hashes={}, names={}); patterns {}; yara {}",
                     cli.rules.display(),
                     rules.blocked_hashes.len(),
                     rules.blocked_name_substrings.len(),
-                    cli.patterns.display()
+                    cli.patterns.display(),
+                    yara_seed.display()
                 )
                 .green()
                 .bold()
@@ -601,10 +761,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 EventAction::Observed,
                 Severity::Info,
                 "local defender rules updated",
-                &[(
-                    "rules_path",
-                    serde_json::json!(cli.rules.display().to_string()),
-                )],
+                &[
+                    (
+                        "rules_path",
+                        serde_json::json!(cli.rules.display().to_string()),
+                    ),
+                    (
+                        "yara_dir",
+                        serde_json::json!(cli.yara_dir.display().to_string()),
+                    ),
+                ],
                 None,
             );
         }
@@ -681,6 +847,149 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         },
+        Commands::Yara { command } => match command {
+            YaraCmd::Init { force } => {
+                let path = yara_x_engine::write_seed_rules(&cli.yara_dir, force)?;
+                if path.exists() && !force {
+                    // write_seed_rules returns existing path without overwrite
+                    let already = yara_x_engine::collect_rule_files(&cli.yara_dir);
+                    if !already.is_empty() && !force {
+                        println!(
+                            "[cyberdefender] {} exists ({} rule file(s); use --force to overwrite seed)",
+                            cli.yara_dir.display(),
+                            already.len()
+                        );
+                    }
+                }
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdefender] yara-x seed ready: {} (engine {})",
+                        path.display(),
+                        yara_x_engine::engine_version()
+                    )
+                    .green()
+                    .bold()
+                );
+            }
+            YaraCmd::List => {
+                let files = yara_x_engine::collect_rule_files(&cli.yara_dir);
+                println!(
+                    "[cyberdefender] YARA-X {} — dir {}",
+                    yara_x_engine::engine_version(),
+                    cli.yara_dir.display()
+                );
+                if files.is_empty() {
+                    println!("  (no .yar/.yara files — run: cyberdefender yara init)");
+                }
+                for f in &files {
+                    println!("  file  {}", f.display());
+                }
+                match YaraEngine::compile_dir(&cli.yara_dir) {
+                    Ok(eng) => {
+                        println!("  compiled rules: {}", eng.rule_count);
+                        for s in &eng.sources {
+                            println!("  source  {}", s.display());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  compile: {e}");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            YaraCmd::Test { path, text } => {
+                let eng = match YaraEngine::compile_dir(&cli.yara_dir) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("[cyberdefender] {e}");
+                        std::process::exit(2);
+                    }
+                };
+                let hits = if let Some(t) = text {
+                    eng.scan_bytes(t.as_bytes())?
+                } else if let Some(p) = path {
+                    eng.scan_file(&p, 2 * 1024 * 1024)?
+                } else {
+                    eprintln!("[cyberdefender] pass a path or --text");
+                    std::process::exit(2);
+                };
+                if hits.is_empty() {
+                    println!("{}", "no matches".green());
+                    std::process::exit(0);
+                }
+                for h in &hits {
+                    println!("{} {}", "HIT".red().bold(), h);
+                }
+                std::process::exit(3);
+            }
+            YaraCmd::Scan {
+                path,
+                recursive,
+                max_files,
+                max_bytes,
+                quarantine,
+                quarantine_dir,
+            } => {
+                let eng = match YaraEngine::compile_dir(&cli.yara_dir) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("[cyberdefender] {e}");
+                        std::process::exit(2);
+                    }
+                };
+                let root = PathBuf::from(&path);
+                let rules = load_rules(&cli.rules);
+                let hash_set = BTreeSet::new();
+                let patterns: Vec<Pattern> = vec![];
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdefender] yara-x scan '{}' rules={} files_dir={}",
+                        root.display(),
+                        eng.rule_count,
+                        cli.yara_dir.display()
+                    )
+                    .cyan()
+                );
+                let targets = match collect_targets(&root, recursive, max_files) {
+                    Ok(t) if !t.is_empty() => t,
+                    Ok(_) => {
+                        eprintln!("{}", "[cyberdefender] no files to scan".yellow());
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("Scan Error: {e}").red());
+                        std::process::exit(1);
+                    }
+                };
+                let ctx = ScanCtx {
+                    rules: &rules,
+                    hash_set: &hash_set,
+                    patterns: &patterns,
+                    yara: Some(&eng),
+                    yara_only: true,
+                    event_log: &cli.event_log,
+                    max_bytes,
+                    quarantine,
+                    quarantine_dir: &quarantine_dir,
+                };
+                let mut blocked = 0u32;
+                let mut quarantined = 0u32;
+                for t in &targets {
+                    let st = scan_one(t, &ctx, false);
+                    blocked += st.blocked;
+                    quarantined += st.quarantined;
+                }
+                println!(
+                    " Files: {}  blocked: {blocked}  quarantined: {quarantined}",
+                    targets.len()
+                );
+                if blocked > 0 {
+                    std::process::exit(3);
+                }
+            }
+        },
         Commands::Scan {
             path,
             quarantine,
@@ -688,6 +997,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             recursive,
             max_files,
             max_bytes,
+            yara,
+            yara_only,
         } => {
             let root = PathBuf::from(&path);
             let rules = load_rules(&cli.rules);
@@ -703,15 +1014,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for e in &perrs {
                 eprintln!("[cyberdefender] pattern: {e}");
             }
+            let want_yara = yara || yara_only;
+            let yara_eng = if want_yara {
+                try_load_yara(&cli.yara_dir, true)
+            } else {
+                None
+            };
+            if want_yara && yara_eng.is_none() {
+                std::process::exit(2);
+            }
             println!(
                 "{}",
                 format!(
-                    "[cyberdefender] scanning '{}' recursive={} max_files={} ({} hashes, {} patterns)...",
+                    "[cyberdefender] scanning '{}' recursive={} max_files={} ({} hashes, {} patterns, yara-x={})...",
                     root.display(),
                     recursive,
                     max_files,
                     hash_set.len(),
-                    patterns.len()
+                    patterns.len(),
+                    yara_eng
+                        .as_ref()
+                        .map(|e| e.rule_count.to_string())
+                        .unwrap_or_else(|| "off".into())
                 )
                 .cyan()
             );
@@ -732,6 +1056,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rules: &rules,
                 hash_set: &hash_set,
                 patterns: &patterns,
+                yara: yara_eng.as_ref(),
+                yara_only,
                 event_log: &cli.event_log,
                 max_bytes,
                 quarantine,
@@ -766,6 +1092,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_blocks,
             quarantine,
             quarantine_dir,
+            yara,
         } => {
             let root = PathBuf::from(&path);
             if !root.exists() {
@@ -782,11 +1109,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let (patterns, _) = load_patterns(&cli.patterns);
+            let yara_eng = if yara {
+                try_load_yara(&cli.yara_dir, true)
+            } else {
+                None
+            };
+            if yara && yara_eng.is_none() {
+                std::process::exit(2);
+            }
             println!(
-                "[cyberdefender] watch {} interval={}ms recursive={} (Ctrl+C to stop)",
+                "[cyberdefender] watch {} interval={}ms recursive={} yara-x={} (Ctrl+C to stop)",
                 root.display(),
                 interval_ms,
-                recursive
+                recursive,
+                yara_eng
+                    .as_ref()
+                    .map(|e| e.rule_count.to_string())
+                    .unwrap_or_else(|| "off".into())
             );
             let mut seen: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
             // seed without scanning
@@ -806,6 +1145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &[
                     ("path", serde_json::json!(root.display().to_string())),
                     ("seed", serde_json::json!(seen.len())),
+                    ("yara", serde_json::json!(yara)),
                 ],
                 None,
             );
@@ -819,6 +1159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rules: &rules,
                     hash_set: &hash_set,
                     patterns: &patterns,
+                    yara: yara_eng.as_ref(),
+                    yara_only: false,
                     event_log: &cli.event_log,
                     max_bytes: 2 * 1024 * 1024,
                     quarantine,
