@@ -94,15 +94,20 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Mesh | `cybermesh genkey\|config\|show` |
 | Gate | `cyberztna serve [--tls] --upstream URL` |
 
-## Gate HTTPS (self-signed)
+## Gate HTTPS + session
 
 ```powershell
-cargo run -p cyberztna -- serve --tls --listen 127.0.0.1:18443 --upstream https://example.com
+cargo run -p cyberid -- authenticate alice --min-score 40
+# copy Token...
+
+cargo run -p cyberztna -- serve --tls --require-session --listen 127.0.0.1:18443 --upstream https://example.com
 # certs: .aegis/gate-cert.pem , .aegis/gate-key.pem
-# curl -k https://127.0.0.1:18443/
+
+curl -k -H "X-Aegis-Session: aegis_..." https://127.0.0.1:18443/
+# or: Authorization: Bearer aegis_...
 ```
 
-Posture score is cached ~15s; denied requests return HTTP 403 with `x-aegis-posture-score`.
+Posture score is cached ~15s. Without a valid session (when `--require-session`), Gate returns **401**. Low posture returns **403** with `x-aegis-posture-score`.
 
 ## Event store
 

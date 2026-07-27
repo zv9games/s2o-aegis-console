@@ -1,0 +1,12 @@
+[package]
+name = "s2o-session"
+version = "0.1.0"
+edition = "2021"
+authors = ["Split2ops Software"]
+description = "S2O Aegis local session tokens (CyberID / Gate)"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1", features = ["v4", "serde"] }

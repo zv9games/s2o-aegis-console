@@ -1,12 +1,10 @@
 //! S2O CyberID — endpoint posture scoring + local sessions (Phase 2/3).
 
-mod sessions;
-
 use clap::{Parser, Subcommand};
 use colored::*;
-use sessions::SessionStore;
 use s2o_kernel::create_firewall_engine;
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
+use s2o_session::SessionStore;
 use s2o_store::EventStore;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,7 +30,6 @@ enum Commands {
     Status,
     /// Device posture from live OS + suite signals
     Posture {
-        /// Fail process if score below this (default 50)
         #[arg(long, default_value_t = 50)]
         min_score: u32,
         #[arg(long)]
@@ -43,15 +40,11 @@ enum Commands {
         user: String,
         #[arg(long, default_value_t = 50)]
         min_score: u32,
-        /// Session TTL hours
         #[arg(long, default_value_t = 8)]
         ttl_hours: i64,
     },
-    /// List active (non-expired, non-revoked) sessions
     Sessions,
-    /// Revoke a session by token or id
     Revoke { token: String },
-    /// Verify a session token (exit 3 if invalid)
     Verify { token: String },
 }
 
@@ -78,7 +71,13 @@ fn host_id() -> String {
         .unwrap_or_else(|_| "unknown-host".into())
 }
 
-fn emit(event_log: &Path, action: EventAction, severity: Severity, message: impl Into<String>, attrs: &[(&str, serde_json::Value)]) {
+fn emit(
+    event_log: &Path,
+    action: EventAction,
+    severity: Severity,
+    message: impl Into<String>,
+    attrs: &[(&str, serde_json::Value)],
+) {
     if let Ok(store) = EventStore::open(event_log) {
         let mut ev = AegisEvent::new(
             host_id(),
@@ -97,7 +96,6 @@ fn emit(event_log: &Path, action: EventAction, severity: Severity, message: impl
 
 fn bitlocker_or_encryption_hint() -> (bool, String) {
     if cfg!(windows) {
-        // Best-effort: manage-bde -status C:
         if let Ok(out) = Command::new("manage-bde").args(["-status", "C:"]).output() {
             let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
             if text.contains("protection on") || text.contains("percentage encrypted: 100") {
@@ -107,16 +105,26 @@ fn bitlocker_or_encryption_hint() -> (bool, String) {
                 return (false, "BitLocker present but not fully protected".into());
             }
         }
-        return (false, "BitLocker status unavailable (need admin / manage-bde)".into());
+        return (
+            false,
+            "BitLocker status unavailable (need admin / manage-bde)".into(),
+        );
     }
-    // Linux: check /sys/block for dm-crypt is hard; probe lsblk crypto
-    if let Ok(out) = Command::new("lsblk").args(["-o", "NAME,TYPE,FSTYPE"]).output() {
+    if let Ok(out) = Command::new("lsblk")
+        .args(["-o", "NAME,TYPE,FSTYPE"])
+        .output()
+    {
         let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
         if text.contains("crypto_luks") || text.contains("crypt") {
             return (true, "lsblk shows crypt/LUKS volume".into());
         }
     }
     (false, "disk encryption not verified on this OS".into())
+}
+
+fn compute_score() -> Result<(u32, Vec<Check>), Box<dyn std::error::Error>> {
+    // Async firewall status is filled in by caller for posture; this is for auth path.
+    Ok((0, vec![]))
 }
 
 #[tokio::main]
@@ -131,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 "{}",
-                "        S2O CyberID (Phase 2 shell)                      "
+                "        S2O CyberID (Phase 2/3)                          "
                     .bold()
                     .green()
             );
@@ -160,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+            let _ = compute_score();
         }
         Commands::Posture { min_score, json } => {
             let fw = create_firewall_engine();
@@ -170,10 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 id: "firewall_enabled",
                 pass: st.enabled,
                 weight: 30,
-                detail: format!(
-                    "enabled={} backend={}",
-                    st.enabled, st.backend_driver
-                ),
+                detail: format!("enabled={} backend={}", st.enabled, st.backend_driver),
             });
             checks.push(Check {
                 id: "defender_or_av",
@@ -218,7 +224,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let score: u32 = checks.iter().map(|c| if c.pass { c.weight } else { 0 }).sum();
             let max_score: u32 = checks.iter().map(|c| c.weight).sum();
             let pass = score >= min_score;
-
             let report = PostureReport {
                 score,
                 max_score,
@@ -250,10 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         "FAIL".red().bold()
                     };
-                    println!(
-                        " [{:>2}] {:<22} {}  {}",
-                        c.weight, c.id, mark, c.detail
-                    );
+                    println!(" [{:>2}] {:<22} {}  {}", c.weight, c.id, mark, c.detail);
                 }
                 println!(
                     "{}",
@@ -371,6 +373,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!(" Token    : {}", session.token.yellow().bold());
             println!(" Expires  : {}", session.expires_at);
             println!(" Store    : {}", cli.sessions.display());
+            println!(" Header   : X-Aegis-Session: {}", session.token);
             println!(
                 "{}",
                 "=========================================================".cyan()
@@ -411,7 +414,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     EventAction::Observed,
                     Severity::Info,
                     "session revoked",
-                    &[("token_prefix", serde_json::json!(&token[..token.len().min(16)]))],
+                    &[(
+                        "token_prefix",
+                        serde_json::json!(&token[..token.len().min(16)]),
+                    )],
                 );
             } else {
                 eprintln!("[cyberid] token not found");

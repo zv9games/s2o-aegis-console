@@ -10,10 +10,11 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use s2o_kernel::{compute_posture_score, create_firewall_engine, host_id};
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
+use s2o_session::SessionStore;
 use s2o_store::EventStore;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -22,9 +23,35 @@ struct AppState {
     cfg: GateConfig,
     event_log: PathBuf,
     access_log: Option<PathBuf>,
+    sessions_path: Option<PathBuf>,
+    require_session: bool,
     /// Cached posture score with TTL
     cache: Arc<RwLock<Option<(std::time::Instant, u32)>>>,
     client: reqwest::Client,
+}
+
+fn extract_session_token(req: &Request<Body>) -> Option<String> {
+    if let Some(v) = req.headers().get("x-aegis-session").and_then(|v| v.to_str().ok()) {
+        let t = v.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if let Some(v) = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        let v = v.trim();
+        if let Some(rest) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
+            let t = rest.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn verify_session(path: &Path, token: &str) -> Option<String> {
+    let store = SessionStore::load(path);
+    store.verify(token).map(|s| s.user.clone())
 }
 
 fn access_log_line(path: &Option<PathBuf>, line: &str) {
@@ -80,6 +107,46 @@ async fn proxy_handler(
 ) -> Result<Response<Body>, StatusCode> {
     let method = req.method().clone();
     let req_path = req.uri().path().to_string();
+
+    // Optional CyberID session gate
+    let mut session_user: Option<String> = None;
+    if state.require_session {
+        let token = extract_session_token(&req);
+        let path = state.sessions_path.as_ref();
+        let user = match (token.as_deref(), path) {
+            (Some(t), Some(p)) => verify_session(p, t),
+            _ => None,
+        };
+        if user.is_none() {
+            emit(
+                &state.event_log,
+                EventAction::Blocked,
+                Severity::High,
+                format!("gate deny path={req_path} reason=missing_or_invalid_session"),
+                &[
+                    ("path", serde_json::json!(req_path)),
+                    ("reason", serde_json::json!("session")),
+                ],
+            );
+            access_log_line(
+                &state.access_log,
+                &format!(
+                    "{} DENY {} reason=session",
+                    chrono::Utc::now().to_rfc3339(),
+                    req_path
+                ),
+            );
+            let body = "S2O Gate DENY: missing or invalid session (X-Aegis-Session / Bearer)\n";
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::WWW_AUTHENTICATE, "Bearer realm=\"s2o-gate\"")
+                .body(Body::from(body))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        session_user = user;
+    }
+
     let score = current_score(&state).await?;
     if score < state.cfg.min_score {
         emit(
@@ -181,6 +248,9 @@ async fn proxy_handler(
     }
     builder = builder.header("x-aegis-posture-score", score.to_string());
     builder = builder.header("x-aegis-gate", "s2o-gate");
+    if let Some(ref u) = session_user {
+        builder = builder.header("x-aegis-user", u.as_str());
+    }
 
     if !body_bytes.is_empty() {
         builder = builder.body(body_bytes.clone());
@@ -233,13 +303,14 @@ async fn proxy_handler(
     access_log_line(
         &state.access_log,
         &format!(
-            "{} ALLOW {} {} route={} status={} score={}",
+            "{} ALLOW {} {} route={} status={} score={} user={}",
             chrono::Utc::now().to_rfc3339(),
             method,
             path,
             route_name,
             status_code,
-            score
+            score,
+            session_user.as_deref().unwrap_or("-")
         ),
     );
 
@@ -258,11 +329,15 @@ pub async fn run(
     event_log: PathBuf,
     tls: Option<TlsFiles>,
     access_log: Option<PathBuf>,
+    require_session: bool,
+    sessions_path: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         cfg: cfg.clone(),
         event_log,
         access_log,
+        sessions_path,
+        require_session,
         cache: Arc::new(RwLock::new(None)),
         client: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())

@@ -47,6 +47,7 @@
 - Continuous `aegis playbook watch`
 - Gate access log (`.aegis/gate-access.log`)
 - CyberID local session tokens after posture gate
+- Shared `s2o-session` crate; Gate `--require-session` (X-Aegis-Session / Bearer)
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

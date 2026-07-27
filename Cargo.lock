@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "cyberid"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1001,11 +1001,11 @@ dependencies = [
  "cyberwall-core",
  "s2o-kernel",
  "s2o-schema",
+ "s2o-session",
  "s2o-store",
  "serde",
  "serde_json",
  "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -1118,6 +1118,7 @@ dependencies = [
  "reqwest",
  "s2o-kernel",
  "s2o-schema",
+ "s2o-session",
  "s2o-store",
  "serde",
  "serde_json",
@@ -3428,6 +3429,16 @@ dependencies = [
 
 [[package]]
 name = "s2o-schema"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "s2o-session"
 version = "0.1.0"
 dependencies = [
  "chrono",

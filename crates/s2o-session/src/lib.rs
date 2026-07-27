@@ -54,10 +54,7 @@ impl SessionStore {
     ) -> Session {
         let now = Utc::now();
         let exp = now + Duration::hours(ttl_hours.max(1));
-        let token = format!(
-            "aegis_{}",
-            Uuid::new_v4().to_string().replace('-', "")
-        );
+        let token = format!("aegis_{}", Uuid::new_v4().to_string().replace('-', ""));
         let s = Session {
             id: Uuid::new_v4().to_string(),
             token: token.clone(),

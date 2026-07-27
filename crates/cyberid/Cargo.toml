@@ -1,6 +1,6 @@
 [package]
 name = "cyberid"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Split2ops Software"]
 
@@ -15,8 +15,8 @@ colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
 cyberwall-core = { path = "../cyberwall-core" }
 s2o-kernel = { path = "../s2o-kernel" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }
+s2o-session = { path = "../s2o-session" }

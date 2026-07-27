@@ -59,6 +59,11 @@ enum Commands {
         /// Disable access log file
         #[arg(long)]
         no_access_log: bool,
+        /// Require CyberID session (X-Aegis-Session or Authorization: Bearer)
+        #[arg(long)]
+        require_session: bool,
+        #[arg(long, default_value = ".aegis/sessions.json")]
+        sessions: PathBuf,
     },
     /// Check posture only (same kernel score Gate uses)
     Check {
@@ -116,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture-gated HTTP/HTTPS reverse proxy + routes + self-signed TLS".green()
+                "posture+optional session HTTP/HTTPS proxy, routes, TLS, access log".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -208,6 +213,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tls_key,
             access_log,
             no_access_log,
+            require_session,
+            sessions,
         } => {
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             if let Some(l) = listen {
@@ -266,7 +273,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ref p) = access {
                 println!("[gate] access log      : {}", p.display());
             }
-            proxy::run(cfg, cli.event_log, tls_files, access).await?;
+            if require_session {
+                println!(
+                    "[gate] require session  : {} (header X-Aegis-Session)",
+                    sessions.display()
+                );
+            }
+            proxy::run(
+                cfg,
+                cli.event_log,
+                tls_files,
+                access,
+                require_session,
+                if require_session {
+                    Some(sessions)
+                } else {
+                    None
+                },
+            )
+            .await?;
         }
         Commands::Connect { app } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
