@@ -160,6 +160,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate access log file  
 - ✅ CyberID local sessions (mint/list/revoke/verify)  
 - ✅ Gate `--require-session` (CyberID token header)  
+- ✅ Gate IP allowlist + rate limit + session posture floor + last_used  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

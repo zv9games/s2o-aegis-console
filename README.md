@@ -118,7 +118,7 @@ cargo run -p cyberztna -- serve --tls --upstream https://example.com --listen 12
 
 # Local sessions + Gate enforcement
 cargo run -p cyberid -- authenticate alice --min-score 50
-cargo run -p cyberztna -- serve --require-session --upstream https://example.com
+cargo run -p cyberztna -- serve --require-session --allow-ip 127.0.0.1 --rate-limit 120 --upstream https://example.com
 # curl -H "X-Aegis-Session: <token>" http://127.0.0.1:18443/
 
 # Mesh — keys + WireGuard conf (import with system WG / wg-quick)

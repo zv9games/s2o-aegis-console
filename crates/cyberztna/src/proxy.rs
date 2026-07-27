@@ -2,7 +2,7 @@
 
 use crate::config::GateConfig;
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{header, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
@@ -12,10 +12,13 @@ use s2o_kernel::{compute_posture_score, create_firewall_engine, host_id};
 use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity};
 use s2o_session::SessionStore;
 use s2o_store::EventStore;
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -26,20 +29,38 @@ struct AppState {
     sessions_path: Option<PathBuf>,
     require_session: bool,
     /// Cached posture score with TTL
-    cache: Arc<RwLock<Option<(std::time::Instant, u32)>>>,
+    cache: Arc<RwLock<Option<(Instant, u32)>>>,
+    /// Per-IP rate window: (window_start, count)
+    rate: Arc<RwLock<HashMap<IpAddr, (Instant, u32)>>>,
     client: reqwest::Client,
 }
 
+struct SessionOk {
+    user: String,
+    posture_score: u32,
+}
+
 fn extract_session_token(req: &Request<Body>) -> Option<String> {
-    if let Some(v) = req.headers().get("x-aegis-session").and_then(|v| v.to_str().ok()) {
+    if let Some(v) = req
+        .headers()
+        .get("x-aegis-session")
+        .and_then(|v| v.to_str().ok())
+    {
         let t = v.trim();
         if !t.is_empty() {
             return Some(t.to_string());
         }
     }
-    if let Some(v) = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(v) = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         let v = v.trim();
-        if let Some(rest) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
+        if let Some(rest) = v
+            .strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+        {
             let t = rest.trim();
             if !t.is_empty() {
                 return Some(t.to_string());
@@ -49,9 +70,25 @@ fn extract_session_token(req: &Request<Body>) -> Option<String> {
     None
 }
 
-fn verify_session(path: &Path, token: &str) -> Option<String> {
-    let store = SessionStore::load(path);
-    store.verify(token).map(|s| s.user.clone())
+/// Verify session, touch last_used, optionally enforce mint posture >= min_score.
+fn verify_and_touch(
+    path: &Path,
+    token: &str,
+    min_score: u32,
+    enforce_session_posture: bool,
+) -> Result<SessionOk, &'static str> {
+    let mut store = SessionStore::load(path);
+    let Some(v) = store.touch(token) else {
+        return Err("session");
+    };
+    if enforce_session_posture && v.posture_score < min_score {
+        return Err("session_posture");
+    }
+    let _ = store.save(path);
+    Ok(SessionOk {
+        user: v.user,
+        posture_score: v.posture_score,
+    })
 }
 
 fn access_log_line(path: &Option<PathBuf>, line: &str) {
@@ -66,7 +103,13 @@ fn access_log_line(path: &Option<PathBuf>, line: &str) {
     }
 }
 
-fn emit(event_log: &PathBuf, action: EventAction, severity: Severity, message: impl Into<String>, attrs: &[(&str, serde_json::Value)]) {
+fn emit(
+    event_log: &PathBuf,
+    action: EventAction,
+    severity: Severity,
+    message: impl Into<String>,
+    attrs: &[(&str, serde_json::Value)],
+) {
     if let Ok(store) = EventStore::open(event_log) {
         let mut ev = AegisEvent::new(
             host_id(),
@@ -97,54 +140,182 @@ async fn current_score(state: &AppState) -> Result<u32, StatusCode> {
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let mut guard = state.cache.write().await;
-    *guard = Some((std::time::Instant::now(), report.score));
+    *guard = Some((Instant::now(), report.score));
     Ok(report.score)
+}
+
+/// Returns true if allowed, false if over limit.
+async fn check_rate(state: &AppState, ip: IpAddr) -> bool {
+    let limit = state.cfg.rate_limit_per_minute;
+    if limit == 0 {
+        return true;
+    }
+    let mut map = state.rate.write().await;
+    let now = Instant::now();
+    let window = Duration::from_secs(60);
+    // opportunistic prune when map grows
+    if map.len() > 10_000 {
+        map.retain(|_, (start, _)| now.duration_since(*start) < window);
+    }
+    let entry = map.entry(ip).or_insert((now, 0));
+    if now.duration_since(entry.0) >= window {
+        *entry = (now, 1);
+        return true;
+    }
+    entry.1 = entry.1.saturating_add(1);
+    entry.1 <= limit
+}
+
+fn client_ip(req: &Request<Body>, connect: Option<SocketAddr>) -> IpAddr {
+    // Prefer X-Forwarded-For first hop only when present (operator-trusted edge)
+    if let Some(xff) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(first) = xff.split(',').next() {
+            if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+    connect
+        .map(|s| s.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
 }
 
 async fn proxy_handler(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
 ) -> Result<Response<Body>, StatusCode> {
     let method = req.method().clone();
     let req_path = req.uri().path().to_string();
+    let ip = client_ip(&req, Some(addr));
+
+    // IP allowlist
+    if !state.cfg.ip_allowed(ip) {
+        emit(
+            &state.event_log,
+            EventAction::Blocked,
+            Severity::High,
+            format!("gate deny path={req_path} reason=ip ip={ip}"),
+            &[
+                ("path", serde_json::json!(req_path)),
+                ("reason", serde_json::json!("ip")),
+                ("ip", serde_json::json!(ip.to_string())),
+            ],
+        );
+        access_log_line(
+            &state.access_log,
+            &format!(
+                "{} DENY {} reason=ip ip={}",
+                chrono::Utc::now().to_rfc3339(),
+                req_path,
+                ip
+            ),
+        );
+        let body = format!("S2O Gate DENY: client IP {ip} not on allowlist\n");
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from(body))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // Rate limit
+    if !check_rate(&state, ip).await {
+        emit(
+            &state.event_log,
+            EventAction::Blocked,
+            Severity::Medium,
+            format!("gate deny path={req_path} reason=rate_limit ip={ip}"),
+            &[
+                ("path", serde_json::json!(req_path)),
+                ("reason", serde_json::json!("rate_limit")),
+                ("ip", serde_json::json!(ip.to_string())),
+            ],
+        );
+        access_log_line(
+            &state.access_log,
+            &format!(
+                "{} DENY {} reason=rate_limit ip={}",
+                chrono::Utc::now().to_rfc3339(),
+                req_path,
+                ip
+            ),
+        );
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::RETRY_AFTER, "60")
+            .body(Body::from("S2O Gate DENY: rate limit exceeded\n"))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     // Optional CyberID session gate
     let mut session_user: Option<String> = None;
+    let mut session_score: Option<u32> = None;
     if state.require_session {
         let token = extract_session_token(&req);
         let path = state.sessions_path.as_ref();
-        let user = match (token.as_deref(), path) {
-            (Some(t), Some(p)) => verify_session(p, t),
-            _ => None,
+        let result = match (token.as_deref(), path) {
+            (Some(t), Some(p)) => verify_and_touch(
+                p,
+                t,
+                state.cfg.min_score,
+                state.cfg.enforce_session_posture,
+            ),
+            _ => Err("session"),
         };
-        if user.is_none() {
-            emit(
-                &state.event_log,
-                EventAction::Blocked,
-                Severity::High,
-                format!("gate deny path={req_path} reason=missing_or_invalid_session"),
-                &[
-                    ("path", serde_json::json!(req_path)),
-                    ("reason", serde_json::json!("session")),
-                ],
-            );
-            access_log_line(
-                &state.access_log,
-                &format!(
-                    "{} DENY {} reason=session",
-                    chrono::Utc::now().to_rfc3339(),
-                    req_path
-                ),
-            );
-            let body = "S2O Gate DENY: missing or invalid session (X-Aegis-Session / Bearer)\n";
-            return Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                .header(header::WWW_AUTHENTICATE, "Bearer realm=\"s2o-gate\"")
-                .body(Body::from(body))
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+        match result {
+            Ok(ok) => {
+                session_user = Some(ok.user);
+                session_score = Some(ok.posture_score);
+            }
+            Err(reason) => {
+                let (status, msg) = if reason == "session_posture" {
+                    (
+                        StatusCode::FORBIDDEN,
+                        "S2O Gate DENY: session posture below min_score\n",
+                    )
+                } else {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        "S2O Gate DENY: missing or invalid session (X-Aegis-Session / Bearer)\n",
+                    )
+                };
+                emit(
+                    &state.event_log,
+                    EventAction::Blocked,
+                    Severity::High,
+                    format!("gate deny path={req_path} reason={reason}"),
+                    &[
+                        ("path", serde_json::json!(req_path)),
+                        ("reason", serde_json::json!(reason)),
+                    ],
+                );
+                access_log_line(
+                    &state.access_log,
+                    &format!(
+                        "{} DENY {} reason={} ip={}",
+                        chrono::Utc::now().to_rfc3339(),
+                        req_path,
+                        reason,
+                        ip
+                    ),
+                );
+                let mut builder = Response::builder()
+                    .status(status)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8");
+                if status == StatusCode::UNAUTHORIZED {
+                    builder = builder.header(header::WWW_AUTHENTICATE, "Bearer realm=\"s2o-gate\"");
+                }
+                return builder
+                    .body(Body::from(msg))
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+            }
         }
-        session_user = user;
     }
 
     let score = current_score(&state).await?;
@@ -166,11 +337,12 @@ async fn proxy_handler(
         access_log_line(
             &state.access_log,
             &format!(
-                "{} DENY {} score={} min={}",
+                "{} DENY {} score={} min={} ip={}",
                 chrono::Utc::now().to_rfc3339(),
                 req_path,
                 score,
-                state.cfg.min_score
+                state.cfg.min_score,
+                ip
             ),
         );
         let body = format!(
@@ -248,8 +420,12 @@ async fn proxy_handler(
     }
     builder = builder.header("x-aegis-posture-score", score.to_string());
     builder = builder.header("x-aegis-gate", "s2o-gate");
+    builder = builder.header("x-aegis-client-ip", ip.to_string());
     if let Some(ref u) = session_user {
         builder = builder.header("x-aegis-user", u.as_str());
+    }
+    if let Some(ss) = session_score {
+        builder = builder.header("x-aegis-session-score", ss.to_string());
     }
 
     if !body_bytes.is_empty() {
@@ -290,27 +466,27 @@ async fn proxy_handler(
         &state.event_log,
         EventAction::Allowed,
         Severity::Info,
-        format!(
-            "gate allow path={path} route={route_name} upstream_status={status_code}"
-        ),
+        format!("gate allow path={path} route={route_name} upstream_status={status_code}"),
         &[
             ("path", serde_json::json!(path)),
             ("route", serde_json::json!(route_name)),
             ("score", serde_json::json!(score)),
             ("upstream_status", serde_json::json!(status_code)),
+            ("ip", serde_json::json!(ip.to_string())),
         ],
     );
     access_log_line(
         &state.access_log,
         &format!(
-            "{} ALLOW {} {} route={} status={} score={} user={}",
+            "{} ALLOW {} {} route={} status={} score={} user={} ip={}",
             chrono::Utc::now().to_rfc3339(),
             method,
             path,
             route_name,
             status_code,
             score,
-            session_user.as_deref().unwrap_or("-")
+            session_user.as_deref().unwrap_or("-"),
+            ip
         ),
     );
 
@@ -339,6 +515,7 @@ pub async fn run(
         sessions_path,
         require_session,
         cache: Arc::new(RwLock::new(None)),
+        rate: Arc::new(RwLock::new(HashMap::new())),
         client: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
@@ -360,13 +537,18 @@ pub async fn run(
             cfg.listen,
             tls.cert.display()
         );
+        // axum-server ConnectInfo via into_make_service_with_connect_info
         axum_server::bind_rustls(addr, rustls_config)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         println!("[gate] listening on http://{}", cfg.listen);
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
     }
     Ok(())
 }

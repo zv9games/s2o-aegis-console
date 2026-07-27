@@ -64,6 +64,15 @@ enum Commands {
         require_session: bool,
         #[arg(long, default_value = ".aegis/sessions.json")]
         sessions: PathBuf,
+        /// Allow only these client IPs / CIDRs (repeatable). Empty = all.
+        #[arg(long = "allow-ip")]
+        allow_ips: Vec<String>,
+        /// Max requests per client IP per minute (0 = off)
+        #[arg(long, default_value_t = 0)]
+        rate_limit: u32,
+        /// Reject sessions whose mint-time posture is below min_score
+        #[arg(long)]
+        enforce_session_posture: bool,
     },
     /// Check posture only (same kernel score Gate uses)
     Check {
@@ -121,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture+optional session HTTP/HTTPS proxy, routes, TLS, access log".green()
+                "posture+session, TLS, allowlist, rate-limit, access log".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -215,6 +224,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             no_access_log,
             require_session,
             sessions,
+            allow_ips,
+            rate_limit,
+            enforce_session_posture,
         } => {
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             if let Some(l) = listen {
@@ -229,6 +241,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     path_prefix: "/".into(),
                     upstream: u,
                 }];
+            }
+            if !allow_ips.is_empty() {
+                cfg.allow_ips = allow_ips;
+            }
+            if rate_limit > 0 {
+                cfg.rate_limit_per_minute = rate_limit;
+            }
+            if enforce_session_posture {
+                cfg.enforce_session_posture = true;
             }
             if cfg.routes.is_empty() {
                 eprintln!("[gate] no routes configured — run cyberztna init or pass --upstream");
@@ -255,6 +276,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ("listen", serde_json::json!(cfg.listen)),
                     ("min_score", serde_json::json!(cfg.min_score)),
                     ("tls", serde_json::json!(tls)),
+                    (
+                        "rate_limit",
+                        serde_json::json!(cfg.rate_limit_per_minute),
+                    ),
+                    (
+                        "allow_ips",
+                        serde_json::json!(cfg.allow_ips.len()),
+                    ),
                 ],
             );
             let tls_files = if tls {
@@ -277,6 +306,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "[gate] require session  : {} (header X-Aegis-Session)",
                     sessions.display()
+                );
+            }
+            if cfg.enforce_session_posture {
+                println!(
+                    "[gate] session posture  : enforce mint score >= {}",
+                    cfg.min_score
+                );
+            }
+            if !cfg.allow_ips.is_empty() {
+                println!(
+                    "[gate] allow IPs        : {}",
+                    cfg.allow_ips.join(", ")
+                );
+            }
+            if cfg.rate_limit_per_minute > 0 {
+                println!(
+                    "[gate] rate limit       : {}/min per IP",
+                    cfg.rate_limit_per_minute
                 );
             }
             proxy::run(

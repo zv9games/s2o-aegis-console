@@ -48,6 +48,9 @@
 - Gate access log (`.aegis/gate-access.log`)
 - CyberID local session tokens after posture gate
 - Shared `s2o-session` crate; Gate `--require-session` (X-Aegis-Session / Bearer)
+- Gate IP allowlist (`--allow-ip` / CIDR), per-IP rate limit (`--rate-limit`)
+- Gate `--enforce-session-posture` (mint-time score vs min_score)
+- Session `last_used` touch on Gate use; `cyberid gc` for store cleanup
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

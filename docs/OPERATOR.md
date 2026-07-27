@@ -100,14 +100,17 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 cargo run -p cyberid -- authenticate alice --min-score 40
 # copy Token...
 
-cargo run -p cyberztna -- serve --tls --require-session --listen 127.0.0.1:18443 --upstream https://example.com
+cargo run -p cyberztna -- serve --tls --require-session `
+  --listen 127.0.0.1:18443 --upstream https://example.com `
+  --allow-ip 127.0.0.1 --allow-ip 10.0.0.0/8 `
+  --rate-limit 120 --enforce-session-posture
 # certs: .aegis/gate-cert.pem , .aegis/gate-key.pem
 
 curl -k -H "X-Aegis-Session: aegis_..." https://127.0.0.1:18443/
 # or: Authorization: Bearer aegis_...
 ```
 
-Posture score is cached ~15s. Without a valid session (when `--require-session`), Gate returns **401**. Low posture returns **403** with `x-aegis-posture-score`.
+Posture score is cached ~15s. Without a valid session (when `--require-session`), Gate returns **401**. Low posture returns **403** with `x-aegis-posture-score`. IP not on allowlist → **403**. Rate limit → **429**. Successful session use updates `last_used` (`cyberid sessions`). Cleanup: `cyberid gc`.
 
 ## Event store
 

@@ -44,6 +44,8 @@ enum Commands {
         ttl_hours: i64,
     },
     Sessions,
+    /// Remove expired/revoked sessions from the store
+    Gc,
     Revoke { token: String },
     Verify { token: String },
 }
@@ -149,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture score + local session tokens (mint/list/revoke/verify)".green()
+                "posture + sessions (mint/list/revoke/verify/gc, last_used)".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -398,11 +400,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 for s in active {
                     println!(
-                        "{}  user={} score={} exp={}",
-                        s.token, s.user, s.posture_score, s.expires_at
+                        "{}  user={} score={} exp={} last_used={}",
+                        s.token,
+                        s.user,
+                        s.posture_score,
+                        s.expires_at,
+                        s.last_used.as_deref().unwrap_or("-")
                     );
                 }
             }
+        }
+        Commands::Gc => {
+            let mut store = SessionStore::load(&cli.sessions);
+            let n = store.gc();
+            store.save(&cli.sessions)?;
+            println!("[cyberid] gc removed {n} session(s); active={}", store.active().count());
+            emit(
+                &cli.event_log,
+                EventAction::Observed,
+                Severity::Info,
+                format!("session gc removed={n}"),
+                &[("removed", serde_json::json!(n))],
+            );
         }
         Commands::Revoke { token } => {
             let mut store = SessionStore::load(&cli.sessions);
