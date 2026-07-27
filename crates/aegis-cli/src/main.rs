@@ -1586,21 +1586,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let el = PathBuf::from(".aegis/events.jsonl");
-            if el.exists() {
-                match EventStore::open(&el) {
-                    Ok(s) => {
-                        let _ = s.count();
-                        checks.push(("event_store", true));
-                    }
-                    Err(_) => checks.push(("event_store", false)),
+            match EventStore::open(&el) {
+                Ok(s) => {
+                    let _ = s.count();
+                    // emit round-trip
+                    let ev = s2o_schema::AegisEvent::new(
+                        s2o_kernel::host_id(),
+                        s2o_schema::ProductId::Aegis,
+                        s2o_schema::EventKind::Health,
+                        s2o_schema::EventAction::Observed,
+                        s2o_schema::Severity::Info,
+                        "selftest emit",
+                    )
+                    .with_attr("selftest", serde_json::json!(true));
+                    checks.push(("event_store_append", s.append(&ev).is_ok()));
+                    checks.push(("event_store", true));
                 }
-            } else {
-                // creatable is enough
-                match EventStore::open(&el) {
-                    Ok(_) => checks.push(("event_store", true)),
-                    Err(_) => checks.push(("event_store", false)),
+                Err(_) => {
+                    checks.push(("event_store", false));
+                    checks.push(("event_store_append", false));
                 }
             }
+            // schema ingest decode
+            let ingest_ok = s2o_schema::decode_event_json(
+                r#"{"message":"selftest","severity":"info","product":"aegis"}"#,
+                "selftest-host",
+            )
+            .is_ok();
+            checks.push(("event_ingest_decode", ingest_ok));
+            // UDP bus round-trip
+            let bus_ok = (|| {
+                let sock = s2o_bus::udp_bind("127.0.0.1:0").ok()?;
+                let addr = sock.local_addr().ok()?.to_string();
+                let ev = s2o_schema::AegisEvent::new(
+                    "selftest",
+                    s2o_schema::ProductId::Aegis,
+                    s2o_schema::EventKind::Alert,
+                    s2o_schema::EventAction::Observed,
+                    s2o_schema::Severity::Low,
+                    "bus-selftest",
+                );
+                s2o_bus::udp_send(&addr, &ev).ok()?;
+                let mut buf = [0u8; 65535];
+                sock.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .ok()?;
+                let (n, _) = sock.recv_from(&mut buf).ok()?;
+                let back = s2o_bus::udp_decode(&buf[..n], "selftest").ok()?;
+                Some(back.message == "bus-selftest")
+            })()
+            .unwrap_or(false);
+            checks.push(("event_bus_udp", bus_ok));
+            // data dir writability
+            let qdir = PathBuf::from(".aegis/quarantine");
+            checks.push((
+                "quarantine_dir",
+                std::fs::create_dir_all(&qdir).is_ok(),
+            ));
+            // policy example present (optional warn as pass if missing in checkout)
+            checks.push((
+                "policy_examples",
+                PathBuf::from("policies/examples/edge-pack.json").exists()
+                    || PathBuf::from("policies/examples/wall-enable.json").exists(),
+            ));
+            // managed firewall rule model
+            let pol = cyberwall_core::FirewallPolicy {
+                name: "selftest".into(),
+                version: "0".into(),
+                rules: vec![cyberwall_core::FirewallRule::simple(
+                    "selftest-port",
+                    cyberwall_core::RuleAction::Block,
+                    cyberwall_core::RuleDirection::Inbound,
+                )],
+            }
+            .ensure_managed_names();
+            checks.push((
+                "wall_managed_prefix",
+                pol.rules[0]
+                    .name
+                    .starts_with(cyberwall_core::MANAGED_RULE_PREFIX),
+            ));
+
             println!("{}", "Aegis selftest".bold().green());
             for (name, ok) in &checks {
                 if *ok {

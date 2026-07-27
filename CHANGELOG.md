@@ -86,9 +86,11 @@
 - Playbook actions: `emit`, `dns_allow` / `dns_allow_attr`
 - CyberDefender quarantine ops: `quarantine list|restore|purge`
 - macOS Cyberwall `apply_policy`: socketfilterfw managed app block/unblock (path rules)
+- CyberDNS serve query stats (`--stats-secs`); CyberDefender `yara pull` URL ruleset fetch (capped)
+- Expanded `aegis selftest` (event append, ingest decode, UDP bus, wall prefix, quarantine dir)
 
 ### Known gaps (intentionally later)
-- Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
+- Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
 - Transparent DNS redirector, embedded boringtun
 - Production browser IdP UI (lab authorize HTML + CLI auto-approve only)
 - Remote SIEM EPS / multi-tenant collectors / gRPC bus

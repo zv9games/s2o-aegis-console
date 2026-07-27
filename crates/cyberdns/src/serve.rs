@@ -10,10 +10,40 @@ use s2o_store::EventStore;
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
+
+/// Live counters for the UDP DNS proxy.
+#[derive(Default)]
+pub struct ProxyStats {
+    pub queries: AtomicU64,
+    pub blocked: AtomicU64,
+    pub allowed: AtomicU64,
+    pub allowlisted: AtomicU64,
+    pub doh_ok: AtomicU64,
+    pub doh_fail: AtomicU64,
+    pub other_qtype: AtomicU64,
+    pub encode_err: AtomicU64,
+}
+
+impl ProxyStats {
+    pub fn snapshot_line(&self) -> String {
+        format!(
+            "queries={} blocked={} allowlisted={} allowed={} doh_ok={} doh_fail={} other_qtype={} encode_err={}",
+            self.queries.load(Ordering::Relaxed),
+            self.blocked.load(Ordering::Relaxed),
+            self.allowlisted.load(Ordering::Relaxed),
+            self.allowed.load(Ordering::Relaxed),
+            self.doh_ok.load(Ordering::Relaxed),
+            self.doh_fail.load(Ordering::Relaxed),
+            self.other_qtype.load(Ordering::Relaxed),
+            self.encode_err.load(Ordering::Relaxed),
+        )
+    }
+}
 
 fn load_deny_set(blocklist_path: &Path, ioc_path: &Path) -> BTreeSet<String> {
     let mut set = load_blocklist(blocklist_path).unwrap_or_default();
@@ -146,9 +176,11 @@ pub async fn run_proxy(
     allowlist_path: &Path,
     ioc_path: &Path,
     event_log: &Path,
+    stats_interval_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let set = Arc::new(RwLock::new(load_deny_set(blocklist_path, ioc_path)));
     let allow = Arc::new(RwLock::new(load_allow_set(allowlist_path)));
+    let stats = Arc::new(ProxyStats::default());
     let blocklist_path = blocklist_path.to_path_buf();
     let allowlist_path = allowlist_path.to_path_buf();
     let ioc_path = ioc_path.to_path_buf();
@@ -159,6 +191,9 @@ pub async fn run_proxy(
         "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH=cloudflare)"
     );
     println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
+    if stats_interval_secs > 0 {
+        println!("[cyberdns] stats every {stats_interval_secs}s");
+    }
     println!("[cyberdns] Ctrl+C to stop");
 
     let set_reload = set.clone();
@@ -175,6 +210,18 @@ pub async fn run_proxy(
         }
     });
 
+    if stats_interval_secs > 0 {
+        let st = stats.clone();
+        let secs = stats_interval_secs;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(secs));
+            loop {
+                tick.tick().await;
+                eprintln!("[cyberdns] stats {}", st.snapshot_line());
+            }
+        });
+    }
+
     let mut buf = vec![0u8; 1500];
     loop {
         let (n, peer) = sock.recv_from(&mut buf).await?;
@@ -186,15 +233,16 @@ pub async fn run_proxy(
         if packet.questions.is_empty() {
             continue;
         }
+        stats.queries.fetch_add(1, Ordering::Relaxed);
         let q = &packet.questions[0];
         let domain = qname_to_string(&q.qname);
         let qtype = q.qtype;
 
-        let allowed = {
+        let on_allow = {
             let guard = allow.read().await;
             is_allowed(&guard, &domain)
         };
-        let blocked = if allowed {
+        let blocked = if on_allow {
             false
         } else {
             let guard = set.read().await;
@@ -202,6 +250,7 @@ pub async fn run_proxy(
         };
 
         let reply_bytes = if blocked {
+            stats.blocked.fetch_add(1, Ordering::Relaxed);
             emit_dns(
                 &event_log,
                 EventAction::Blocked,
@@ -212,13 +261,19 @@ pub async fn run_proxy(
             match build_with_rcode(&packet, RCODE::NameError, &[]) {
                 Ok(b) => b,
                 Err(e) => {
+                    stats.encode_err.fetch_add(1, Ordering::Relaxed);
                     eprintln!("[cyberdns] encode nxdomain: {e}");
                     continue;
                 }
             }
         } else if matches!(qtype, QTYPE::TYPE(TYPE::A)) {
+            if on_allow {
+                stats.allowlisted.fetch_add(1, Ordering::Relaxed);
+            }
             match doh_a(&domain).await {
                 Ok(ips) => {
+                    stats.doh_ok.fetch_add(1, Ordering::Relaxed);
+                    stats.allowed.fetch_add(1, Ordering::Relaxed);
                     emit_dns(
                         &event_log,
                         EventAction::Allowed,
@@ -233,24 +288,33 @@ pub async fn run_proxy(
                     match build_with_rcode(&packet, RCODE::NoError, &ans) {
                         Ok(b) => b,
                         Err(e) => {
+                            stats.encode_err.fetch_add(1, Ordering::Relaxed);
                             eprintln!("[cyberdns] encode answer: {e}");
                             continue;
                         }
                     }
                 }
                 Err(e) => {
+                    stats.doh_fail.fetch_add(1, Ordering::Relaxed);
                     eprintln!("[cyberdns] DoH fail {domain}: {e}");
                     match build_with_rcode(&packet, RCODE::ServerFailure, &[]) {
                         Ok(b) => b,
-                        Err(_) => continue,
+                        Err(_) => {
+                            stats.encode_err.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
                     }
                 }
             }
         } else {
             // AAAA / other: empty NOERROR (no data)
+            stats.other_qtype.fetch_add(1, Ordering::Relaxed);
             match build_with_rcode(&packet, RCODE::NoError, &[]) {
                 Ok(b) => b,
-                Err(_) => continue,
+                Err(_) => {
+                    stats.encode_err.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
             }
         };
 

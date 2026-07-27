@@ -194,6 +194,20 @@ enum YaraCmd {
         #[arg(long, default_value = ".aegis/quarantine")]
         quarantine_dir: PathBuf,
     },
+    /// Download a remote .yar/.yara (or text) ruleset into --yara-dir (capped lab feed)
+    Pull {
+        /// HTTP(S) URL of a YARA rules file
+        url: String,
+        /// Output filename under --yara-dir
+        #[arg(long, default_value = "pulled.yar")]
+        name: String,
+        /// Max download bytes (safety cap)
+        #[arg(long, default_value_t = 512 * 1024)]
+        max_bytes: usize,
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -976,8 +990,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("  compile: {e}");
-                        std::process::exit(2);
+                        eprintln!("  compile WARN: {e}");
+                        eprintln!("  (files listed; fix duplicates before scan --yara)");
                     }
                 }
             }
@@ -1005,6 +1019,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{} {}", "HIT".red().bold(), h);
                 }
                 std::process::exit(3);
+            }
+            YaraCmd::Pull {
+                url,
+                name,
+                max_bytes,
+                force,
+            } => {
+                let fname = name
+                    .trim()
+                    .trim_start_matches(['/', '\\'])
+                    .to_string();
+                if fname.is_empty() || fname.contains("..") {
+                    eprintln!("[cyberdefender] invalid --name");
+                    std::process::exit(2);
+                }
+                fs::create_dir_all(&cli.yara_dir)?;
+                let dest = cli.yara_dir.join(&fname);
+                if dest.exists() && !force {
+                    eprintln!(
+                        "[cyberdefender] {} exists (use --force)",
+                        dest.display()
+                    );
+                    std::process::exit(3);
+                }
+                println!("[cyberdefender] pulling {url} (max_bytes={max_bytes})...");
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .user_agent("S2O-CyberDefender/0.5 (+yara pull)")
+                    .build()?;
+                let res = client.get(&url).send().await?;
+                if !res.status().is_success() {
+                    eprintln!("[cyberdefender] HTTP {}", res.status());
+                    std::process::exit(1);
+                }
+                let bytes = res.bytes().await?;
+                if bytes.len() > max_bytes {
+                    eprintln!(
+                        "[cyberdefender] download {} bytes exceeds max_bytes={max_bytes}",
+                        bytes.len()
+                    );
+                    std::process::exit(1);
+                }
+                // basic sanity: look like YARA text
+                let text = String::from_utf8_lossy(&bytes);
+                if !text.contains("rule ") && !text.contains("rule\t") {
+                    eprintln!("[cyberdefender] WARN: body may not be YARA (no 'rule ' token)");
+                }
+                // validate this source alone (dir may already have same rule names)
+                match YaraEngine::compile_source(&text, &fname) {
+                    Ok(eng) => {
+                        fs::write(&dest, &bytes)?;
+                        println!(
+                            "{}",
+                            format!(
+                                "[cyberdefender] wrote {} ({} bytes); file rules={}",
+                                dest.display(),
+                                bytes.len(),
+                                eng.rule_count
+                            )
+                            .green()
+                            .bold()
+                        );
+                        if let Err(e) = YaraEngine::compile_dir(&cli.yara_dir) {
+                            eprintln!(
+                                "[cyberdefender] WARN: full yara-dir compile: {e} (resolve duplicate rule names)"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[cyberdefender] download rejected (compile): {e}");
+                        std::process::exit(2);
+                    }
+                }
             }
             YaraCmd::Scan {
                 path,

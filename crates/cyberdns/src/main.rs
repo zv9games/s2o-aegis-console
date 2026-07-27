@@ -85,6 +85,9 @@ enum Commands {
         /// Prefer high ports (5353 is often blocked on Windows / Hyper-V)
         #[arg(short, long, default_value = "127.0.0.1:53553")]
         listen: String,
+        /// Print query counters every N seconds (0 = off)
+        #[arg(long, default_value_t = 30)]
+        stats_secs: u64,
     },
     /// Point OS resolver at local proxy / restore (hijack-lite T0)
     SystemDns {
@@ -213,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
             println!(
                 " Implemented       : {}",
-                "DoH + allowlist + blocklist + IOC + UDP proxy + system-dns".green()
+                "DoH + allowlist/blocklist + IOC + UDP proxy stats + system-dns".green()
             );
             println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
             println!(
@@ -405,13 +408,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Serve { listen } => {
+        Commands::Serve { listen, stats_secs } => {
             serve::run_proxy(
                 &listen,
                 &cli.blocklist,
                 &cli.allowlist,
                 &cli.ioc_store,
                 &cli.event_log,
+                stats_secs,
             )
             .await?;
         }

@@ -29,7 +29,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             if demo {
                 "DEMO: DoH + blocklist + UDP proxy"
             } else {
-                "partial: DoH + allowlist/blocklist + IOC + UDP proxy + system-dns; no DoT/redirector"
+                "partial: DoH + allowlist/blocklist + IOC + UDP proxy stats + system-dns; no DoT/redirector"
             },
         ),
         ProductId::CyberDefender => ModuleStatus::new(
@@ -41,7 +41,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: SHA-256 + IOC + yara-lite + YARA-X + quarantine list/restore; no minifilter/cloud feed",
+            "partial: SHA-256 + IOC + yara-lite + YARA-X pull/scan + quarantine; no minifilter/commercial feed",
         ),
 
         ProductId::CyberEdr => ModuleStatus::new(
