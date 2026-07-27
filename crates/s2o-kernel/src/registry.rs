@@ -56,9 +56,9 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             os,
             CapabilityTier::T1,
             if matches!(os, OsFamily::Windows) {
-                "partial: IP Helper TCP table; no ETW/eBPF"
+                "partial: TCP table + process inventory + heuristic alerts; no ETW/eBPF"
             } else {
-                "not implemented on this OS yet (Phase 2)"
+                "partial: process inventory (ps); TCP needs Windows net_lib"
             },
         ),
         ProductId::CyberLog => ModuleStatus::new(
@@ -68,7 +68,17 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             CapabilityTier::T0,
             "partial: local JSONL store reader; no collectors/correlation",
         ),
-        ProductId::ThreatGrid => stub(product, os, demo, "not implemented (Phase 2); IOC store planned"),
+        ProductId::ThreatGrid => ModuleStatus::new(
+            product,
+            if demo {
+                HealthState::Demo
+            } else {
+                HealthState::Partial
+            },
+            os,
+            CapabilityTier::T0,
+            "partial: local JSON IOC store (lookup/add/sync); no cloud feeds/ML",
+        ),
         ProductId::CyberId => ModuleStatus::new(
             product,
             if demo {

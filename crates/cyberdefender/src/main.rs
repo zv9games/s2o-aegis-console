@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use s2o_ioc::IocStore;
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
 use std::collections::BTreeSet;
@@ -23,6 +24,14 @@ struct Cli {
     /// Local signature / hash rules file
     #[arg(long, global = true, default_value = ".aegis/defender-rules.json")]
     rules: PathBuf,
+
+    /// ThreatGrid IOC store (hash IOCs)
+    #[arg(long, global = true, default_value = ".aegis/ioc-store.json")]
+    ioc_store: PathBuf,
+
+    /// Optional yara-lite patterns file (one `name: needle` per line)
+    #[arg(long, global = true, default_value = ".aegis/yara-lite.rules")]
+    patterns: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -147,6 +156,72 @@ fn calculate_file_hash(path: &Path) -> Result<String, std::io::Error> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// yara-lite: lines like `eicar_string: EICAR-STANDARD-ANTIVIRUS-TEST-FILE`
+fn load_patterns(path: &Path) -> Vec<(String, String)> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, needle)) = line.split_once(':') {
+            let name = name.trim().to_string();
+            let needle = needle.trim().to_string();
+            if !name.is_empty() && !needle.is_empty() {
+                out.push((name, needle));
+            }
+        }
+    }
+    out
+}
+
+fn content_pattern_hit(path: &Path, patterns: &[(String, String)]) -> Option<String> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let Ok(mut f) = File::open(path) else {
+        return None;
+    };
+    // Cap read at 2 MiB for T0 scan
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let mut total = 0usize;
+    loop {
+        let Ok(n) = f.read(&mut tmp) else {
+            return None;
+        };
+        if n == 0 {
+            break;
+        }
+        total += n;
+        buf.extend_from_slice(&tmp[..n]);
+        if total >= 2 * 1024 * 1024 {
+            break;
+        }
+    }
+    let Ok(text) = std::str::from_utf8(&buf) else {
+        // binary: search as bytes for needle utf8
+        for (name, needle) in patterns {
+            if !needle.is_empty() && buf.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                return Some(name.clone());
+            }
+        }
+        return None;
+    };
+    for (name, needle) in patterns {
+        if text.contains(needle) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 fn collect_targets(path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
@@ -211,13 +286,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 " Name substr rules : {}",
                 rules.blocked_name_substrings.len().to_string().yellow()
             );
+            let ioc_hashes = IocStore::load(&cli.ioc_store)
+                .map(|s| s.count_by_kind(s2o_ioc::IocKind::Hash))
+                .unwrap_or(0);
+            let patterns = load_patterns(&cli.patterns).len();
+            println!(" IOC hash rules    : {ioc_hashes}");
+            println!(" yara-lite patterns: {patterns} ({})", cli.patterns.display());
             println!(
                 " Implemented       : {}",
-                "SHA-256 scan + local hash/name rules + Defender query + events".green()
+                "SHA-256 + local rules + ThreatGrid hashes + yara-lite content + Defender".green()
             );
             println!(
                 " Not implemented   : {}",
-                "full YARA engine, realtime FS shield, cloud defs".red()
+                "full YARA-X engine, realtime FS shield, cloud defs".red()
             );
             println!(
                 "{}",
@@ -249,13 +330,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rules.version = "0.1.0".into();
             }
             save_rules(&cli.rules, &rules)?;
+            if !cli.patterns.exists() {
+                let seed = "# S2O yara-lite patterns (name: needle)\n# eicar_string: EICAR-STANDARD-ANTIVIRUS-TEST-FILE\n";
+                if let Some(p) = cli.patterns.parent() {
+                    let _ = fs::create_dir_all(p);
+                }
+                let _ = fs::write(&cli.patterns, seed);
+            }
             println!(
                 "{}",
                 format!(
-                    "[cyberdefender] wrote local rules {} (hashes={}, names={})",
+                    "[cyberdefender] wrote local rules {} (hashes={}, names={}); patterns {}",
                     cli.rules.display(),
                     rules.blocked_hashes.len(),
-                    rules.blocked_name_substrings.len()
+                    rules.blocked_name_substrings.len(),
+                    cli.patterns.display()
                 )
                 .green()
                 .bold()
@@ -272,13 +361,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Scan { path } => {
             let root = PathBuf::from(&path);
             let rules = load_rules(&cli.rules);
-            let hash_set = rules.hash_set();
+            let mut hash_set = rules.hash_set();
+            if let Ok(ioc) = IocStore::load(&cli.ioc_store) {
+                for e in ioc.entries {
+                    if e.kind == s2o_ioc::IocKind::Hash {
+                        hash_set.insert(e.value.to_ascii_lowercase());
+                    }
+                }
+            }
+            let patterns = load_patterns(&cli.patterns);
             println!(
                 "{}",
                 format!(
-                    "[cyberdefender] scanning '{}' ({} hash rules)...",
+                    "[cyberdefender] scanning '{}' ({} hash rules, {} patterns)...",
                     root.display(),
-                    hash_set.len()
+                    hash_set.len(),
+                    patterns.len()
                 )
                 .cyan()
             );
@@ -324,6 +422,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                if let Some(rule) = content_pattern_hit(t, &patterns) {
+                    blocked += 1;
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                    println!(" Target File  : {}", t.display().to_string().bold());
+                    println!(
+                        " Verdict      : {}",
+                        format!("BLOCKED (yara-lite: {rule})").red().bold()
+                    );
+                    emit(
+                        &cli.event_log,
+                        EventAction::Blocked,
+                        Severity::High,
+                        format!("yara-lite hit: {}", t.display()),
+                        &[
+                            ("path", serde_json::json!(t.display().to_string())),
+                            ("rule", serde_json::json!(rule)),
+                            ("verdict", serde_json::json!("blocked_pattern")),
+                        ],
+                        None,
+                    );
+                    continue;
+                }
+
                 match calculate_file_hash(t) {
                     Ok(hash) => {
                         hashed += 1;
@@ -340,7 +464,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if hit {
                             println!(
                                 " Verdict      : {}",
-                                "BLOCKED (hash rule)".red().bold()
+                                "BLOCKED (hash rule / ThreatGrid)".red().bold()
                             );
                             emit(
                                 &cli.event_log,

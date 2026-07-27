@@ -22,6 +22,7 @@ jobs:
             -p s2o-schema \
             -p s2o-store \
             -p s2o-bus \
+            -p s2o-ioc \
             -p s2o-kernel \
             -p cyberwall-core \
             -p cyberwall-backend-linux \
@@ -34,8 +35,8 @@ jobs:
             -p cyberztna \
             -p aegisd \
             -p aegis-cli
-      - name: Test schema/store
-        run: cargo test -p s2o-schema -p s2o-store
+      - name: Test schema/store/ioc
+        run: cargo test -p s2o-schema -p s2o-store -p s2o-ioc
 
   # Full Windows suite when net-lib is available as a sibling checkout
   windows-suite:

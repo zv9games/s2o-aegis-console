@@ -128,6 +128,10 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ GitHub Actions CI (portable Ubuntu + optional Windows+net-lib)  
 - ✅ CyberDNS local UDP proxy (`serve`, blocklist NXDOMAIN + DoH A)  
 - ✅ CyberDefender local hash/name rules (`update-defs` + scan verdicts)  
+- ✅ ThreatGrid local IOC store (`s2o-ioc`) + lookup/add/sync  
+- ✅ DNS + Defender consume ThreatGrid IOCs  
+- ✅ CyberEDR process inventory + heuristic alerts  
+- ✅ yara-lite content patterns (not full YARA-X)  
 - ⏳ Full YARA-X / ETW hooks / system DNS hijack (later)  
 - Selective T1 if needed for telemetry APIs
 

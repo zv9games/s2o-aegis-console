@@ -776,6 +776,7 @@ version = "0.3.0"
 dependencies = [
  "clap",
  "colored",
+ "s2o-ioc",
  "s2o-schema",
  "s2o-store",
  "s2o_net_lib",
@@ -792,6 +793,7 @@ dependencies = [
  "clap",
  "colored",
  "reqwest",
+ "s2o-ioc",
  "s2o-schema",
  "s2o-store",
  "serde",
@@ -831,11 +833,15 @@ dependencies = [
 
 [[package]]
 name = "cyberintel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "chrono",
  "clap",
  "colored",
  "reqwest",
+ "s2o-ioc",
+ "s2o-schema",
+ "s2o-store",
  "serde",
  "serde_json",
  "tokio",
@@ -2884,6 +2890,16 @@ dependencies = [
  "parking_lot 0.12.3",
  "s2o-schema",
  "s2o-store",
+]
+
+[[package]]
+name = "s2o-ioc"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

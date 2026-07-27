@@ -7,9 +7,24 @@ use blocklist::{is_blocked, load_blocklist, normalize_domain, save_blocklist};
 use clap::{Parser, Subcommand};
 use colored::*;
 use serde::Deserialize;
+use s2o_ioc::IocStore;
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
 use std::path::{Path, PathBuf};
+
+fn domain_denied(blocklist: &Path, ioc_path: &Path, domain: &str) -> Option<&'static str> {
+    if let Ok(set) = load_blocklist(blocklist) {
+        if is_blocked(&set, domain) {
+            return Some("blocklist");
+        }
+    }
+    if let Ok(store) = IocStore::load(ioc_path) {
+        if store.is_domain_blocked(domain).is_some() {
+            return Some("threatgrid_ioc");
+        }
+    }
+    None
+}
 
 #[derive(Parser)]
 #[command(name = "cyberdns")]
@@ -22,6 +37,10 @@ struct Cli {
 
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
+
+    /// ThreatGrid local IOC store (optional)
+    #[arg(long, global = true, default_value = ".aegis/ioc-store.json")]
+    ioc_store: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -130,10 +149,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+            let ioc_n = IocStore::load(&cli.ioc_store)
+                .map(|s| s.entries.len())
+                .unwrap_or(0);
             println!(
                 " Implemented       : {}",
-                "DoH resolve + blocklist + local UDP proxy (serve)".green()
+                "DoH + blocklist + ThreatGrid IOC check + UDP proxy".green()
             );
+            println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
             println!(
                 " Not implemented   : {}",
                 "DoT, system resolver takeover, full recursive".red()
@@ -212,11 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Resolve { domain } => {
             let d = normalize_domain(&domain);
-            let set = load_blocklist(&cli.blocklist)?;
-            if is_blocked(&set, &d) {
+            if let Some(reason) = domain_denied(&cli.blocklist, &cli.ioc_store, &d) {
                 println!(
                     "{}",
-                    format!("[CYBERDNS] BLOCKED by local blocklist: {d}")
+                    format!("[CYBERDNS] BLOCKED by {reason}: {d}")
                         .red()
                         .bold()
                 );
@@ -224,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &cli.event_log,
                     EventAction::Blocked,
                     Severity::High,
-                    format!("resolve denied (blocklist): {d}"),
+                    format!("resolve denied ({reason}): {d}"),
                     &d,
                 );
                 std::process::exit(3);
@@ -264,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Serve { listen } => {
-            serve::run_proxy(&listen, &cli.blocklist, &cli.event_log).await?;
+            serve::run_proxy(&listen, &cli.blocklist, &cli.ioc_store, &cli.event_log).await?;
         }
     }
 

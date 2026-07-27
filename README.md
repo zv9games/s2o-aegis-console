@@ -45,7 +45,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 3 | CyberDefender | `cyberdefender` | **partial** — SHA-256 scan scaffold |
 | 4 | CyberEDR | `cyberedr` | **partial** — IP Helper TCP table |
 | 5 | CyberLog | `cybersiem` | **partial** — JSONL reader/export |
-| 6 | ThreatGrid | `cyberintel` | **not_implemented** |
+| 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
 | 7 | CyberID | `cyberid` | **partial** — posture from FW/Defender |
 | 8 | CyberMesh | `cybermesh` | **not_implemented** |
 | 9 | Gate | `cyberztna` | **not_implemented** |
@@ -97,6 +97,10 @@ cargo run -p cyberdns -- serve --listen 127.0.0.1:53553
 cargo run -p cyberdefender -- update-defs
 cargo run -p cyberdefender -- scan Cargo.toml
 cargo run -p cyberedr -- processes --limit 16
+cargo run -p cyberedr -- ps --limit 20
+cargo run -p cyberedr -- alerts
+cargo run -p cyberintel -- sync
+cargo run -p cyberintel -- lookup malware.test.s2o
 cargo run -p cybersiem -- events
 ```
 

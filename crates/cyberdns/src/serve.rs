@@ -4,14 +4,28 @@ use crate::blocklist::{is_blocked, load_blocklist, normalize_domain};
 use serde::Deserialize;
 use simple_dns::rdata::{RData, A};
 use simple_dns::{Name, Packet, PacketFlag, Question, CLASS, QTYPE, RCODE, TYPE};
+use s2o_ioc::{IocKind, IocStore};
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
+use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
+
+fn load_deny_set(blocklist_path: &Path, ioc_path: &Path) -> BTreeSet<String> {
+    let mut set = load_blocklist(blocklist_path).unwrap_or_default();
+    if let Ok(ioc) = IocStore::load(ioc_path) {
+        for e in ioc.entries {
+            if e.kind == IocKind::Domain {
+                set.insert(e.value);
+            }
+        }
+    }
+    set
+}
 
 #[derive(Debug, Deserialize)]
 struct DohAnswer {
@@ -125,29 +139,29 @@ fn build_with_rcode(
 pub async fn run_proxy(
     listen: &str,
     blocklist_path: &Path,
+    ioc_path: &Path,
     event_log: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let set = Arc::new(RwLock::new(load_blocklist(blocklist_path)?));
+    let set = Arc::new(RwLock::new(load_deny_set(blocklist_path, ioc_path)));
     let blocklist_path = blocklist_path.to_path_buf();
+    let ioc_path = ioc_path.to_path_buf();
     let event_log = event_log.to_path_buf();
 
     let sock = UdpSocket::bind(listen).await?;
     println!(
-        "[cyberdns] UDP proxy listening on {listen} (blocklist={}, DoH=cloudflare)",
-        blocklist_path.display()
+        "[cyberdns] UDP proxy listening on {listen} (blocklist+IOC, DoH=cloudflare)"
     );
     println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
     println!("[cyberdns] Ctrl+C to stop");
 
     let set_reload = set.clone();
     let bl = blocklist_path.clone();
+    let ioc = ioc_path.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         loop {
             tick.tick().await;
-            if let Ok(fresh) = load_blocklist(&bl) {
-                *set_reload.write().await = fresh;
-            }
+            *set_reload.write().await = load_deny_set(&bl, &ioc);
         }
     });
 
