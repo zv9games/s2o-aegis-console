@@ -74,6 +74,29 @@ enum Commands {
         #[command(subcommand)]
         command: PlaybookCmd,
     },
+    /// Zip the .aegis data directory
+    Backup {
+        #[arg(long, default_value = ".aegis")]
+        data_dir: PathBuf,
+        /// Output zip path (default .aegis-backup-<timestamp>.zip)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Restore a backup zip into the data directory (merge)
+    Restore {
+        /// Path to backup zip
+        zip: PathBuf,
+        #[arg(long, default_value = ".aegis")]
+        data_dir: PathBuf,
+        /// Allow overwriting existing files
+        #[arg(long)]
+        force: bool,
+    },
+    /// Non-interactive self-test (exit 1 on failure)
+    Selftest {
+        #[arg(long, default_value_t = 40)]
+        min_posture: u32,
+    },
     /// Run a product CLI if on PATH / target/debug (best-effort shim)
     Run {
         /// Product binary: cyberwall, cyberdns, cyberdefender, cyberedr, ...
@@ -217,6 +240,66 @@ fn event_matches(ev: &s2o_schema::AegisEvent, when: &PlaybookWhen) -> bool {
         }
     }
     true
+}
+
+fn zip_dir(src_dir: &Path, zip_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use walkdir::WalkDir;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    if let Some(p) = zip_path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let file = File::create(zip_path)?;
+    let mut zip = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let src_dir = src_dir.canonicalize().unwrap_or_else(|_| src_dir.to_path_buf());
+
+    for entry in WalkDir::new(&src_dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            continue;
+        }
+        let rel = path.strip_prefix(&src_dir).unwrap_or(path);
+        let name = rel.to_string_lossy().replace('\\', "/");
+        zip.start_file(name, options)?;
+        let mut f = File::open(path)?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        zip.write_all(&buf)?;
+    }
+    zip.finish()?;
+    Ok(())
+}
+
+fn unzip_to(zip_path: &Path, dest: &Path, force: bool) -> Result<usize, Box<dyn std::error::Error>> {
+    use std::fs::File;
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut n = 0usize;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = match file.enclosed_name() {
+            Some(p) => dest.join(p),
+            None => continue,
+        };
+        if file.name().ends_with('/') {
+            std::fs::create_dir_all(&outpath)?;
+            continue;
+        }
+        if outpath.exists() && !force {
+            continue;
+        }
+        if let Some(p) = outpath.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut outfile = File::create(&outpath)?;
+        std::io::copy(&mut file, &mut outfile)?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 fn append_dns_block(domain: &str) -> std::io::Result<()> {
@@ -656,6 +739,111 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[aegis] playbook complete: {fired} rule hits");
             }
         },
+        Commands::Backup { data_dir, out } => {
+            if !data_dir.exists() {
+                eprintln!("[aegis] data dir missing: {}", data_dir.display());
+                std::process::exit(1);
+            }
+            let out = out.unwrap_or_else(|| {
+                let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+                PathBuf::from(format!(".aegis-backup-{ts}.zip"))
+            });
+            zip_dir(&data_dir, &out)?;
+            println!(
+                "{}",
+                format!("[aegis] backup wrote {}", out.display())
+                    .green()
+                    .bold()
+            );
+        }
+        Commands::Restore {
+            zip,
+            data_dir,
+            force,
+        } => {
+            if !zip.exists() {
+                eprintln!("[aegis] zip missing: {}", zip.display());
+                std::process::exit(1);
+            }
+            std::fs::create_dir_all(&data_dir)?;
+            let n = unzip_to(&zip, &data_dir, force)?;
+            println!(
+                "{}",
+                format!(
+                    "[aegis] restored {n} files into {} (force={force})",
+                    data_dir.display()
+                )
+                .green()
+                .bold()
+            );
+        }
+        Commands::Selftest { min_posture } => {
+            let mut failed = 0u32;
+            let mut checks = Vec::new();
+            checks.push(("kernel_version", !KERNEL_VERSION.is_empty()));
+            checks.push(("schema_version", !SCHEMA_VERSION.is_empty()));
+            let status = collect_platform_status(&fw).await;
+            checks.push(("modules_count_9", status.modules.len() == 9));
+            let wall_ok = status
+                .modules
+                .iter()
+                .any(|m| m.id == "cyberwall" && matches!(m.state, HealthState::Implemented | HealthState::Partial));
+            checks.push(("cyberwall_present", wall_ok));
+            match compute_posture_score(&fw).await {
+                Ok(p) => {
+                    checks.push(("posture_compute", true));
+                    checks.push(("posture_min", p.score >= min_posture));
+                    println!(
+                        " posture_score={} min={} {}",
+                        p.score,
+                        min_posture,
+                        if p.score >= min_posture {
+                            "PASS".green().bold()
+                        } else {
+                            "FAIL".red().bold()
+                        }
+                    );
+                }
+                Err(e) => {
+                    checks.push(("posture_compute", false));
+                    checks.push(("posture_min", false));
+                    eprintln!(" posture error: {e}");
+                }
+            }
+            let el = PathBuf::from(".aegis/events.jsonl");
+            if el.exists() {
+                match EventStore::open(&el) {
+                    Ok(s) => {
+                        let _ = s.count();
+                        checks.push(("event_store", true));
+                    }
+                    Err(_) => checks.push(("event_store", false)),
+                }
+            } else {
+                // creatable is enough
+                match EventStore::open(&el) {
+                    Ok(_) => checks.push(("event_store", true)),
+                    Err(_) => checks.push(("event_store", false)),
+                }
+            }
+            println!("{}", "Aegis selftest".bold().green());
+            for (name, ok) in &checks {
+                if *ok {
+                    println!("  [PASS] {name}");
+                } else {
+                    println!("  [FAIL] {}", name.red());
+                    failed += 1;
+                }
+            }
+            if failed > 0 {
+                println!(
+                    "{}",
+                    format!("SELFTEST FAIL ({failed} checks)").red().bold()
+                );
+                std::process::exit(1);
+            }
+            println!("{}", "SELFTEST PASS".green().bold());
+        }
         Commands::Run { product, args } => {
             let bin = find_product_bin(&product).ok_or_else(|| {
                 format!(

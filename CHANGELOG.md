@@ -37,6 +37,8 @@
 - `aegis watch` / `cybersiem follow` live event tail
 - Defender `--quarantine` for blocked files
 - `aegis playbook init|run` dry-run/apply response rules
+- `aegis backup` / `restore`, `aegis selftest`
+- CyberLog syslog export with optional UDP ship
 
 ### Known gaps (intentionally later)
 - Full YARA-X engine, ETW/eBPF hooks

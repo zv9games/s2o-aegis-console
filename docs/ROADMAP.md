@@ -148,6 +148,9 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Live event watch (`aegis watch` / `cybersiem follow`)  
 - ✅ Defender quarantine on block  
 - ✅ Playbooks dry-run/apply (`aegis playbook`)  
+- ✅ `aegis backup` / `restore` for data dir  
+- ✅ CyberLog syslog export (+ optional UDP)  
+- ✅ `aegis selftest`  
 - ⏳ Full YARA-X / ETW / system DNS hijack / embedded WG / mTLS/OIDC (later)  
 - Selective T1 if needed for telemetry APIs
 

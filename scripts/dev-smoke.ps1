@@ -45,6 +45,8 @@ Run-Ok 'cybermesh config' { cargo run -p cybermesh -q -- config --output .aegis/
 Run-Ok 'cyberztna check' { cargo run -p cyberztna -q -- check --min-score 50 }
 Run-Ok 'cybersiem stats' { cargo run -p cybersiem -q -- stats --limit 200 }
 Run-Ok 'aegis events' { cargo run -p aegis-cli -q -- events --limit 5 }
+Run-Ok 'aegis selftest' { cargo run -p aegis-cli -q -- selftest --min-posture 40 }
+Run-Ok 'aegis backup' { cargo run -p aegis-cli -q -- backup --out .aegis/smoke-backup.zip }
 
 Write-Host ""
 Write-Host "SMOKE PASS" -ForegroundColor Green

@@ -25,6 +25,7 @@ enum Commands {
     },
     Collect,
     Export {
+        /// json | syslog
         #[arg(long, default_value = "json")]
         format: String,
         #[arg(long, default_value = ".aegis/events.jsonl")]
@@ -33,6 +34,9 @@ enum Commands {
         limit: usize,
         #[arg(long)]
         product: Option<String>,
+        /// Send syslog lines over UDP (format=syslog). Example: 127.0.0.1:514
+        #[arg(long)]
+        syslog_udp: Option<String>,
     },
     Events {
         #[arg(long, default_value = ".aegis/events.jsonl")]
@@ -143,6 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_log,
             limit,
             product,
+            syslog_udp,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log at {}", event_log.display());
@@ -153,18 +158,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ref p) = product {
                 events.retain(|e| product_matches(e.product, p));
             }
-            if format.eq_ignore_ascii_case("json") {
+            if format.eq_ignore_ascii_case("json") && syslog_udp.is_none() {
                 println!("{}", serde_json::to_string_pretty(&events)?);
             } else {
-                for ev in events {
+                let lines: Vec<String> = events
+                    .iter()
+                    .map(|ev| {
+                        // RFC5424-ish structured line
+                        format!(
+                            "<14>1 {} {} s2o-{} {:?} - {}",
+                            ev.ts.to_rfc3339(),
+                            ev.host_id,
+                            ev.product.as_str(),
+                            ev.kind,
+                            ev.message.replace('\n', " ")
+                        )
+                    })
+                    .collect();
+                if let Some(addr) = syslog_udp {
+                    use std::net::UdpSocket;
+                    let sock = UdpSocket::bind("0.0.0.0:0")?;
+                    sock.connect(&addr)?;
+                    let mut sent = 0usize;
+                    for line in &lines {
+                        sock.send(line.as_bytes())?;
+                        sent += 1;
+                    }
                     println!(
-                        "<14>1 {} {} {:?} {:?} - {}",
-                        ev.ts.to_rfc3339(),
-                        ev.host_id,
-                        ev.product,
-                        ev.kind,
-                        ev.message
+                        "[cyberlog] sent {sent} syslog UDP datagrams to {addr}"
                     );
+                } else {
+                    for line in lines {
+                        println!("{line}");
+                    }
                 }
             }
         }

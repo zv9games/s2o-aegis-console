@@ -114,8 +114,10 @@ cargo run -p cyberztna -- serve --tls --upstream https://example.com --listen 12
 # Mesh — keys + WireGuard conf (import with system WG / wg-quick)
 cargo run -p cybermesh -- config --output .aegis/wg0.conf --address 10.220.0.2/32
 
-# Event log rotation
+# Event log rotation / backup / selftest
 cargo run -p aegis-cli -- rotate
+cargo run -p aegis-cli -- backup
+cargo run -p aegis-cli -- selftest
 
 # Full developer smoke
 pwsh -File scripts/dev-smoke.ps1

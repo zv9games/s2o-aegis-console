@@ -15,6 +15,18 @@ cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
 cargo run -p aegis-cli -- playbook run              # dry-run
 cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist etc.
+cargo run -p aegis-cli -- selftest
+cargo run -p aegis-cli -- backup
+cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
+```
+
+### Syslog export
+
+```powershell
+# print RFC5424-ish lines
+cargo run -p cybersiem -- export --format syslog --limit 20
+# send UDP (listener must accept)
+cargo run -p cybersiem -- export --format syslog --syslog-udp 127.0.0.1:5514 --limit 20
 ```
 
 ### Daemon health endpoint
