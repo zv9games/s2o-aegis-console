@@ -34,7 +34,7 @@ fn load_blocklist(path: &Path) -> std::io::Result<BTreeSet<String>> {
     Ok(set)
 }
 
-fn save_blocklist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
+fn save_domain_list(path: &Path, set: &BTreeSet<String>, header: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -43,11 +43,19 @@ fn save_blocklist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
         .write(true)
         .truncate(true)
         .open(path)?;
-    writeln!(file, "# S2O CyberDNS local blocklist (kernel policy)")?;
+    writeln!(file, "{header}")?;
     for d in set {
         writeln!(file, "{d}")?;
     }
     Ok(())
+}
+
+fn save_blocklist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
+    save_domain_list(path, set, "# S2O CyberDNS local blocklist (kernel policy)")
+}
+
+fn save_allowlist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
+    save_domain_list(path, set, "# S2O CyberDNS local allowlist (kernel policy)")
 }
 
 /// Apply DNS policy fragment; returns human-readable applied lines.
@@ -113,6 +121,55 @@ pub fn apply_dns_intent(
         save_blocklist(&path, &set).map_err(KernelError::Io)?;
         applied.push(format!("dns.blocklist_path={}", path.display()));
         applied.push(format!("dns.blocklist_count={}", set.len()));
+    }
+
+    // Allowlist (overrides block + IOC in cyberdns resolve/serve)
+    let allow_path = PathBuf::from(
+        intent
+            .allowlist_path
+            .as_deref()
+            .unwrap_or(".aegis/dns-allowlist.txt"),
+    );
+    let mut allow = load_blocklist(&allow_path).map_err(KernelError::Io)?;
+    let mut allow_changed = false;
+    for d in &intent.allow_domains {
+        let d = normalize_domain(d);
+        if d.is_empty() {
+            continue;
+        }
+        if allow.insert(d.clone()) {
+            allow_changed = true;
+            applied.push(format!("dns.allow={d}"));
+            if let Some(store) = store {
+                let ev = AegisEvent::new(
+                    host_id(),
+                    ProductId::CyberDns,
+                    EventKind::Dns,
+                    EventAction::Allowed,
+                    Severity::Info,
+                    format!("policy allow domain: {d}"),
+                )
+                .with_attr("domain", serde_json::json!(d))
+                .with_attr("source", serde_json::json!("policy"));
+                store.append(&ev)?;
+            }
+        }
+    }
+    for d in &intent.unallow_domains {
+        let d = normalize_domain(d);
+        if allow.remove(&d) {
+            allow_changed = true;
+            applied.push(format!("dns.unallow={d}"));
+        }
+    }
+    if allow_changed
+        || !intent.allow_domains.is_empty()
+        || !intent.unallow_domains.is_empty()
+        || intent.allowlist_path.is_some()
+    {
+        save_allowlist(&allow_path, &allow).map_err(KernelError::Io)?;
+        applied.push(format!("dns.allowlist_path={}", allow_path.display()));
+        applied.push(format!("dns.allowlist_count={}", allow.len()));
     }
 
     Ok(applied)

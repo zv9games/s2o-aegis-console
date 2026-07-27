@@ -29,7 +29,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             if demo {
                 "DEMO: DoH + blocklist + UDP proxy"
             } else {
-                "partial: DoH resolve + file blocklist + local UDP proxy (serve); no DoT/system hijack"
+                "partial: DoH + allowlist/blocklist + IOC + UDP proxy + system-dns; no DoT/redirector"
             },
         ),
         ProductId::CyberDefender => ModuleStatus::new(
@@ -56,7 +56,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             os,
             CapabilityTier::T1,
             if matches!(os, OsFamily::Windows) {
-                "partial: TCP + process inventory + baseline/drift + heuristics; no ETW/eBPF"
+                "partial: TCP + listen inventory + process/baseline/drift + heuristics; no ETW/eBPF"
             } else {
                 "partial: process inventory/baseline (ps); TCP needs Windows net_lib"
             },

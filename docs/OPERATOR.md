@@ -104,9 +104,9 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Job | Command |
 |-----|---------|
 | Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
-| DNS | `cyberdns resolve\|block\|serve\|system-dns` |
+| DNS | `cyberdns resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|watch\|patterns\|yara\|update-defs` |
-| EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |
+| EDR | `cyberedr processes\|ps [--rich]\|listen\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |

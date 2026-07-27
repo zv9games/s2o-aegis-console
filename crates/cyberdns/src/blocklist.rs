@@ -52,3 +52,43 @@ pub fn is_blocked(set: &BTreeSet<String>, domain: &str) -> bool {
     }
     false
 }
+
+/// Allowlist uses the same one-domain-per-line format as the blocklist.
+pub fn load_allowlist(path: &Path) -> std::io::Result<BTreeSet<String>> {
+    load_blocklist(path)
+}
+
+pub fn save_allowlist(path: &Path, set: &BTreeSet<String>) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    writeln!(file, "# S2O CyberDNS local allowlist (overrides blocklist + IOC)")?;
+    for d in set {
+        writeln!(file, "{d}")?;
+    }
+    Ok(())
+}
+
+/// Exact or parent-domain allow (e.g. allow `example.com` → `a.example.com`).
+pub fn is_allowed(set: &BTreeSet<String>, domain: &str) -> bool {
+    is_blocked(set, domain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allow_suffix() {
+        let mut s = BTreeSet::new();
+        s.insert("corp.internal".into());
+        assert!(is_allowed(&s, "corp.internal"));
+        assert!(is_allowed(&s, "app.corp.internal"));
+        assert!(!is_allowed(&s, "evil.com"));
+    }
+}

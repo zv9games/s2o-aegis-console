@@ -486,8 +486,11 @@ impl PolicyDocument {
             }),
             dns: Some(DnsPolicyIntent {
                 blocklist_path: Some(".aegis/dns-blocklist.txt".into()),
+                allowlist_path: Some(".aegis/dns-allowlist.txt".into()),
                 block_domains: vec!["malware.test.s2o".into(), "phishing.test.s2o".into()],
                 unblock_domains: vec![],
+                allow_domains: vec![],
+                unallow_domains: vec![],
             }),
             intel: Some(IntelPolicyIntent {
                 sync_blocklist: true,
@@ -557,18 +560,27 @@ fn default_in() -> String {
     "in".into()
 }
 
-/// DNS intents — local file blocklist (CyberDNS / kernel).
+/// DNS intents — local file blocklist / allowlist (CyberDNS / kernel).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsPolicyIntent {
     /// Blocklist file path (default `.aegis/dns-blocklist.txt` when applying).
     #[serde(default)]
     pub blocklist_path: Option<String>,
+    /// Allowlist file path (default `.aegis/dns-allowlist.txt`).
+    #[serde(default)]
+    pub allowlist_path: Option<String>,
     /// Domains to add to the blocklist.
     #[serde(default)]
     pub block_domains: Vec<String>,
     /// Domains to remove from the blocklist.
     #[serde(default)]
     pub unblock_domains: Vec<String>,
+    /// Domains to add to the allowlist (override block + IOC).
+    #[serde(default)]
+    pub allow_domains: Vec<String>,
+    /// Domains to remove from the allowlist.
+    #[serde(default)]
+    pub unallow_domains: Vec<String>,
 }
 
 /// ThreatGrid / local IOC intents.

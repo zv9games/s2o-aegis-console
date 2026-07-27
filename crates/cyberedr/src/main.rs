@@ -56,6 +56,16 @@ enum Commands {
     },
     /// Heuristic alerts from TCP snapshot (no ETW yet)
     Alerts,
+    /// TCP LISTEN sockets (userspace table)
+    Listen {
+        #[arg(long, default_value_t = 64)]
+        limit: usize,
+        /// Only show ports commonly associated with risk (23,445,3389,…)
+        #[arg(long)]
+        risk_only: bool,
+        #[arg(long)]
+        emit_event: bool,
+    },
     /// Poll process table for new PIDs (ETW-lite T0; not kernel ETW)
     Watch {
         #[arg(long, default_value_t = 2000)]
@@ -383,7 +393,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, process inventory (+rich cmdline), baseline/drift, alerts, watch".green()
+                "TCP table, listen ports, process inventory (+rich), baseline/drift, alerts, watch"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -703,6 +714,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!(" Alerts: {}", alerts.len());
+        }
+        Commands::Listen {
+            limit,
+            risk_only,
+            emit_event,
+        } => {
+            let risk: BTreeSet<u16> = [21, 23, 135, 139, 445, 1433, 3306, 3389, 5900, 4444, 5555]
+                .into_iter()
+                .collect();
+            let conns = tokio::task::spawn_blocking(|| {
+                s2o_net_lib::telemetry::get_active_tcp_connections()
+            })
+            .await?;
+            let mut listening: Vec<_> = conns
+                .into_iter()
+                .filter(|c| c.state.eq_ignore_ascii_case("LISTEN"))
+                .collect();
+            listening.sort_by(|a, b| a.local_port.cmp(&b.local_port).then(a.pid.cmp(&b.pid)));
+            if risk_only {
+                listening.retain(|c| risk.contains(&c.local_port));
+            }
+            let total = listening.len();
+            let show = listening.into_iter().take(limit).collect::<Vec<_>>();
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "       CyberEDR listening TCP sockets                    "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                " Count: {} (showing {}){}",
+                total,
+                show.len(),
+                if risk_only { " risk_only" } else { "" }
+            );
+            for c in &show {
+                let mark = if risk.contains(&c.local_port) {
+                    " !".red().bold().to_string()
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  :{:<5}  pid={:<7}  {}{}",
+                    c.local_port, c.pid, c.local_addr, mark
+                );
+            }
+            if emit_event {
+                emit(
+                    &cli.event_log,
+                    EventKind::NetFlow,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("listen inventory count={total} risk_only={risk_only}"),
+                    &[
+                        ("count", serde_json::json!(total)),
+                        ("risk_only", serde_json::json!(risk_only)),
+                        (
+                            "ports",
+                            serde_json::json!(
+                                show.iter().map(|c| c.local_port).collect::<Vec<_>>()
+                            ),
+                        ),
+                    ],
+                );
+            }
         }
         Commands::Watch {
             interval_ms,

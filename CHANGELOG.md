@@ -79,6 +79,8 @@
 - CyberLog live collect: UDP syslog ingest (`cybersiem collect --listen`) → JSONL; PRI severity map; `--stdin-once` lab inject
 - ThreatGrid multi-feed online sync: URLHaus + OpenPhish (capped per feed), `--feed` repeatable
 - Multi-process event bus: `POST /events` + `aegisd --event-udp`, `s2o-bus` UDP relay, `aegis emit [--http] [--udp]`
+- CyberDNS allowlist: `allow|unallow|list --allow`, overrides blocklist+IOC in resolve/serve; policy `allow_domains`
+- CyberEDR `listen [--risk-only]`: TCP LISTEN inventory from userspace table
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed

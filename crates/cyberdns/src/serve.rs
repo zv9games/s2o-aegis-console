@@ -1,6 +1,6 @@
 //! Local UDP DNS proxy: blocklist → NXDOMAIN, else DoH A records.
 
-use crate::blocklist::{is_blocked, load_blocklist, normalize_domain};
+use crate::blocklist::{is_allowed, is_blocked, load_blocklist, normalize_domain};
 use serde::Deserialize;
 use simple_dns::rdata::{RData, A};
 use simple_dns::{Name, Packet, PacketFlag, Question, CLASS, QTYPE, RCODE, TYPE};
@@ -25,6 +25,10 @@ fn load_deny_set(blocklist_path: &Path, ioc_path: &Path) -> BTreeSet<String> {
         }
     }
     set
+}
+
+fn load_allow_set(allowlist_path: &Path) -> BTreeSet<String> {
+    crate::blocklist::load_allowlist(allowlist_path).unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,29 +143,35 @@ fn build_with_rcode(
 pub async fn run_proxy(
     listen: &str,
     blocklist_path: &Path,
+    allowlist_path: &Path,
     ioc_path: &Path,
     event_log: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let set = Arc::new(RwLock::new(load_deny_set(blocklist_path, ioc_path)));
+    let allow = Arc::new(RwLock::new(load_allow_set(allowlist_path)));
     let blocklist_path = blocklist_path.to_path_buf();
+    let allowlist_path = allowlist_path.to_path_buf();
     let ioc_path = ioc_path.to_path_buf();
     let event_log = event_log.to_path_buf();
 
     let sock = UdpSocket::bind(listen).await?;
     println!(
-        "[cyberdns] UDP proxy listening on {listen} (blocklist+IOC, DoH=cloudflare)"
+        "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH=cloudflare)"
     );
     println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
     println!("[cyberdns] Ctrl+C to stop");
 
     let set_reload = set.clone();
+    let allow_reload = allow.clone();
     let bl = blocklist_path.clone();
+    let al = allowlist_path.clone();
     let ioc = ioc_path.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         loop {
             tick.tick().await;
             *set_reload.write().await = load_deny_set(&bl, &ioc);
+            *allow_reload.write().await = load_allow_set(&al);
         }
     });
 
@@ -180,7 +190,13 @@ pub async fn run_proxy(
         let domain = qname_to_string(&q.qname);
         let qtype = q.qtype;
 
-        let blocked = {
+        let allowed = {
+            let guard = allow.read().await;
+            is_allowed(&guard, &domain)
+        };
+        let blocked = if allowed {
+            false
+        } else {
             let guard = set.read().await;
             is_blocked(&guard, &domain)
         };

@@ -4,7 +4,10 @@ mod blocklist;
 mod serve;
 mod system_dns;
 
-use blocklist::{is_blocked, load_blocklist, normalize_domain, save_blocklist};
+use blocklist::{
+    is_allowed, is_blocked, load_allowlist, load_blocklist, normalize_domain, save_allowlist,
+    save_blocklist,
+};
 use clap::{Parser, Subcommand};
 use colored::*;
 use serde::Deserialize;
@@ -13,7 +16,18 @@ use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
 use std::path::{Path, PathBuf};
 
-fn domain_denied(blocklist: &Path, ioc_path: &Path, domain: &str) -> Option<&'static str> {
+fn domain_denied(
+    blocklist: &Path,
+    allowlist: &Path,
+    ioc_path: &Path,
+    domain: &str,
+) -> Option<&'static str> {
+    // Allowlist overrides blocklist and IOC deny.
+    if let Ok(set) = load_allowlist(allowlist) {
+        if is_allowed(&set, domain) {
+            return None;
+        }
+    }
     if let Ok(set) = load_blocklist(blocklist) {
         if is_blocked(&set, domain) {
             return Some("blocklist");
@@ -36,6 +50,10 @@ struct Cli {
     #[arg(long, global = true, default_value = ".aegis/dns-blocklist.txt")]
     blocklist: PathBuf,
 
+    /// Domains that always resolve (override blocklist + IOC)
+    #[arg(long, global = true, default_value = ".aegis/dns-allowlist.txt")]
+    allowlist: PathBuf,
+
     #[arg(long, global = true, default_value = ".aegis/events.jsonl")]
     event_log: PathBuf,
 
@@ -53,8 +71,16 @@ enum Commands {
     Resolve { domain: String },
     Block { domain: String },
     Unblock { domain: String },
-    List,
-    /// Local UDP DNS proxy (blocklist + DoH A answers)
+    /// Add domain to allowlist (overrides block/IOC)
+    Allow { domain: String },
+    /// Remove domain from allowlist
+    Unallow { domain: String },
+    /// List blocklist (default) or --allow
+    List {
+        #[arg(long)]
+        allow: bool,
+    },
+    /// Local UDP DNS proxy (allowlist > blocklist + DoH A answers)
     Serve {
         /// Prefer high ports (5353 is often blocked on Windows / Hyper-V)
         #[arg(short, long, default_value = "127.0.0.1:53553")]
@@ -184,9 +210,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ioc_n = IocStore::load(&cli.ioc_store)
                 .map(|s| s.entries.len())
                 .unwrap_or(0);
+            let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
             println!(
                 " Implemented       : {}",
-                "DoH + blocklist + IOC + UDP proxy + system-dns bind".green()
+                "DoH + allowlist + blocklist + IOC + UDP proxy + system-dns".green()
             );
             println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
             println!(
@@ -199,6 +226,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(" Blocklist path    : {}", cli.blocklist.display());
             println!(" Blocked domains   : {}", set.len());
+            println!(" Allowlist path    : {}", cli.allowlist.display());
+            println!(" Allowed domains   : {}", allow.len().to_string().green());
             println!(" Event log         : {}", cli.event_log.display());
             println!(
                 " Proxy             : {}",
@@ -209,13 +238,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "=========================================================".cyan()
             );
         }
-        Commands::List => {
-            let set = load_blocklist(&cli.blocklist)?;
-            if set.is_empty() {
-                println!("[cyberdns] blocklist empty ({})", cli.blocklist.display());
+        Commands::List { allow } => {
+            if allow {
+                let set = load_allowlist(&cli.allowlist)?;
+                if set.is_empty() {
+                    println!("[cyberdns] allowlist empty ({})", cli.allowlist.display());
+                } else {
+                    for d in &set {
+                        println!("{d}");
+                    }
+                }
             } else {
-                for d in &set {
-                    println!("{d}");
+                let set = load_blocklist(&cli.blocklist)?;
+                if set.is_empty() {
+                    println!("[cyberdns] blocklist empty ({})", cli.blocklist.display());
+                } else {
+                    for d in &set {
+                        println!("{d}");
+                    }
                 }
             }
         }
@@ -265,9 +305,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[cyberdns] not in blocklist: {d}");
             }
         }
+        Commands::Allow { domain } => {
+            let d = normalize_domain(&domain);
+            if d.is_empty() {
+                eprintln!("[cyberdns] empty domain");
+                std::process::exit(2);
+            }
+            let mut set = load_allowlist(&cli.allowlist)?;
+            if set.insert(d.clone()) {
+                save_allowlist(&cli.allowlist, &set)?;
+                println!(
+                    "{}",
+                    format!("[cyberdns] allowed {d} ({} total)", set.len())
+                        .green()
+                        .bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Allowed,
+                    Severity::Info,
+                    format!("domain added to allowlist: {d}"),
+                    &d,
+                );
+            } else {
+                println!("[cyberdns] already allowed: {d}");
+            }
+        }
+        Commands::Unallow { domain } => {
+            let d = normalize_domain(&domain);
+            let mut set = load_allowlist(&cli.allowlist)?;
+            if set.remove(&d) {
+                save_allowlist(&cli.allowlist, &set)?;
+                println!(
+                    "{}",
+                    format!("[cyberdns] unallowed {d}").yellow().bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("domain removed from allowlist: {d}"),
+                    &d,
+                );
+            } else {
+                println!("[cyberdns] not in allowlist: {d}");
+            }
+        }
         Commands::Resolve { domain } => {
             let d = normalize_domain(&domain);
-            if let Some(reason) = domain_denied(&cli.blocklist, &cli.ioc_store, &d) {
+            if let Some(reason) =
+                domain_denied(&cli.blocklist, &cli.allowlist, &cli.ioc_store, &d)
+            {
                 println!(
                     "{}",
                     format!("[CYBERDNS] BLOCKED by {reason}: {d}")
@@ -318,7 +406,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Serve { listen } => {
-            serve::run_proxy(&listen, &cli.blocklist, &cli.ioc_store, &cli.event_log).await?;
+            serve::run_proxy(
+                &listen,
+                &cli.blocklist,
+                &cli.allowlist,
+                &cli.ioc_store,
+                &cli.event_log,
+            )
+            .await?;
         }
         Commands::SystemDns { command } => match command {
             SystemDnsCmd::Show => match system_dns::show_current() {

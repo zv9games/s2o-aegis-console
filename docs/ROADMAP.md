@@ -178,6 +178,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ OAuth authorization-code lab grant (aegisd + Gate client; not prod IdP UI)  
 - ✅ CyberLog UDP syslog collect + ThreatGrid multi-feed online sync (capped)  
 - ✅ Multi-process event ingest (`POST /events`, UDP bus, `aegis emit`)  
+- ✅ CyberDNS allowlist + EDR listen inventory  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 
