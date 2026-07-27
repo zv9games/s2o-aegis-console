@@ -58,6 +58,30 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Emit an event to the local store and/or aegisd HTTP/UDP bus
+    Emit {
+        /// Event message body
+        message: String,
+        #[arg(long, default_value = "info")]
+        severity: String,
+        #[arg(long, default_value = "aegis")]
+        product: String,
+        #[arg(long, default_value = "alert")]
+        kind: String,
+        #[arg(long, default_value = "observed")]
+        action: String,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Also POST to aegisd (e.g. http://127.0.0.1:9090/events)
+        #[arg(long)]
+        http: Option<String>,
+        /// Also fan-out via UDP bus (default lab 127.0.0.1:9091)
+        #[arg(long)]
+        udp: Option<String>,
+        /// Skip local JSONL append
+        #[arg(long)]
+        no_local: bool,
+    },
     /// Rotate the local event log now (archives to events.jsonl.1 …)
     Rotate {
         #[arg(long, default_value = ".aegis/events.jsonl")]
@@ -963,6 +987,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
+        Commands::Emit {
+            message,
+            severity,
+            product,
+            kind,
+            action,
+            event_log,
+            http,
+            udp,
+            no_local,
+        } => {
+            use s2o_schema::{
+                EventAction, EventKind, ProductId, Severity,
+            };
+            let product = ProductId::parse_loose(&product).unwrap_or(ProductId::Aegis);
+            let severity = Severity::parse_loose(&severity).unwrap_or(Severity::Info);
+            let kind = EventKind::parse_loose(&kind).unwrap_or(EventKind::Alert);
+            let action = EventAction::parse_loose(&action).unwrap_or(EventAction::Observed);
+            let ev = s2o_schema::AegisEvent::new(
+                s2o_kernel::host_id(),
+                product,
+                kind,
+                action,
+                severity,
+                message,
+            )
+            .with_attr("source", serde_json::json!("aegis_emit"));
+            if !no_local {
+                if let Some(p) = event_log.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                let store = EventStore::open(&event_log)?;
+                store.append(&ev)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[aegis] local append id={} → {}",
+                        ev.id,
+                        event_log.display()
+                    )
+                    .green()
+                );
+            }
+            if let Some(url) = http {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()?;
+                let res = client.post(&url).json(&ev).send().await?;
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                if status.is_success() {
+                    println!(
+                        "{}",
+                        format!("[aegis] HTTP POST {url} → {status}").green().bold()
+                    );
+                } else {
+                    eprintln!("[aegis] HTTP POST failed {status}: {text}");
+                    std::process::exit(1);
+                }
+            }
+            if let Some(addr) = udp {
+                s2o_bus::udp_send(&addr, &ev)?;
+                println!(
+                    "{}",
+                    format!("[aegis] UDP send → {addr}").green()
+                );
+            }
+        }
         Commands::Events { event_log, limit } => {
             if !event_log.exists() {
                 eprintln!("[aegis] no event log at {}", event_log.display());

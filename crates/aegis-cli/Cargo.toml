@@ -23,3 +23,4 @@ s2o-schema = { path = "../s2o-schema" }
 s2o-store = { path = "../s2o-store" }
 s2o-kernel = { path = "../s2o-kernel" }
 s2o-fleet = { path = "../s2o-fleet" }
+s2o-bus = { path = "../s2o-bus" }

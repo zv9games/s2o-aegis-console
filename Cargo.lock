@@ -41,6 +41,7 @@ dependencies = [
  "clap",
  "colored",
  "reqwest",
+ "s2o-bus",
  "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",
@@ -60,6 +61,7 @@ dependencies = [
  "clap",
  "colored",
  "jsonwebtoken",
+ "s2o-bus",
  "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",
@@ -4219,6 +4221,7 @@ dependencies = [
  "parking_lot 0.12.3",
  "s2o-schema",
  "s2o-store",
+ "serde_json",
 ]
 
 [[package]]

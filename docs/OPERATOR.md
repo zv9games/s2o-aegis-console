@@ -16,6 +16,10 @@ cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
 cargo run -p aegis-cli -- policy apply policies/examples/wall-rules-lab.json
 cargo run -p aegis-cli -- events --limit 20
 cargo run -p aegis-cli -- watch
+# emit locally and/or to aegisd bus
+cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall
+cargo run -p aegis-cli -- emit "remote" --http http://127.0.0.1:9090/events --no-local
+cargo run -p aegis-cli -- emit "udp" --udp 127.0.0.1:9091 --no-local
 cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
 cargo run -p aegis-cli -- playbook run              # dry-run
@@ -105,6 +109,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
+| Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem stats\|correlate\|events\|collect\|follow` |
 | Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
 | Identity | `cyberid posture\|authenticate\|sessions\|verify` |

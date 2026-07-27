@@ -75,6 +75,23 @@ impl ProductId {
             Self::Gate,
         ]
     }
+
+    /// Loose parse for CLI / ingest APIs (`cyberwall`, `wall`, `aegis`, …).
+    pub fn parse_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cyberwall" | "wall" | "fw" => Some(Self::Cyberwall),
+            "cybermesh" | "mesh" | "wg" => Some(Self::CyberMesh),
+            "cyberdefender" | "defender" | "av" => Some(Self::CyberDefender),
+            "cyberedr" | "edr" => Some(Self::CyberEdr),
+            "cyberlog" | "cybersiem" | "siem" | "log" => Some(Self::CyberLog),
+            "threatgrid" | "cyberintel" | "intel" | "ioc" => Some(Self::ThreatGrid),
+            "cyberdns" | "dns" => Some(Self::CyberDns),
+            "cyberid" | "id" | "identity" => Some(Self::CyberId),
+            "gate" | "cyberztna" | "ztna" => Some(Self::Gate),
+            "aegis" | "kernel" | "suite" => Some(Self::Aegis),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +240,19 @@ pub enum Severity {
     Critical,
 }
 
+impl Severity {
+    pub fn parse_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "info" | "informational" | "i" => Some(Self::Info),
+            "low" | "l" => Some(Self::Low),
+            "medium" | "med" | "m" => Some(Self::Medium),
+            "high" | "h" => Some(Self::High),
+            "critical" | "crit" | "c" => Some(Self::Critical),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -236,6 +266,22 @@ pub enum EventKind {
     Health,
 }
 
+impl EventKind {
+    pub fn parse_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "process" | "proc" => Some(Self::Process),
+            "file" | "fs" => Some(Self::File),
+            "netflow" | "net" | "network" | "flow" => Some(Self::NetFlow),
+            "dns" => Some(Self::Dns),
+            "auth" | "authentication" => Some(Self::Auth),
+            "policy" => Some(Self::Policy),
+            "alert" | "alarm" => Some(Self::Alert),
+            "health" | "status" => Some(Self::Health),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventAction {
@@ -244,6 +290,19 @@ pub enum EventAction {
     Quarantined,
     Allowed,
     Failed,
+}
+
+impl EventAction {
+    pub fn parse_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "observed" | "observe" | "info" => Some(Self::Observed),
+            "blocked" | "block" | "deny" => Some(Self::Blocked),
+            "quarantined" | "quarantine" => Some(Self::Quarantined),
+            "allowed" | "allow" | "permit" => Some(Self::Allowed),
+            "failed" | "fail" | "error" => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +365,72 @@ impl AegisEvent {
         self.iocs.push(ioc);
         self
     }
+}
+
+/// Compact ingest body for HTTP/UDP (full [`AegisEvent`] also accepted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventIngest {
+    pub message: String,
+    #[serde(default)]
+    pub host_id: Option<String>,
+    #[serde(default)]
+    pub product: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub attrs: serde_json::Map<String, serde_json::Value>,
+}
+
+impl EventIngest {
+    pub fn into_event(self, default_host: &str) -> Result<AegisEvent, String> {
+        let product = self
+            .product
+            .as_deref()
+            .and_then(ProductId::parse_loose)
+            .unwrap_or(ProductId::Aegis);
+        let severity = self
+            .severity
+            .as_deref()
+            .and_then(Severity::parse_loose)
+            .unwrap_or(Severity::Info);
+        let kind = self
+            .kind
+            .as_deref()
+            .and_then(EventKind::parse_loose)
+            .unwrap_or(EventKind::Alert);
+        let action = self
+            .action
+            .as_deref()
+            .and_then(EventAction::parse_loose)
+            .unwrap_or(EventAction::Observed);
+        let host = self
+            .host_id
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| default_host.to_string());
+        let mut ev = AegisEvent::new(host, product, kind, action, severity, self.message);
+        for (k, v) in self.attrs {
+            ev = ev.with_attr(k, v);
+        }
+        Ok(ev)
+    }
+}
+
+/// Decode either a full [`AegisEvent`] or compact [`EventIngest`] JSON.
+pub fn decode_event_json(body: &str, default_host: &str) -> Result<AegisEvent, String> {
+    let t = body.trim();
+    if t.is_empty() {
+        return Err("empty body".into());
+    }
+    if let Ok(ev) = serde_json::from_str::<AegisEvent>(t) {
+        return Ok(ev);
+    }
+    let ingest: EventIngest =
+        serde_json::from_str(t).map_err(|e| format!("invalid event json: {e}"))?;
+    ingest.into_event(default_host)
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +665,15 @@ mod tests {
         let s = serde_json::to_string_pretty(&p).unwrap();
         let back: PolicyDocument = serde_json::from_str(&s).unwrap();
         assert_eq!(back.firewall.unwrap().enabled, Some(true));
+    }
+
+    #[test]
+    fn ingest_decode_compact() {
+        let j = r#"{"message":"hi","severity":"high","product":"wall"}"#;
+        let ev = decode_event_json(j, "h1").unwrap();
+        assert_eq!(ev.message, "hi");
+        assert_eq!(ev.severity, Severity::High);
+        assert_eq!(ev.product, ProductId::Cyberwall);
     }
 
     #[test]

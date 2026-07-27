@@ -68,6 +68,8 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         jwks,
         jwt_private,
         oauth_devices,
+        event_udp,
+        no_event_udp,
     ) = service_start_config();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -97,6 +99,8 @@ fn run_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         jwks,
         jwt_private,
         oauth_devices,
+        event_udp,
+        no_event_udp,
     );
     rt.block_on(async {
         tokio::select! {
@@ -130,6 +134,8 @@ fn service_start_config(
     PathBuf,
     PathBuf,
     PathBuf,
+    String,
+    bool,
 ) {
     let args: Vec<String> = std::env::args().collect();
     let mut event_log = default_event_log();
@@ -141,6 +147,8 @@ fn service_start_config(
     let mut jwks = default_jwks_path();
     let mut jwt_private = default_jwt_private_path();
     let mut oauth_devices = default_oauth_devices_path();
+    let mut event_udp = "127.0.0.1:9091".to_string();
+    let mut no_event_udp = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -192,7 +200,14 @@ fn service_start_config(
                     i += 1;
                 }
             }
+            "--event-udp" => {
+                if let Some(v) = args.get(i + 1) {
+                    event_udp = v.clone();
+                    i += 1;
+                }
+            }
             "--no-health" => no_health = true,
+            "--no-event-udp" => no_event_udp = true,
             _ => {}
         }
         i += 1;
@@ -227,6 +242,11 @@ fn service_start_config(
             jwks = PathBuf::from(v);
         }
     }
+    if let Ok(v) = std::env::var("S2O_AEGIS_EVENT_UDP") {
+        if !v.is_empty() {
+            event_udp = v;
+        }
+    }
     (
         event_log,
         health_bind,
@@ -237,6 +257,8 @@ fn service_start_config(
         jwks,
         jwt_private,
         oauth_devices,
+        event_udp,
+        no_event_udp,
     )
 }
 

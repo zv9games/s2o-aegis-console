@@ -16,7 +16,8 @@ use s2o_kernel::{
     load_policy_file, FirewallEngineHandle, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
 };
 use s2o_schema::{
-    AegisEvent, EventAction, EventKind, HealthState, ProductId, Severity, SCHEMA_VERSION,
+    decode_event_json, AegisEvent, EventAction, EventKind, HealthState, ProductId, Severity,
+    SCHEMA_VERSION,
 };
 use s2o_store::EventStore;
 use std::fs;
@@ -65,6 +66,12 @@ enum Commands {
         /// Device-code store path
         #[arg(long, default_value = ".aegis/oauth-devices.json")]
         oauth_devices: PathBuf,
+        /// Multi-process UDP event ingest bind (empty to disable). Default lab: 127.0.0.1:9091
+        #[arg(long, default_value = "127.0.0.1:9091")]
+        event_udp: String,
+        /// Disable UDP event collector
+        #[arg(long)]
+        no_event_udp: bool,
     },
     /// Display platform status (honest matrix for all 9 worlds)
     Status {
@@ -727,10 +734,61 @@ async fn health_server(
                     ),
                 }
             } else if path == "/events" || path.starts_with("/events") {
-                match EventStore::open(&event_log) {
-                    Ok(store) => match store.recent(limit) {
-                        Ok(evs) => match serde_json::to_string(&evs) {
-                            Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                if method == "POST" || method == "PUT" {
+                    // Ingest: full AegisEvent JSON or compact EventIngest
+                    match decode_event_json(body_bytes, &host_id()) {
+                        Ok(mut ev) => {
+                            ev = ev.with_attr("ingest", serde_json::json!("http"));
+                            match EventStore::open(&event_log) {
+                                Ok(store) => match store.append(&ev) {
+                                    Ok(()) => {
+                                        let body = serde_json::json!({
+                                            "ok": true,
+                                            "id": ev.id,
+                                            "product": ev.product.as_str(),
+                                            "severity": format!("{:?}", ev.severity).to_ascii_lowercase(),
+                                        });
+                                        (
+                                            "201 Created",
+                                            format!(
+                                                "{}\n",
+                                                serde_json::to_string(&body).unwrap_or_default()
+                                            ),
+                                            "application/json",
+                                        )
+                                    }
+                                    Err(e) => (
+                                        "500 Internal Server Error",
+                                        format!("{{\"error\":\"{e}\"}}\n"),
+                                        "application/json",
+                                    ),
+                                },
+                                Err(e) => (
+                                    "500 Internal Server Error",
+                                    format!("{{\"error\":\"{e}\"}}\n"),
+                                    "application/json",
+                                ),
+                            }
+                        }
+                        Err(e) => (
+                            "400 Bad Request",
+                            format!(
+                                "{{\"error\":\"invalid_event\",\"error_description\":\"{e}\"}}\n"
+                            ),
+                            "application/json",
+                        ),
+                    }
+                } else {
+                    match EventStore::open(&event_log) {
+                        Ok(store) => match store.recent(limit) {
+                            Ok(evs) => match serde_json::to_string(&evs) {
+                                Ok(s) => ("200 OK", format!("{s}\n"), "application/json"),
+                                Err(e) => (
+                                    "500 Internal Server Error",
+                                    format!("{{\"error\":\"{e}\"}}\n"),
+                                    "application/json",
+                                ),
+                            },
                             Err(e) => (
                                 "500 Internal Server Error",
                                 format!("{{\"error\":\"{e}\"}}\n"),
@@ -742,12 +800,7 @@ async fn health_server(
                             format!("{{\"error\":\"{e}\"}}\n"),
                             "application/json",
                         ),
-                    },
-                    Err(e) => (
-                        "500 Internal Server Error",
-                        format!("{{\"error\":\"{e}\"}}\n"),
-                        "application/json",
-                    ),
+                    }
                 }
             } else if path == "/mesh/peers" || path.starts_with("/mesh/peers") {
                 if method == "GET" {
@@ -1063,7 +1116,7 @@ async fn health_server(
             } else {
                 (
                     "404 Not Found",
-                    "try GET /health /status /oauth/device /oauth/authorize /jwks.json /.well-known/openid-configuration ; POST /oauth/device_authorization /oauth/token /oauth/authorize\n".into(),
+                    "try GET /health /status /events /oauth/* ; POST /events /oauth/* /fleet/*\n".into(),
                     "text/plain",
                 )
             };
@@ -1089,6 +1142,8 @@ pub async fn run_daemon(
     jwks_path: PathBuf,
     jwt_private: PathBuf,
     oauth_devices: PathBuf,
+    event_udp: String,
+    no_event_udp: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fw = create_firewall_engine();
 
@@ -1197,7 +1252,7 @@ pub async fn run_daemon(
             println!("[AEGISD] health HTTP     : http://{health_bind}/health");
             println!("[AEGISD] status JSON     : http://{health_bind}/status");
             println!("[AEGISD] posture         : http://{health_bind}/posture");
-            println!("[AEGISD] events          : http://{health_bind}/events?limit=20");
+            println!("[AEGISD] events GET/POST : http://{health_bind}/events");
             println!("[AEGISD] metrics         : http://{health_bind}/metrics");
             println!("[AEGISD] fleet           : http://{health_bind}/fleet");
             println!("[AEGISD] fleet policy    : GET/POST http://{health_bind}/fleet/policy");
@@ -1209,6 +1264,49 @@ pub async fn run_daemon(
             println!("[AEGISD] OAuth approve   : http://{health_bind}/oauth/device");
             println!("[AEGISD] OAuth auth-code : GET/POST http://{health_bind}/oauth/authorize");
             println!("[AEGISD] console API     : http://{health_bind}/api/v1/* (aliases)");
+        }
+    }
+
+    if !no_event_udp && !event_udp.is_empty() {
+        let el = event_log.clone();
+        let bind = event_udp.clone();
+        let hid = host_id();
+        tokio::spawn(async move {
+            let sock = match tokio::net::UdpSocket::bind(&bind).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[AEGISD] event UDP bind {bind} failed: {e}");
+                    return;
+                }
+            };
+            eprintln!("[AEGISD] event UDP listening on {bind}");
+            let mut buf = vec![0u8; 65535];
+            loop {
+                match sock.recv_from(&mut buf).await {
+                    Ok((n, peer)) => {
+                        match s2o_bus::udp_decode(&buf[..n], &hid) {
+                            Ok(mut ev) => {
+                                ev = ev
+                                    .with_attr("ingest", serde_json::json!("udp"))
+                                    .with_attr("udp_peer", serde_json::json!(peer.to_string()));
+                                if let Ok(store) = EventStore::open(&el) {
+                                    let _ = store.append(&ev);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[AEGISD] event UDP decode from {peer}: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[AEGISD] event UDP recv: {e}");
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+            }
+        });
+        if !as_service {
+            println!("[AEGISD] event UDP       : {event_udp} (JSON AegisEvent / EventIngest)");
         }
     }
 
@@ -1251,6 +1349,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             jwks,
             jwt_private,
             oauth_devices,
+            event_udp,
+            no_event_udp,
         } => {
             run_daemon(
                 event_log,
@@ -1263,6 +1363,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 jwks,
                 jwt_private,
                 oauth_devices,
+                event_udp,
+                no_event_udp,
             )
             .await?;
         }

@@ -78,10 +78,11 @@
 - OAuth authorization-code grant (lab): aegisd `GET/POST /oauth/authorize`, token `grant_type=authorization_code`, `cyberztna oauth code`
 - CyberLog live collect: UDP syslog ingest (`cybersiem collect --listen`) → JSONL; PRI severity map; `--stdin-once` lab inject
 - ThreatGrid multi-feed online sync: URLHaus + OpenPhish (capped per feed), `--feed` repeatable
+- Multi-process event bus: `POST /events` + `aegisd --event-udp`, `s2o-bus` UDP relay, `aegis emit [--http] [--udp]`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
 - Transparent DNS redirector, embedded boringtun
 - Linux/macOS declarative rule apply (Windows only for managed rules)
 - Production browser IdP UI (lab authorize HTML + CLI auto-approve only)
-- Remote SIEM EPS / multi-tenant collectors
+- Remote SIEM EPS / multi-tenant collectors / gRPC bus
