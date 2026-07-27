@@ -3,6 +3,7 @@ use colored::*;
 use s2o_kernel::{
     create_firewall_engine, open_default_store, wall_set_enabled, wall_set_outbound_block,
 };
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -40,6 +41,14 @@ enum Commands {
     Unlock,
     /// List active OS firewall filtering rules
     Rules,
+    /// Apply declarative FirewallPolicy JSON (managed `S2O-Aegis-*` rules on Windows)
+    Apply {
+        /// Path to FirewallPolicy JSON (`name`, `version`, `rules[]`)
+        path: PathBuf,
+        /// Print planned netsh actions only (no system change)
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -226,6 +235,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "=========================================================".cyan()
             );
             println!(" Count: {}", rules.len());
+            let managed: Vec<_> = rules
+                .iter()
+                .filter(|r| r.name.starts_with(cyberwall_core::MANAGED_RULE_PREFIX))
+                .collect();
+            if !managed.is_empty() {
+                println!(
+                    " Managed ({}*): {}",
+                    cyberwall_core::MANAGED_RULE_PREFIX,
+                    managed.len()
+                );
+            }
             for (idx, rule) in rules.iter().enumerate() {
                 println!("{}. {}", idx + 1, rule.name.bold());
                 println!(
@@ -236,6 +256,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{}",
                     "---------------------------------------------------------".cyan()
                 );
+            }
+        }
+        Commands::Apply { path, dry_run } => {
+            let text = fs::read_to_string(&path)?;
+            let policy: cyberwall_core::FirewallPolicy = serde_json::from_str(&text)?;
+            let policy = policy.ensure_managed_names();
+            println!(
+                "[cyberwall] apply policy name={} version={} rules={} dry_run={}",
+                policy.name,
+                policy.version,
+                policy.rules.len(),
+                dry_run
+            );
+            if dry_run {
+                for r in &policy.rules {
+                    println!(
+                        "  would: name={} action={:?} dir={:?} port={:?} proto={:?} app={:?}",
+                        r.name, r.action, r.direction, r.local_port, r.protocol, r.application
+                    );
+                }
+                println!("{}", "[cyberwall] dry-run complete (no changes)".yellow());
+                return Ok(());
+            }
+            cyberwall_core::FirewallEngine::apply_policy(engine.as_ref(), &policy).await?;
+            println!(
+                "{}",
+                format!(
+                    "[cyberwall] OK: applied {} managed rule(s) (prefix {})",
+                    policy.rules.len(),
+                    cyberwall_core::MANAGED_RULE_PREFIX
+                )
+                .green()
+                .bold()
+            );
+            if let Some(store) = store_ref {
+                // wall path already used for enable/lock; emit here for CLI-only apply
+                let _ = store; // events optional via kernel wall_apply_rules; CLI apply is direct
             }
         }
     }

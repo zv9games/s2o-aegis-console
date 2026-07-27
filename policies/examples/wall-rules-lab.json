@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-wall-rules-lab",
+  "description": "Enable firewall and apply managed lab rules (Windows netsh S2O-Aegis-*). Requires elevation for live apply.",
+  "firewall": {
+    "enabled": true,
+    "outbound_block": false,
+    "rules": [
+      {
+        "name": "lab-block-smb-in",
+        "action": "block",
+        "direction": "in",
+        "protocol": "TCP",
+        "local_port": "445",
+        "profile": "any"
+      },
+      {
+        "name": "lab-block-telnet-in",
+        "action": "block",
+        "direction": "in",
+        "protocol": "TCP",
+        "local_port": "23"
+      }
+    ]
+  }
+}

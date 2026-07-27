@@ -71,7 +71,16 @@ pub async fn apply_policy(
                 Err(e) => errors.push(format!("firewall.outbound_block: {e}")),
             }
         }
-        if fw_intent.enabled.is_none() && fw_intent.outbound_block.is_none() {
+        if !fw_intent.rules.is_empty() {
+            match crate::wall::wall_apply_rules(fw, &fw_intent.rules, store_ref).await {
+                Ok(n) => applied.push(format!("firewall.rules={n}")),
+                Err(e) => errors.push(format!("firewall.rules: {e}")),
+            }
+        }
+        if fw_intent.enabled.is_none()
+            && fw_intent.outbound_block.is_none()
+            && fw_intent.rules.is_empty()
+        {
             skipped.push("firewall: empty intent".into());
         }
     } else {

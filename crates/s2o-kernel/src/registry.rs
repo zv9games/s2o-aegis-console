@@ -110,7 +110,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: posture+session HTTP/HTTPS proxy, TLS, access log; no mTLS/OIDC",
+            "partial: posture+session+mTLS+JWT/JWKS/OIDC+OAuth device; no browser auth-code UI",
         ),
         ProductId::Aegis => ModuleStatus::new(
             product,
@@ -142,8 +142,8 @@ fn wall_baseline(os: OsFamily, demo: bool) -> ModuleStatus {
     let (state, detail, backend) = match os {
         OsFamily::Windows => (
             HealthState::Implemented,
-            "Windows Firewall COM (INetFwPolicy2); live probe follows".to_string(),
-            Some("win32_com_inetfwpolicy2".to_string()),
+            "Windows Firewall COM + netsh managed rules (S2O-Aegis-*); live probe follows".to_string(),
+            Some("win32_com_inetfwpolicy2_netsh".to_string()),
         ),
         OsFamily::Linux => (
             HealthState::Partial,

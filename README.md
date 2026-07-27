@@ -40,7 +40,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 
 | # | World | Binary | State (typical Windows) |
 |---|--------|--------|-------------------------|
-| 1 | Cyberwall | `cyberwall` | **implemented** — COM INetFwPolicy2 via `s2o_net_lib` |
+| 1 | Cyberwall | `cyberwall` | **implemented** — COM + netsh managed rules (`S2O-Aegis-*`) |
 | 2 | CyberDNS | `cyberdns` | **partial** — DoH + blocklist + IOC + UDP proxy |
 | 3 | CyberDefender | `cyberdefender` | **partial** — hash/name + yara-lite + YARA-X lab rules + IOC |
 | 4 | CyberEDR | `cyberedr` | **partial** — TCP + process inventory + heuristics |

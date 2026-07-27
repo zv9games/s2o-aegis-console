@@ -10,6 +10,10 @@ cargo run -p aegis-cli -- status
 cargo run -p aegis-cli -- report
 cargo run -p aegis-cli -- report --json --out .aegis/report.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
+# Managed Windows rules (prefix S2O-Aegis-*; elevate for live apply)
+cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-run
+cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
+cargo run -p aegis-cli -- policy apply policies/examples/wall-rules-lab.json
 cargo run -p aegis-cli -- events --limit 20
 cargo run -p aegis-cli -- watch
 cargo run -p aegis-cli -- rotate
@@ -89,7 +93,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 
 | Job | Command |
 |-----|---------|
-| Firewall | `cyberwall status\|enable\|lock` |
+| Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
 | DNS | `cyberdns resolve\|block\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|watch\|patterns\|yara\|update-defs` |
 | EDR | `cyberedr processes\|ps [--rich]\|baseline\|drift\|alerts\|watch [--rich]` |

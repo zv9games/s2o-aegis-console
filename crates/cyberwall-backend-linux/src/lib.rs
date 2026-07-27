@@ -158,6 +158,9 @@ impl FirewallEngine for LinuxFirewallEngine {
                     direction: RuleDirection::Inbound,
                     profile: ProfileType::All,
                     application: None,
+                    protocol: None,
+                    local_port: None,
+                    remote_ip: None,
                 });
             }
             return Ok(rules);
@@ -177,6 +180,9 @@ impl FirewallEngine for LinuxFirewallEngine {
                     direction: RuleDirection::Inbound,
                     profile: ProfileType::All,
                     application: None,
+                    protocol: None,
+                    local_port: None,
+                    remote_ip: None,
                 });
             }
             return Ok(rules);

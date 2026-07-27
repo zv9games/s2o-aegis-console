@@ -74,8 +74,10 @@
 - CyberEDR `ps --rich` / `watch --rich` (cmdline + parent PID via WMI/ps)
 - OAuth 2.0 device-code (RFC 8628 lab): aegisd `/oauth/device_*` + `cyberztna oauth device|approve`
 - CyberDefender YARA-X (VirusTotal pure-Rust `yara-x` 1.19): `yara init|list|test|scan`, `scan --yara|--yara-only`, lab seed `.aegis/yara/*.yar`
+- Cyberwall Windows `apply_policy`: managed netsh rules (`S2O-Aegis-*`), `cyberwall apply [--dry-run]`, suite policy `firewall.rules[]`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, cloud YARA signature feed
 - Transparent DNS redirector, embedded boringtun
+- Linux/macOS declarative rule apply (Windows only for managed rules)
 - Full browser OAuth authorization-code UI

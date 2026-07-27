@@ -1,0 +1,26 @@
+{
+  "name": "lab-engine-rules",
+  "version": "0.1.0",
+  "rules": [
+    {
+      "name": "lab-block-smb-in",
+      "enabled": true,
+      "action": "Block",
+      "direction": "Inbound",
+      "profile": "All",
+      "application": null,
+      "protocol": "TCP",
+      "local_port": "445",
+      "remote_ip": null
+    },
+    {
+      "name": "lab-block-telnet-in",
+      "enabled": true,
+      "action": "Block",
+      "direction": "Inbound",
+      "profile": "All",
+      "protocol": "TCP",
+      "local_port": "23"
+    }
+  ]
+}

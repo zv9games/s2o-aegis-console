@@ -173,6 +173,8 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ OIDC well-known discovery + lab IdP stub on aegisd  
 - ✅ CyberDNS system-dns bind + EDR rich process intel (cmdline/ppid)  
 - ✅ OAuth device-code lab flow (RFC 8628) on aegisd + Gate client  
+- ✅ YARA-X engine in CyberDefender  
+- ✅ Windows Cyberwall declarative `apply_policy` (managed `S2O-Aegis-*` netsh rules)  
 - ⏳ Kernel ETW / boringtun / browser OAuth code UI / cloud YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

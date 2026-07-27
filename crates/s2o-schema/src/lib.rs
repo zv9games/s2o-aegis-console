@@ -340,6 +340,7 @@ impl PolicyDocument {
             firewall: Some(FirewallPolicyIntent {
                 enabled: Some(true),
                 outbound_block: Some(false),
+                rules: vec![],
             }),
             dns: None,
             intel: None,
@@ -356,6 +357,7 @@ impl PolicyDocument {
             firewall: Some(FirewallPolicyIntent {
                 enabled: Some(true),
                 outbound_block: Some(false),
+                rules: vec![],
             }),
             dns: Some(DnsPolicyIntent {
                 blocklist_path: Some(".aegis/dns-blocklist.txt".into()),
@@ -382,7 +384,7 @@ impl PolicyDocument {
 }
 
 /// Firewall intents the Cyberwall engine can apply at T0.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FirewallPolicyIntent {
     /// Enable/disable OS firewall (where the backend supports it).
     #[serde(default)]
@@ -390,6 +392,44 @@ pub struct FirewallPolicyIntent {
     /// Outbound isolation / airplane-style block.
     #[serde(default)]
     pub outbound_block: Option<bool>,
+    /// Declarative managed rules (Windows: netsh, prefix `S2O-Aegis-`).
+    #[serde(default)]
+    pub rules: Vec<FirewallRuleIntent>,
+}
+
+/// One managed firewall rule in a suite policy pack.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallRuleIntent {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `allow` | `block` (default block)
+    #[serde(default = "default_block")]
+    pub action: String,
+    /// `in` | `out` | `inbound` | `outbound` (default in)
+    #[serde(default = "default_in")]
+    pub direction: String,
+    /// `private` | `public` | `domain` | `any` / `all`
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub application: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub local_port: Option<String>,
+    #[serde(default)]
+    pub remote_ip: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_block() -> String {
+    "block".into()
+}
+fn default_in() -> String {
+    "in".into()
 }
 
 /// DNS intents — local file blocklist (CyberDNS / kernel).
