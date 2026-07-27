@@ -1,12 +1,17 @@
 //! Local append-only JSONL event store for the Aegis data package.
 //!
-//! Phase 0 MVP: file-backed, no indexes. Phase 2+ can add SQLite.
+//! MVP: file-backed JSONL. Supports optional size-based rotation.
 
 use s2o_schema::AegisEvent;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+/// Default max size before rotation (10 MiB).
+pub const DEFAULT_ROTATE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+/// Keep this many rotated archives (`events.jsonl.1` …).
+pub const DEFAULT_ROTATE_KEEP: usize = 5;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -20,24 +25,81 @@ pub type StoreResult<T> = Result<T, StoreError>;
 
 pub struct EventStore {
     path: PathBuf,
+    /// Rotate when file exceeds this many bytes (0 = never auto-rotate on append).
+    rotate_max_bytes: u64,
+    rotate_keep: usize,
 }
 
 impl EventStore {
     pub fn open(path: impl AsRef<Path>) -> StoreResult<Self> {
+        Self::open_with_rotation(path, DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_KEEP)
+    }
+
+    pub fn open_with_rotation(
+        path: impl AsRef<Path>,
+        rotate_max_bytes: u64,
+        rotate_keep: usize,
+    ) -> StoreResult<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         // Touch file so readers always have a path.
         let _ = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            rotate_max_bytes,
+            rotate_keep,
+        })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    pub fn len_bytes(&self) -> StoreResult<u64> {
+        Ok(fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0))
+    }
+
+    /// Rotate if current file exceeds configured max. Returns true if rotated.
+    pub fn rotate_if_needed(&self) -> StoreResult<bool> {
+        if self.rotate_max_bytes == 0 {
+            return Ok(false);
+        }
+        let len = self.len_bytes()?;
+        if len < self.rotate_max_bytes {
+            return Ok(false);
+        }
+        self.rotate()?;
+        Ok(true)
+    }
+
+    /// Force rotation: `path` → `path.1`, `path.1` → `path.2`, … drop oldest.
+    pub fn rotate(&self) -> StoreResult<()> {
+        let keep = self.rotate_keep.max(1);
+        // Delete oldest
+        let oldest = format!("{}.{}", self.path.display(), keep);
+        let _ = fs::remove_file(&oldest);
+        // Shift .N-1 -> .N
+        for i in (1..keep).rev() {
+            let from = format!("{}.{}", self.path.display(), i);
+            let to = format!("{}.{}", self.path.display(), i + 1);
+            if Path::new(&from).exists() {
+                let _ = fs::rename(&from, &to);
+            }
+        }
+        // Current -> .1
+        let first = format!("{}.1", self.path.display());
+        if self.path.exists() {
+            fs::rename(&self.path, &first)?;
+        }
+        // Fresh empty log
+        let _ = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        Ok(())
+    }
+
     pub fn append(&self, event: &AegisEvent) -> StoreResult<()> {
+        let _ = self.rotate_if_needed()?;
         let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
         let mut writer = BufWriter::new(file);
         serde_json::to_writer(&mut writer, event)?;
@@ -111,5 +173,32 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].message, "hello");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rotate_shifts_files() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("s2o_store_rot_{nanos}.jsonl"));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.1", path.display()));
+        // tiny max so next append after force still works
+        let store = EventStore::open_with_rotation(&path, 1, 3).unwrap();
+        let ev = AegisEvent::new(
+            "h",
+            ProductId::Aegis,
+            EventKind::Health,
+            EventAction::Observed,
+            Severity::Info,
+            "one",
+        );
+        store.append(&ev).unwrap();
+        store.rotate().unwrap();
+        assert!(Path::new(&format!("{}.1", path.display())).exists());
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.1", path.display()));
     }
 }

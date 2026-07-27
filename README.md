@@ -47,7 +47,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 5 | CyberLog | `cybersiem` | **partial** — JSONL filter/stats/correlate |
 | 6 | ThreatGrid | `cyberintel` | **partial** — local IOC store (lookup/add/sync) |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
-| 8 | CyberMesh | `cybermesh` | **partial** — real X25519 genkey (no tunnel yet) |
+| 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + WG conf; optional system wg |
 | 9 | Gate | `cyberztna` | **partial** — posture-gated HTTP reverse proxy |
 | — | Kernel | `aegisd` | **implemented** — status, policy, start |
 
@@ -107,6 +107,15 @@ cargo run -p cybersiem -- events
 cargo run -p cyberztna -- init
 cargo run -p cyberztna -- check --min-score 50
 cargo run -p cyberztna -- serve --upstream https://example.com --listen 127.0.0.1:18443
+
+# Mesh — keys + WireGuard conf (import with system WG / wg-quick)
+cargo run -p cybermesh -- config --output .aegis/wg0.conf --address 10.220.0.2/32
+
+# Event log rotation
+cargo run -p aegis-cli -- rotate
+
+# Full developer smoke
+pwsh -File scripts/dev-smoke.ps1
 ```
 
 ---

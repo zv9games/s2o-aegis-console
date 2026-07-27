@@ -43,6 +43,13 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Rotate the local event log now (archives to events.jsonl.1 …)
+    Rotate {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        keep: usize,
+    },
     /// Run a product CLI if on PATH / target/debug (best-effort shim)
     Run {
         /// Product binary: cyberwall, cyberdns, cyberdefender, cyberedr, ...
@@ -221,6 +228,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let store = EventStore::open(&event_log)?;
             let events = store.recent(limit)?;
             println!("{}", serde_json::to_string_pretty(&events)?);
+        }
+        Commands::Rotate { event_log, keep } => {
+            let store = EventStore::open_with_rotation(&event_log, 0, keep)?;
+            let before = store.len_bytes().unwrap_or(0);
+            store.rotate()?;
+            println!(
+                "[aegis] rotated {} (was {} bytes) → {}.1",
+                event_log.display(),
+                before,
+                event_log.display()
+            );
         }
         Commands::Run { product, args } => {
             let bin = find_product_bin(&product).ok_or_else(|| {

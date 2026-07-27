@@ -99,7 +99,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: real X25519 WireGuard genkey; tunnel up/mesh not implemented",
+            "partial: X25519 keys + conf writer + optional wg show/wg-quick; no embedded stack",
         ),
         ProductId::Gate => ModuleStatus::new(
             product,
