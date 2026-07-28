@@ -200,6 +200,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ DNS import + config get/set + sessions export  
 - ✅ Defender rule mutators + EDR baseline export + IOC import-file  
 - ✅ Playbook enable/disable + SIEM stats/top JSON + dns-intel pack  
+- ✅ Gate route add/remove + EDR listen/alerts JSON + response playbooks pack  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

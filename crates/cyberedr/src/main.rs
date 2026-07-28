@@ -69,7 +69,13 @@ enum Commands {
         json: bool,
     },
     /// Heuristic alerts from TCP snapshot (no ETW yet)
-    Alerts,
+    Alerts {
+        #[arg(long)]
+        json: bool,
+        /// Skip writing events when emitting text (json never emits by default unless --emit)
+        #[arg(long)]
+        emit_event: bool,
+    },
     /// TCP LISTEN sockets (userspace table)
     Listen {
         #[arg(long, default_value_t = 64)]
@@ -79,6 +85,8 @@ enum Commands {
         risk_only: bool,
         #[arg(long)]
         emit_event: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Poll process table for new PIDs (ETW-lite T0; not kernel ETW)
     Watch {
@@ -1025,7 +1033,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         }
-        Commands::Alerts => {
+        Commands::Alerts { json, emit_event } => {
             let conns = tokio::task::spawn_blocking(|| {
                 s2o_net_lib::telemetry::get_active_tcp_connections()
             })
@@ -1063,41 +1071,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "       CyberEDR heuristic alerts (userspace)             "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            if alerts.is_empty() {
-                println!("{}", "No heuristic alerts.".green());
-            } else {
-                for (sev, msg) in &alerts {
-                    println!(" [{:?}] {}", sev, msg.yellow());
-                    emit(
-                        &cli.event_log,
-                        EventKind::Alert,
-                        EventAction::Observed,
-                        *sev,
-                        msg.clone(),
-                        &[("engine", serde_json::json!("heuristic_v0"))],
-                    );
+            if json {
+                let rows: Vec<_> = alerts
+                    .iter()
+                    .map(|(sev, msg)| {
+                        serde_json::json!({
+                            "severity": format!("{:?}", sev).to_ascii_lowercase(),
+                            "message": msg,
+                            "engine": "heuristic_v0",
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "count": rows.len(),
+                        "alerts": rows,
+                    }))?
+                );
+                if emit_event {
+                    for (sev, msg) in &alerts {
+                        emit(
+                            &cli.event_log,
+                            EventKind::Alert,
+                            EventAction::Observed,
+                            *sev,
+                            msg.clone(),
+                            &[("engine", serde_json::json!("heuristic_v0"))],
+                        );
+                    }
                 }
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "       CyberEDR heuristic alerts (userspace)             "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                if alerts.is_empty() {
+                    println!("{}", "No heuristic alerts.".green());
+                } else {
+                    for (sev, msg) in &alerts {
+                        println!(" [{:?}] {}", sev, msg.yellow());
+                        emit(
+                            &cli.event_log,
+                            EventKind::Alert,
+                            EventAction::Observed,
+                            *sev,
+                            msg.clone(),
+                            &[("engine", serde_json::json!("heuristic_v0"))],
+                        );
+                    }
+                }
+                println!(" Alerts: {}", alerts.len());
             }
-            println!(" Alerts: {}", alerts.len());
         }
         Commands::Listen {
             limit,
             risk_only,
             emit_event,
+            json,
         } => {
             let risk: BTreeSet<u16> = [21, 23, 135, 139, 445, 1433, 3306, 3389, 5900, 4444, 5555]
                 .into_iter()
@@ -1116,6 +1157,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let total = listening.len();
             let show = listening.into_iter().take(limit).collect::<Vec<_>>();
+            if json {
+                let rows: Vec<_> = show
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "pid": c.pid,
+                            "local_addr": c.local_addr,
+                            "local_port": c.local_port,
+                            "state": c.state,
+                            "risk": risk.contains(&c.local_port),
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "total": total,
+                        "shown": rows.len(),
+                        "risk_only": risk_only,
+                        "listeners": rows,
+                    }))?
+                );
+            } else {
             println!(
                 "{}",
                 "=========================================================".cyan()
@@ -1147,6 +1211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     c.local_port, c.pid, c.local_addr, mark
                 );
             }
+            } // end else !json
             if emit_event {
                 emit(
                     &cli.event_log,

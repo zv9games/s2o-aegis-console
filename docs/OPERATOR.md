@@ -44,7 +44,12 @@ cargo run -p cyberwall -- doctor
 cargo run -p cyberdefender -- doctor
 cargo run -p cyberztna -- doctor
 cargo run -p cyberztna -- routes --json
+cargo run -p cyberztna -- route-add lab-api --path-prefix /api --upstream http://127.0.0.1:8080
+cargo run -p cyberztna -- route-remove lab-api
 cargo run -p cyberztna -- access-export --since 24h --format csv --out .aegis/gate-access.csv
+cargo run -p cyberedr -- listen --json --limit 20
+cargo run -p cyberedr -- alerts --json
+cargo run -p aegis-cli -- playbook run --path policies/examples/response-playbooks.json --json
 cargo run -p cybermesh -- peers list --json
 cargo run -p cybermesh -- peers export --format csv --out .aegis/mesh-peers.csv
 cargo run -p aegis-cli -- fleet doctor
@@ -186,7 +191,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
 | DNS | `cyberdns doctor\|check\|export\|import\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender doctor\|rules list\|add-name\|add-hash\|scan\|yara\|quarantine` |
-| EDR | `cyberedr doctor\|export\|ps --json\|baseline\|baseline-export\|drift --json\|listen\|net-watch` |
+| EDR | `cyberedr doctor\|export\|ps --json\|baseline\|baseline-export\|drift --json\|listen --json\|alerts --json\|net-watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
@@ -194,7 +199,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 | Intel | `cyberintel doctor\|import-file\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|sessions-export\|revoke\|verify` |
-| Gate | `cyberztna doctor\|serve\|access-stats\|access-export\|routes\|oauth\|jwt` |
+| Gate | `cyberztna doctor\|serve\|routes\|route-add\|route-remove\|access-stats\|access-export\|oauth\|jwt` |
 
 ## Gate HTTPS + session
 

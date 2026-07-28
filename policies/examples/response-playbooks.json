@@ -1,0 +1,78 @@
+{
+  "rules": [
+    {
+      "name": "log-dns-blocks",
+      "enabled": true,
+      "when": {
+        "product": "cyberdns",
+        "action": "blocked"
+      },
+      "then": [
+        { "type": "log" }
+      ]
+    },
+    {
+      "name": "ioc-from-dns-block",
+      "enabled": true,
+      "when": {
+        "product": "cyberdns",
+        "action": "blocked",
+        "attr": "domain"
+      },
+      "then": [
+        {
+          "type": "ioc_add_attr",
+          "attr": "domain",
+          "kind": "domain",
+          "severity": "high",
+          "source": "playbook"
+        }
+      ]
+    },
+    {
+      "name": "emit-on-high-block",
+      "enabled": true,
+      "when": {
+        "action": "blocked",
+        "severity": "high"
+      },
+      "then": [
+        {
+          "type": "emit",
+          "message": "playbook: {message}",
+          "severity": "high",
+          "product": "aegis"
+        }
+      ]
+    },
+    {
+      "name": "webhook-on-critical",
+      "enabled": false,
+      "when": {
+        "severity": "critical"
+      },
+      "then": [
+        {
+          "type": "webhook",
+          "url": "http://127.0.0.1:9999/hook"
+        }
+      ]
+    },
+    {
+      "name": "revoke-on-critical-auth",
+      "enabled": false,
+      "when": {
+        "product": "cyberid",
+        "kind": "auth",
+        "severity": "critical",
+        "attr": "user"
+      },
+      "then": [
+        {
+          "type": "session_revoke_attr",
+          "attr": "user"
+        }
+      ]
+    }
+  ]
+}

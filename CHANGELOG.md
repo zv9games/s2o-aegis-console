@@ -139,6 +139,9 @@
 - `aegis playbook enable|disable <name>` toggle rules in playbooks.json
 - CyberLog `stats --json` + `top --json` for automation
 - Example policy pack `policies/examples/dns-intel-pack.json`
+- Gate `route-add` / `route-remove` for gate-routes.json
+- CyberEDR `listen --json` + `alerts --json` (optional `--emit-event`)
+- Example response playbooks `policies/examples/response-playbooks.json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

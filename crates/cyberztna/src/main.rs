@@ -39,6 +39,20 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Add or update a route in gate-routes.json
+    RouteAdd {
+        name: String,
+        /// Path prefix (e.g. /app or /)
+        #[arg(long, default_value = "/")]
+        path_prefix: String,
+        /// Upstream base URL
+        #[arg(long)]
+        upstream: String,
+    },
+    /// Remove a route by name
+    RouteRemove {
+        name: String,
+    },
     /// Export access log lines (json/csv/text) with optional --since/--filter
     AccessExport {
         #[arg(long, default_value = ".aegis/gate-access.log")]
@@ -969,6 +983,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
+        }
+        Commands::RouteAdd {
+            name,
+            path_prefix,
+            upstream,
+        } => {
+            use config::GateRoute;
+            let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
+            let prefix = if path_prefix.trim().is_empty() {
+                "/".into()
+            } else if path_prefix.starts_with('/') {
+                path_prefix
+            } else {
+                format!("/{path_prefix}")
+            };
+            let up = upstream.trim().to_string();
+            if up.is_empty()
+                || !(up.starts_with("http://") || up.starts_with("https://"))
+            {
+                eprintln!("[gate] --upstream must be http(s)://…");
+                std::process::exit(2);
+            }
+            if let Some(r) = cfg.routes.iter_mut().find(|r| r.name == name) {
+                r.path_prefix = prefix.clone();
+                r.upstream = up.clone();
+                println!(
+                    "{}",
+                    format!(
+                        "[gate] updated route '{name}' prefix={prefix} → {up}"
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                cfg.routes.push(GateRoute {
+                    name: name.clone(),
+                    path_prefix: prefix.clone(),
+                    upstream: up.clone(),
+                });
+                println!(
+                    "{}",
+                    format!("[gate] added route '{name}' prefix={prefix} → {up}")
+                        .green()
+                        .bold()
+                );
+            }
+            save_config(&cli.config, &cfg)?;
+            println!("  wrote {}", cli.config.display());
+        }
+        Commands::RouteRemove { name } => {
+            let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
+            let before = cfg.routes.len();
+            cfg.routes.retain(|r| r.name != name);
+            if cfg.routes.len() == before {
+                eprintln!("[gate] route not found: {name}");
+                std::process::exit(1);
+            }
+            save_config(&cli.config, &cfg)?;
+            println!(
+                "{}",
+                format!(
+                    "[gate] removed route '{name}' ({} left) → {}",
+                    cfg.routes.len(),
+                    cli.config.display()
+                )
+                .yellow()
+            );
         }
         Commands::AccessExport {
             log,
