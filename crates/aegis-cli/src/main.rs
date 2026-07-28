@@ -530,6 +530,12 @@ struct PlaybookAction {
     /// IOC source label (default: playbook)
     #[serde(default)]
     source: Option<String>,
+    /// User for session_revoke_user (or static token for session_revoke)
+    #[serde(default)]
+    user: Option<String>,
+    /// Session token/id for session_revoke
+    #[serde(default)]
+    token: Option<String>,
 }
 
 fn default_playbooks() -> PlaybookFile {
@@ -559,6 +565,8 @@ fn default_playbooks() -> PlaybookFile {
                     kind: None,
                     value: None,
                     source: None,
+                    user: None,
+                    token: None,
                 }],
             },
             PlaybookRule {
@@ -585,6 +593,8 @@ fn default_playbooks() -> PlaybookFile {
                     kind: None,
                     value: None,
                     source: None,
+                    user: None,
+                    token: None,
                 }],
             },
             PlaybookRule {
@@ -611,6 +621,8 @@ fn default_playbooks() -> PlaybookFile {
                     kind: None,
                     value: None,
                     source: None,
+                    user: None,
+                    token: None,
                 }],
             },
             PlaybookRule {
@@ -637,6 +649,8 @@ fn default_playbooks() -> PlaybookFile {
                     kind: None,
                     value: None,
                     source: None,
+                    user: None,
+                    token: None,
                 }],
             },
             PlaybookRule {
@@ -663,6 +677,36 @@ fn default_playbooks() -> PlaybookFile {
                     kind: Some("domain".into()),
                     value: None,
                     source: Some("playbook".into()),
+                    user: None,
+                    token: None,
+                }],
+            },
+            PlaybookRule {
+                name: "revoke-user-on-critical-auth".into(),
+                enabled: false,
+                when: PlaybookWhen {
+                    product: Some("cyberid".into()),
+                    action: None,
+                    severity: Some("critical".into()),
+                    message_contains: None,
+                    kind: Some("auth".into()),
+                    attr: Some("user".into()),
+                    attr_equals: None,
+                    attr_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "session_revoke_attr".into(),
+                    attr: Some("user".into()),
+                    domain: None,
+                    url: None,
+                    message: None,
+                    severity: None,
+                    product: None,
+                    kind: None,
+                    value: None,
+                    source: None,
+                    user: None,
+                    token: None,
                 }],
             },
         ],
@@ -737,6 +781,9 @@ fn known_playbook_actions() -> &'static [&'static str] {
         "webhook",
         "ioc_add",
         "ioc_add_attr",
+        "session_revoke",
+        "session_revoke_user",
+        "session_revoke_attr",
     ]
 }
 
@@ -1095,6 +1142,91 @@ async fn run_playbook_actions(
                     }
                 } else {
                     println!("    -> ioc_add_attr {kind_s}:{value} (dry-run)");
+                }
+            }
+            "session_revoke" => {
+                let tok = act
+                    .token
+                    .clone()
+                    .or_else(|| act.value.clone())
+                    .unwrap_or_default();
+                if tok.trim().is_empty() {
+                    println!("    -> session_revoke skipped (no token)");
+                    continue;
+                }
+                if apply {
+                    let path = Path::new(".aegis/sessions.json");
+                    let mut store = s2o_session::SessionStore::load(path);
+                    if store.revoke_token(&tok) {
+                        store.save(path)?;
+                        println!("    -> session_revoke APPLIED");
+                    } else {
+                        println!("    -> session_revoke token not found");
+                    }
+                } else {
+                    println!(
+                        "    -> session_revoke (dry-run) {}",
+                        &tok[..tok.len().min(16)]
+                    );
+                }
+            }
+            "session_revoke_user" => {
+                let user = act.user.clone().or_else(|| act.value.clone()).unwrap_or_default();
+                if user.trim().is_empty() {
+                    println!("    -> session_revoke_user skipped (no user)");
+                    continue;
+                }
+                if apply {
+                    let path = Path::new(".aegis/sessions.json");
+                    let mut store = s2o_session::SessionStore::load(path);
+                    let n = store.revoke_user(&user);
+                    store.save(path)?;
+                    println!("    -> session_revoke_user {user} APPLIED n={n}");
+                } else {
+                    println!("    -> session_revoke_user {user} (dry-run)");
+                }
+            }
+            "session_revoke_attr" => {
+                let key = act.attr.as_deref().unwrap_or("user");
+                let value = ev
+                    .attrs
+                    .get(key)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(v.to_string().trim_matches('"').to_string()))
+                    })
+                    .or_else(|| act.user.clone())
+                    .or_else(|| act.value.clone());
+                let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
+                    println!("    -> session_revoke_attr skipped (no attr {key})");
+                    continue;
+                };
+                // token-like attrs revoke by token; otherwise by user
+                let by_token = key.eq_ignore_ascii_case("token")
+                    || key.eq_ignore_ascii_case("session")
+                    || key.eq_ignore_ascii_case("session_token");
+                if apply {
+                    let path = Path::new(".aegis/sessions.json");
+                    let mut store = s2o_session::SessionStore::load(path);
+                    if by_token {
+                        if store.revoke_token(&value) {
+                            store.save(path)?;
+                            println!("    -> session_revoke_attr token APPLIED");
+                        } else {
+                            println!("    -> session_revoke_attr token not found");
+                        }
+                    } else {
+                        let n = store.revoke_user(&value);
+                        store.save(path)?;
+                        println!("    -> session_revoke_attr user={value} APPLIED n={n}");
+                    }
+                } else {
+                    println!(
+                        "    -> session_revoke_attr {}={} (dry-run)",
+                        if by_token { "token" } else { "user" },
+                        value
+                    );
                 }
             }
             other => println!("    -> unknown action {other}"),

@@ -117,6 +117,9 @@
 - `aegis policy validate` (pack shape + soft path checks; no apply)
 - CyberDNS `export` (json/csv/text) + `dedupe` for block/allow lists
 - Cyberwall `rules --managed` / `--json` / `--limit`
+- CyberID `sessions --json|--all|--user` + `revoke --user`; `SessionStore::revoke_user`
+- Playbook actions: `session_revoke` / `session_revoke_user` / `session_revoke_attr`
+- CyberEDR `export` TCP snapshot (`json`/`csv`, state filter, `--out`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

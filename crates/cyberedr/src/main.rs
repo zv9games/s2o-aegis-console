@@ -104,6 +104,19 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Export TCP table snapshot (json/csv)
+    Export {
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// established | listen | all
+        #[arg(long, default_value = "all")]
+        state: String,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Placeholder for true ETW/eBPF (use `watch --rich` / `net-watch` for userspace poll)
     Trace,
 }
@@ -415,7 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, listen, net-watch, process inventory (+rich), baseline/drift, alerts, watch, doctor"
+                "TCP table, export, listen, net-watch, process/baseline/drift, alerts, watch, doctor"
                     .green()
             );
             println!(
@@ -605,6 +618,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if fail > 0 {
                 std::process::exit(1);
+            }
+        }
+        Commands::Export {
+            format,
+            state,
+            limit,
+            out,
+        } => {
+            let conns = tokio::task::spawn_blocking(|| {
+                s2o_net_lib::telemetry::get_active_tcp_connections()
+            })
+            .await?;
+            let state_f = state.to_ascii_lowercase();
+            let filtered: Vec<_> = conns
+                .iter()
+                .filter(|c| {
+                    if state_f == "all" || state_f.is_empty() {
+                        true
+                    } else if state_f.starts_with("est") {
+                        c.state.eq_ignore_ascii_case("ESTABLISHED")
+                    } else if state_f.starts_with("lis") {
+                        c.state.eq_ignore_ascii_case("LISTEN")
+                    } else {
+                        c.state.eq_ignore_ascii_case(&state_f)
+                    }
+                })
+                .take(limit.max(1))
+                .collect();
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from(
+                    "pid,local_addr,local_port,remote_addr,remote_port,state\n",
+                );
+                for c in &filtered {
+                    s.push_str(&format!(
+                        "{},{},{},{},{},{}\n",
+                        c.pid, c.local_addr, c.local_port, c.remote_addr, c.remote_port, c.state
+                    ));
+                }
+                s
+            } else {
+                let rows: Vec<_> = filtered
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "pid": c.pid,
+                            "local_addr": c.local_addr,
+                            "local_port": c.local_port,
+                            "remote_addr": c.remote_addr,
+                            "remote_port": c.remote_port,
+                            "state": c.state,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "total_table": conns.len(),
+                    "filter_state": state,
+                    "shown": rows.len(),
+                    "connections": rows,
+                }))?
+            };
+            if let Some(path) = out {
+                if let Some(p) = path.parent() {
+                    let _ = fs::create_dir_all(p);
+                }
+                fs::write(&path, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberedr] exported {} connection(s) → {}",
+                        filtered.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
             }
         }
         Commands::Processes { limit, emit_event } => {

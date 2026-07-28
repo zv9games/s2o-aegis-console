@@ -34,6 +34,11 @@ cargo run -p cybersiem -- doctor
 cargo run -p cyberintel -- doctor
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o --apply
+cargo run -p cyberid -- sessions --json
+cargo run -p cyberid -- sessions --all --user operator
+cargo run -p cyberid -- revoke --user labuser
+cargo run -p cyberedr -- export --state established --format csv --out .aegis/tcp.csv
+cargo run -p cyberedr -- export --state listen --limit 50
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
 cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall
@@ -148,7 +153,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
 | DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender doctor\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
-| EDR | `cyberedr doctor\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
+| EDR | `cyberedr doctor\|export\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
 | DNS | `cyberdns doctor\|check\|export\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
@@ -156,7 +161,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | SIEM | `cybersiem doctor\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
 | Mesh | `cybermesh doctor\|probe\|peers\|config\|genkey` |
 | Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
-| Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
+| Identity | `cyberid posture\|doctor\|authenticate\|sessions\|revoke\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna doctor\|serve\|access-stats\|oauth\|jwt` |
 

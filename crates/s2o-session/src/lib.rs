@@ -109,6 +109,22 @@ impl SessionStore {
         hit
     }
 
+    /// Revoke all sessions for a user (case-insensitive). Returns count revoked.
+    pub fn revoke_user(&mut self, user: &str) -> usize {
+        let u = user.trim().to_ascii_lowercase();
+        if u.is_empty() {
+            return 0;
+        }
+        let mut n = 0usize;
+        for s in &mut self.sessions {
+            if s.user.to_ascii_lowercase() == u && !s.revoked {
+                s.revoked = true;
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn verify(&self, token: &str) -> Option<&Session> {
         self.active().find(|s| s.token == token)
     }
@@ -171,5 +187,16 @@ mod tests {
         assert_eq!(store.gc(), 1);
         assert!(store.sessions.is_empty());
         let _ = PathBuf::from("unused");
+    }
+
+    #[test]
+    fn revoke_user_all_sessions() {
+        let mut store = SessionStore::default();
+        store.mint("alice", "h", 80, 8);
+        store.mint("alice", "h", 80, 8);
+        store.mint("bob", "h", 50, 8);
+        assert_eq!(store.revoke_user("Alice"), 2);
+        assert_eq!(store.active().count(), 1);
+        assert!(store.active().next().unwrap().user == "bob");
     }
 }
