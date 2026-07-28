@@ -59,6 +59,20 @@ enum Commands {
         #[arg(long)]
         user: Option<String>,
     },
+    /// Export sessions to json/csv
+    #[command(name = "sessions-export")]
+    SessionsExport {
+        /// Include revoked/expired
+        #[arg(long)]
+        all: bool,
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Remove expired/revoked sessions from the store
     Gc,
     /// Revoke a token/id, or all sessions for --user
@@ -593,6 +607,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.last_used.as_deref().unwrap_or("-"),
                         state
                     );
+                }
+            }
+        }
+        Commands::SessionsExport {
+            all,
+            format,
+            user,
+            out,
+        } => {
+            let store = SessionStore::load(&cli.sessions);
+            let user_f = user.as_ref().map(|u| u.to_ascii_lowercase());
+            let rows: Vec<_> = if all {
+                store
+                    .sessions
+                    .iter()
+                    .filter(|s| {
+                        user_f
+                            .as_ref()
+                            .map(|u| s.user.to_ascii_lowercase() == *u)
+                            .unwrap_or(true)
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                store
+                    .active()
+                    .filter(|s| {
+                        user_f
+                            .as_ref()
+                            .map(|u| s.user.to_ascii_lowercase() == *u)
+                            .unwrap_or(true)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from(
+                    "id,user,host_id,posture_score,issued_at,expires_at,revoked,last_used,token_prefix\n",
+                );
+                for r in &rows {
+                    let prefix = &r.token[..r.token.len().min(16)];
+                    s.push_str(&format!(
+                        "{},{},{},{},{},{},{},{},{}\n",
+                        r.id,
+                        r.user.replace(',', " "),
+                        r.host_id.replace(',', " "),
+                        r.posture_score,
+                        r.issued_at,
+                        r.expires_at,
+                        r.revoked,
+                        r.last_used.as_deref().unwrap_or(""),
+                        prefix,
+                    ));
+                }
+                s
+            } else {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": cli.sessions.display().to_string(),
+                    "all": all,
+                    "user": user,
+                    "count": rows.len(),
+                    "sessions": rows,
+                }))?
+            };
+            if let Some(path) = out {
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
+                std::fs::write(&path, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberid] exported {} session(s) → {}",
+                        rows.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
                 }
             }
         }

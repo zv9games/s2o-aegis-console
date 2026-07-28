@@ -141,6 +141,20 @@ enum Commands {
         #[arg(long)]
         apply: bool,
     },
+    /// Import domains from a text file into block or allow list
+    Import {
+        /// Path to domain list (one per line; # comments ok; hosts-style supported)
+        path: PathBuf,
+        /// block | allow
+        #[arg(long, default_value = "block")]
+        list: String,
+        /// Max domains to import (safety cap)
+        #[arg(long, default_value_t = 10_000)]
+        max: usize,
+        /// Dry-run: report counts only
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Validate lists, overlap, IOC, optional DoH probe
     Doctor {
         /// Resolve example.com via DoH chain
@@ -409,6 +423,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .green()
                     .bold()
                 );
+            }
+        }
+        Commands::Import {
+            path,
+            list,
+            max,
+            dry_run,
+        } => {
+            if !path.exists() {
+                eprintln!("[cyberdns] missing import file {}", path.display());
+                std::process::exit(2);
+            }
+            let allow = list.eq_ignore_ascii_case("allow")
+                || list.eq_ignore_ascii_case("allowlist");
+            let dest = if allow {
+                cli.allowlist.clone()
+            } else {
+                cli.blocklist.clone()
+            };
+            let text = fs::read_to_string(&path)?;
+            let mut candidates: Vec<String> = Vec::new();
+            for line in text.lines() {
+                let line = line.split('#').next().unwrap_or("").trim();
+                if line.is_empty() {
+                    continue;
+                }
+                // hosts-style: "0.0.0.0 evil.com" or "127.0.0.1 evil.com"
+                let domain = if line.contains(char::is_whitespace) {
+                    line.split_whitespace()
+                        .last()
+                        .unwrap_or("")
+                        .trim()
+                } else {
+                    line
+                };
+                let d = normalize_domain(domain);
+                if d.is_empty() || d.parse::<std::net::IpAddr>().is_ok() {
+                    continue;
+                }
+                candidates.push(d);
+                if candidates.len() >= max {
+                    break;
+                }
+            }
+            let mut set = if allow {
+                load_allowlist(&dest)?
+            } else {
+                load_blocklist(&dest)?
+            };
+            let before = set.len();
+            let mut added = 0usize;
+            for d in &candidates {
+                if set.insert(d.clone()) {
+                    added += 1;
+                }
+            }
+            let kind = if allow { "allow" } else { "block" };
+            if dry_run {
+                println!(
+                    "[cyberdns] import dry-run → {kind}list: scanned={} new={added} already={} total_after={}",
+                    candidates.len(),
+                    before,
+                    before + added
+                );
+            } else {
+                if allow {
+                    save_allowlist(&dest, &set)?;
+                } else {
+                    save_blocklist(&dest, &set)?;
+                }
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] imported {added} new {kind} domain(s) from {} → {} (total {})",
+                        path.display(),
+                        dest.display(),
+                        set.len()
+                    )
+                    .green()
+                    .bold()
+                );
+                if added > 0 {
+                    emit(
+                        &cli.event_log,
+                        EventAction::Observed,
+                        Severity::Info,
+                        format!("dns import {kind} added={added} from={}", path.display()),
+                        "import",
+                    );
+                }
             }
         }
         Commands::Doctor { probe_doh, json } => {

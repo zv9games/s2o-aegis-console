@@ -16,6 +16,11 @@ cargo run -p cyberdefender -- rules list
 cargo run -p cyberdefender -- rules export --format csv --out .aegis/defender-rules.csv
 cargo run -p aegis-cli -- cleanup                    # dry-run (+ IOC age + DNS dedupe)
 cargo run -p aegis-cli -- cleanup --apply
+cargo run -p cyberdns -- import domains.txt --list block
+cargo run -p cyberdns -- import domains.txt --list allow --dry-run
+cargo run -p aegis-cli -- config get min_posture
+cargo run -p aegis-cli -- config set min_posture 50
+cargo run -p cyberid -- sessions-export --format csv --out .aegis/sessions.csv
 # Managed Windows rules (prefix S2O-Aegis-*; elevate for live apply)
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-run
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
@@ -165,7 +170,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Job | Command |
 |-----|---------|
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
-| DNS | `cyberdns doctor\|check\|export\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
+| DNS | `cyberdns doctor\|check\|export\|import\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender doctor\|rules\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
 | EDR | `cyberedr doctor\|export\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
@@ -174,7 +179,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | SIEM | `cybersiem doctor\|search\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
 | Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 | Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
-| Identity | `cyberid posture\|doctor\|authenticate\|sessions\|revoke\|verify` |
+| Identity | `cyberid posture\|doctor\|authenticate\|sessions\|sessions-export\|revoke\|verify` |
 | Gate | `cyberztna doctor\|serve\|access-stats\|access-export\|routes\|oauth\|jwt` |
 
 ## Gate HTTPS + session

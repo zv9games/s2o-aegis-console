@@ -197,6 +197,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate access-export + mesh peers export + expanded selftest  
 - ✅ CyberLog search + fleet export + playbook run --json  
 - ✅ Policy plan + defender rules export + expanded cleanup  
+- ✅ DNS import + config get/set + sessions export  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

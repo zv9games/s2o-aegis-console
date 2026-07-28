@@ -422,6 +422,21 @@ enum ConfigCmd {
         #[arg(long, default_value = ".aegis/config.json")]
         path: PathBuf,
     },
+    /// Get one config key
+    Get {
+        /// Key: data_dir|event_log|health_bind|min_posture|playbooks|gate_config
+        key: String,
+        #[arg(long, default_value = ".aegis/config.json")]
+        path: PathBuf,
+    },
+    /// Set one config key and save
+    Set {
+        /// Key: data_dir|event_log|health_bind|min_posture|playbooks|gate_config
+        key: String,
+        value: String,
+        #[arg(long, default_value = ".aegis/config.json")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2892,6 +2907,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{}",
                     format!("[aegis] wrote {}", path.display()).green().bold()
+                );
+            }
+            ConfigCmd::Get { key, path } => {
+                let cfg = SuiteConfig::load(&path);
+                let k = key.trim().to_ascii_lowercase();
+                let val = match k.as_str() {
+                    "data_dir" | "data-dir" => cfg.data_dir,
+                    "event_log" | "event-log" | "events" => cfg.event_log,
+                    "health_bind" | "health-bind" | "health" => cfg.health_bind,
+                    "min_posture" | "min-posture" | "posture" => cfg.min_posture.to_string(),
+                    "playbooks" | "playbook" => cfg.playbooks,
+                    "gate_config" | "gate-config" | "gate" => cfg.gate_config,
+                    _ => {
+                        eprintln!(
+                            "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
+                        );
+                        std::process::exit(2);
+                    }
+                };
+                println!("{val}");
+            }
+            ConfigCmd::Set { key, value, path } => {
+                let mut cfg = SuiteConfig::load(&path);
+                let k = key.trim().to_ascii_lowercase();
+                match k.as_str() {
+                    "data_dir" | "data-dir" => cfg.data_dir = value.clone(),
+                    "event_log" | "event-log" | "events" => cfg.event_log = value.clone(),
+                    "health_bind" | "health-bind" | "health" => cfg.health_bind = value.clone(),
+                    "min_posture" | "min-posture" | "posture" => {
+                        match value.parse::<u32>() {
+                            Ok(n) if n <= 100 => cfg.min_posture = n,
+                            Ok(_) => {
+                                eprintln!("[aegis] min_posture must be 0..=100");
+                                std::process::exit(2);
+                            }
+                            Err(_) => {
+                                eprintln!("[aegis] min_posture must be an integer");
+                                std::process::exit(2);
+                            }
+                        }
+                    }
+                    "playbooks" | "playbook" => cfg.playbooks = value.clone(),
+                    "gate_config" | "gate-config" | "gate" => cfg.gate_config = value.clone(),
+                    _ => {
+                        eprintln!(
+                            "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
+                        );
+                        std::process::exit(2);
+                    }
+                }
+                cfg.save(&path)?;
+                println!(
+                    "{}",
+                    format!("[aegis] set {k}={value} → {}", path.display())
+                        .green()
+                        .bold()
                 );
             }
         },

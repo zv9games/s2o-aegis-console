@@ -130,6 +130,9 @@
 - `aegis policy plan` — describe apply steps without mutating host
 - CyberDefender `rules list|export` for local hash/name signatures
 - `aegis cleanup` hygiene: IOC age prune + DNS blocklist dedupe (dry-run/`--apply`)
+- CyberDNS `import` domains from text/hosts file into block or allow list
+- `aegis config get|set` for suite config keys
+- CyberID `sessions-export` (json/csv + `--all`/`--user`/`--out`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
