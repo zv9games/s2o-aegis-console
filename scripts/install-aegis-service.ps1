@@ -45,13 +45,20 @@ if (-not $BinPath -or -not (Test-Path $BinPath)) {
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 $eventLog = Join-Path $DataDir "events.jsonl"
-# sc.exe binPath= requires careful quoting
-$binArg = "`"$BinPath`" --run-as-service --event-log `"$eventLog`" --health-bind $HealthBind"
+# Entire service command is one binPath= value (quote paths only if they contain spaces)
+function Quote-IfNeeded([string]$p) {
+    if ($p -match '\s') { return ('\"{0}\"' -f $p) }
+    return $p
+}
+$binArg = "{0} --run-as-service --event-log {1} --health-bind {2}" -f `
+    (Quote-IfNeeded $BinPath), (Quote-IfNeeded $eventLog), $HealthBind
 
 Write-Host "Service : $ServiceName" -ForegroundColor Cyan
 Write-Host "binPath : $binArg" -ForegroundColor Cyan
 
-sc.exe create $ServiceName binPath= $binArg start= auto DisplayName= "S2O Aegis Suite Kernel (aegisd)"
+# sc.exe requires space after '=' — route through cmd /C as one line
+$createCmd = 'sc.exe create "{0}" binPath= "{1}" start= auto DisplayName= "S2O Aegis Suite Kernel (aegisd)"' -f $ServiceName, $binArg
+cmd.exe /C $createCmd
 if ($LASTEXITCODE -ne 0) {
     throw "sc create failed (need Administrator?). exit=$LASTEXITCODE"
 }

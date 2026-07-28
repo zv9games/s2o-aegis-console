@@ -210,12 +210,18 @@ enum Commands {
     Setup {
         #[arg(long, default_value = ".aegis")]
         data_dir: PathBuf,
-        /// Apply edge policy pack after seeding
+        /// Apply policy pack after seeding
         #[arg(long, default_value_t = true)]
         apply_policy: bool,
         /// Skip policy apply
         #[arg(long)]
         no_policy: bool,
+        /// Policy pack: `suite` (default), `edge`, or a path to PolicyDocument JSON
+        #[arg(long, default_value = "suite")]
+        policy: String,
+        /// Enroll this host into local fleet.json after seed
+        #[arg(long)]
+        enroll_fleet: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1509,6 +1515,39 @@ fn run_sc(args: &[&str]) -> Result<(i32, String, String), Box<dyn std::error::Er
     ))
 }
 
+/// `sc create` needs `option= value` with a space after `=` as a single shell line.
+/// Write a short .cmd and execute it — most reliable under CreateProcess vs argv splitting.
+fn run_sc_create(
+    name: &str,
+    bin_cmdline: &str,
+    display_name: &str,
+) -> Result<(i32, String, String), Box<dyn std::error::Error>> {
+    // binPath value is one quoted string: "exe [args...]"
+    let line = format!(
+        "sc.exe create \"{name}\" binPath= \"{bin_cmdline}\" start= auto DisplayName= \"{display_name}\"\r\n"
+    );
+    let script = std::env::temp_dir().join(format!("s2o-sc-create-{name}.cmd"));
+    std::fs::write(&script, &line)?;
+    let out = Command::new("cmd")
+        .args(["/C", &script.display().to_string()])
+        .output()?;
+    let _ = std::fs::remove_file(&script);
+    let code = out.status.code().unwrap_or(1);
+    Ok((
+        code,
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    ))
+}
+
+fn win_quote_if_needed(s: &str) -> String {
+    if s.contains(' ') {
+        format!("\\\"{s}\\\"")
+    } else {
+        s.to_string()
+    }
+}
+
 async fn build_local_heartbeat(
     fw: &s2o_kernel::FirewallEngineHandle,
     host_override: Option<String>,
@@ -2051,6 +2090,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     0
                 }
             };
+            let playbook_rules = {
+                let p = Path::new(".aegis/playbooks.json");
+                if p.exists() {
+                    std::fs::read_to_string(p)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| v.get("rules").and_then(|r| r.as_array()).map(|a| a.len()))
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+            let fleet_policy = {
+                let p = Path::new(".aegis/fleet-policy.json");
+                if p.exists() {
+                    FleetPolicyBundle::load(p).map(|b| {
+                        serde_json::json!({
+                            "present": true,
+                            "name": b.name,
+                            "version": b.version,
+                            "updated_at": b.updated_at,
+                        })
+                    }).unwrap_or_else(|| serde_json::json!({"present": true, "parse_error": true}))
+                } else {
+                    serde_json::json!({"present": false})
+                }
+            };
+            let example_packs = [
+                "policies/examples/suite-lab-pack.json",
+                "policies/examples/edge-pack.json",
+                "policies/examples/mesh-seed-pack.json",
+                "policies/examples/posture-pack.json",
+                "policies/examples/dns-intel-pack.json",
+                "policies/examples/gate-pack.json",
+                "policies/examples/response-playbooks.json",
+            ]
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "path": p,
+                    "present": Path::new(p).exists(),
+                })
+            })
+            .collect::<Vec<_>>();
             let inventory = serde_json::json!({
                 "ioc_entries": ioc_count,
                 "fleet_hosts": fleet_summary.total,
@@ -2062,6 +2145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "gate_access_lines": gate_access_lines,
                 "dns_blocklist_entries": dns_block_lines,
                 "dns_allowlist_entries": dns_allow_lines,
+                "playbook_rules": playbook_rules,
+                "fleet_policy": fleet_policy,
             });
             let files = [
                 (".aegis/events.jsonl", event_log.exists()),
@@ -2074,6 +2159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (".aegis/mesh-peers.json", Path::new(".aegis/mesh-peers.json").exists()),
                 (".aegis/defender-rules.json", Path::new(".aegis/defender-rules.json").exists()),
                 (".aegis/fleet.json", Path::new(".aegis/fleet.json").exists()),
+                (".aegis/fleet-policy.json", Path::new(".aegis/fleet-policy.json").exists()),
+                (".aegis/playbooks.json", Path::new(".aegis/playbooks.json").exists()),
+                (".aegis/config.json", Path::new(".aegis/config.json").exists()),
                 (".aegis/sessions.json", Path::new(".aegis/sessions.json").exists()),
                 (".aegis/quarantine", quarantine_dir.is_dir()),
             ];
@@ -2094,6 +2182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "bytes": event_bytes,
                 },
                 "inventory": inventory,
+                "example_packs": example_packs,
                 "data_files": files.iter().map(|(p, ok)| serde_json::json!({"path": p, "present": ok})).collect::<Vec<_>>(),
                 "module_state_counts": by_state,
                 "kernel_version": KERNEL_VERSION,
@@ -2127,10 +2216,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "- Sessions: {session_total} total / {session_active} active\n"
                 ));
                 md.push_str(&format!("- Mesh peers: {mesh_peers}\n"));
+                md.push_str(&format!("- Playbook rules: {playbook_rules}\n"));
                 md.push_str(&format!("- Quarantine files: {quarantine_files}\n"));
                 md.push_str(&format!("- Gate access log lines: {gate_access_lines}\n"));
                 md.push_str(&format!(
-                    "- DNS blocklist / allowlist: {dns_block_lines} / {dns_allow_lines}\n\n"
+                    "- DNS blocklist / allowlist: {dns_block_lines} / {dns_allow_lines}\n"
+                ));
+                md.push_str(&format!(
+                    "- Fleet policy: {}\n\n",
+                    if Path::new(".aegis/fleet-policy.json").exists() {
+                        "present"
+                    } else {
+                        "missing"
+                    }
                 ));
                 md.push_str("## Modules\n\n");
                 md.push_str("| ID | State | Detail |\n|----|-------|--------|\n");
@@ -3812,6 +3910,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_dir,
             apply_policy,
             no_policy,
+            policy,
+            enroll_fleet,
             json,
         } => {
             std::fs::create_dir_all(&data_dir)?;
@@ -3857,6 +3957,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 note(&bl);
             }
 
+            // DNS allowlist seed
+            let al = data_dir.join("dns-allowlist.txt");
+            if !al.exists() {
+                std::fs::write(
+                    &al,
+                    "# S2O CyberDNS allowlist\n# updates.microsoft.com\n",
+                )?;
+                note(&al);
+            }
+
             // Defender rules
             let rules = data_dir.join("defender-rules.json");
             if !rules.exists() {
@@ -3883,6 +3993,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 )?;
                 note(&yara);
+            }
+
+            // YARA-X seed dir (empty marker file list ok; defender yara init fills)
+            let yara_dir = data_dir.join("yara");
+            if !yara_dir.exists() {
+                std::fs::create_dir_all(&yara_dir)?;
+                note(&yara_dir);
+            }
+
+            // quarantine dir
+            let qdir = data_dir.join("quarantine");
+            if !qdir.exists() {
+                std::fs::create_dir_all(&qdir)?;
+                note(&qdir);
             }
 
             // playbooks
@@ -3920,24 +4044,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 note(&ioc);
             }
 
-            // edge policy example copy
-            let policy_src = PathBuf::from("policies/examples/edge-pack.json");
-            let policy_dst = data_dir.join("edge-pack.json");
-            if policy_src.exists() && !policy_dst.exists() {
-                std::fs::copy(&policy_src, &policy_dst)?;
-                note(&policy_dst);
+            // mesh peers empty registry
+            let mesh = data_dir.join("mesh-peers.json");
+            if !mesh.exists() {
+                let s = serde_json::json!({
+                    "version": "0.1.0",
+                    "peers": []
+                });
+                std::fs::write(&mesh, serde_json::to_string_pretty(&s)?)?;
+                note(&mesh);
             }
+
+            // fleet empty store
+            let fleet_path = data_dir.join("fleet.json");
+            if !fleet_path.exists() {
+                let empty = FleetStore::default();
+                empty.save(&fleet_path)?;
+                note(&fleet_path);
+            }
+
+            // copy example packs into data dir for offline operators
+            for (src_name, dst_name) in [
+                ("policies/examples/suite-lab-pack.json", "suite-lab-pack.json"),
+                ("policies/examples/edge-pack.json", "edge-pack.json"),
+                ("policies/examples/mesh-seed-pack.json", "mesh-seed-pack.json"),
+                ("policies/examples/posture-pack.json", "posture-pack.json"),
+            ] {
+                let src = PathBuf::from(src_name);
+                let dst = data_dir.join(dst_name);
+                if src.exists() && !dst.exists() {
+                    std::fs::copy(&src, &dst)?;
+                    note(&dst);
+                }
+            }
+
+            // resolve policy path: suite | edge | filesystem path
+            let policy_key = policy.trim().to_ascii_lowercase();
+            let policy_candidates: Vec<PathBuf> = match policy_key.as_str() {
+                "suite" | "suite-lab" | "lab" => vec![
+                    data_dir.join("suite-lab-pack.json"),
+                    PathBuf::from("policies/examples/suite-lab-pack.json"),
+                    data_dir.join("edge-pack.json"),
+                    PathBuf::from("policies/examples/edge-pack.json"),
+                ],
+                "edge" => vec![
+                    data_dir.join("edge-pack.json"),
+                    PathBuf::from("policies/examples/edge-pack.json"),
+                ],
+                "mesh" | "mesh-seed" => vec![
+                    data_dir.join("mesh-seed-pack.json"),
+                    PathBuf::from("policies/examples/mesh-seed-pack.json"),
+                ],
+                "posture" => vec![
+                    data_dir.join("posture-pack.json"),
+                    PathBuf::from("policies/examples/posture-pack.json"),
+                ],
+                _ => vec![PathBuf::from(&policy)],
+            };
+            let resolved_policy = policy_candidates.into_iter().find(|p| p.exists());
 
             let do_policy = apply_policy && !no_policy;
             let mut policy_ok: Option<bool> = None;
             let mut policy_path_s: Option<String> = None;
+            let mut policy_applied_lines: Vec<String> = Vec::new();
             if do_policy {
-                let path = if policy_dst.exists() {
-                    policy_dst
-                } else {
-                    policy_src
-                };
-                if path.exists() {
+                if let Some(path) = resolved_policy {
                     policy_path_s = Some(path.display().to_string());
                     if !json {
                         println!("[aegis] applying policy {} ...", path.display());
@@ -3946,6 +4117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let store = Arc::new(EventStore::open(&event_log)?);
                     let result = s2o_kernel::apply_policy(&doc, &fw, Some(store)).await?;
                     policy_ok = Some(result.ok);
+                    policy_applied_lines = result.applied.clone();
                     if !json {
                         if result.ok {
                             println!("{}", "[aegis] policy OK".green().bold());
@@ -3956,6 +4128,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                } else if !json {
+                    println!(
+                        "{}",
+                        format!("[aegis] no policy pack found for --policy {policy} (skip apply)")
+                            .yellow()
+                    );
+                }
+            }
+
+            let mut fleet_enrolled: Option<String> = None;
+            if enroll_fleet {
+                let mut store = FleetStore::load(&fleet_path);
+                let hb = build_local_heartbeat(&fw, None, None, vec!["setup".into(), "lab".into()], None)
+                    .await?;
+                let id = hb.host_id.clone();
+                store.upsert_heartbeat(hb);
+                store.save(&fleet_path)?;
+                fleet_enrolled = Some(id);
+                if !json {
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] fleet enrolled {} → {}",
+                            fleet_enrolled.as_deref().unwrap_or("?"),
+                            fleet_path.display()
+                        )
+                        .green()
+                    );
                 }
             }
 
@@ -3966,9 +4166,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "ok": true,
                         "data_dir": data_dir.display().to_string(),
                         "created": created,
-                        "policy_applied": do_policy,
+                        "policy_key": policy,
+                        "policy_applied": do_policy && policy_path_s.is_some(),
                         "policy_path": policy_path_s,
                         "policy_ok": policy_ok,
+                        "policy_applied_lines": policy_applied_lines,
+                        "fleet_enrolled": fleet_enrolled,
                     }))?
                 );
             } else {
@@ -3977,6 +4180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  aegis doctor");
                 println!("  aegis selftest");
                 println!("  aegis status");
+                println!("  aegis report --json");
                 println!("  cyberztna serve --tls");
             }
         }
@@ -5502,24 +5706,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let data_dir = data_dir.unwrap_or_else(default_service_data_dir);
                     std::fs::create_dir_all(&data_dir)?;
                     let event_log = data_dir.join("events.jsonl");
-                    // binPath for sc: quoted exe + --run-as-service + flags
+                    // Prefer absolute paths without \\?\ Verbatim prefix (sc.exe rejects it)
+                    let strip_verbatim = |p: PathBuf| -> PathBuf {
+                        let s = p.display().to_string();
+                        if let Some(rest) = s.strip_prefix(r"\\?\") {
+                            PathBuf::from(rest)
+                        } else {
+                            p
+                        }
+                    };
+                    let exe_s = strip_verbatim(
+                        std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone()),
+                    )
+                    .display()
+                    .to_string();
+                    let log_s = strip_verbatim(
+                        std::fs::canonicalize(&data_dir).unwrap_or_else(|_| data_dir.clone()),
+                    )
+                    .join("events.jsonl")
+                    .display()
+                    .to_string();
+                    // Entire service command is one binPath value (quote paths only if needed)
                     let bin_path = format!(
-                        "\"{}\" --run-as-service --event-log \"{}\" --health-bind {}",
-                        exe.display(),
-                        event_log.display(),
+                        "{} --run-as-service --event-log {} --health-bind {}",
+                        win_quote_if_needed(&exe_s),
+                        win_quote_if_needed(&log_s),
                         health_bind
                     );
                     if !json {
                         println!("[aegis] installing service {name}");
                         println!("  binPath : {bin_path}");
                     }
-                    let (code, stdout, stderr) = run_sc(&[
-                        "create",
+                    let (code, stdout, stderr) = run_sc_create(
                         &name,
-                        &format!("binPath= {bin_path}"),
-                        "start= auto",
-                        "DisplayName= S2O Aegis Suite Kernel (aegisd)",
-                    ])?;
+                        &bin_path,
+                        "S2O Aegis Suite Kernel (aegisd)",
+                    )?;
                     if !json {
                         print!("{stdout}{stderr}");
                     }

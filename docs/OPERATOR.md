@@ -4,6 +4,11 @@
 
 ```powershell
 cargo run -p aegis-cli -- setup
+cargo run -p aegis-cli -- setup --policy suite --enroll-fleet --json
+cargo run -p aegis-cli -- setup --policy edge --no-policy
+# Windows service (requires Administrator):
+#   cargo run -p aegis-cli -- service install --json
+#   cargo run -p aegis-cli -- service start --json
 cargo run -p aegis-cli -- version
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- status

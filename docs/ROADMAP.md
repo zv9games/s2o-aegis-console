@@ -217,6 +217,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ aegisd policy/reload + aegis events/watch + SIEM collect/follow + EDR watch/trace JSON  
 - ✅ Defender/DNS/playbook long-poll watch surfaces with JSON seed/ready envelopes  
 - ✅ Policy mesh fragment + suite-lab pack + JSON dev-smoke path  
+- ✅ Setup suite-lab default + fleet enroll + report pack inventory + sc install fix  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

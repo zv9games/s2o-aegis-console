@@ -186,6 +186,9 @@
 - Policy **mesh** fragment (seed peers into `mesh-peers.json`); example `suite-lab-pack.json`
 - Mesh seed pack includes mesh peers; selftest loads suite/mesh packs
 - `scripts/dev-smoke.ps1 -Json` automation path for machine-readable surfaces
+- `aegis setup --policy suite|edge|mesh|path` (default suite-lab), `--enroll-fleet`, richer seed files
+- `aegis report` inventory: playbook rules, fleet policy, example packs present
+- Windows `sc create` via `cmd /C` (service install + install-aegis-service.ps1)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
