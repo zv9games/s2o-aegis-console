@@ -78,7 +78,10 @@ enum Commands {
         json: bool,
     },
     /// Write / refresh local rules + yara-lite + YARA-X seed
-    UpdateDefs,
+    UpdateDefs {
+        #[arg(long)]
+        json: bool,
+    },
     /// List / export local name+hash rules
     Rules {
         #[command(subcommand)]
@@ -222,6 +225,8 @@ enum PatternsCmd {
     Init {
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Test patterns against a file or --text string
     Test {
@@ -240,6 +245,8 @@ enum YaraCmd {
     Init {
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// List rule files and compiled rule count
     List {
@@ -267,6 +274,8 @@ enum YaraCmd {
         quarantine: bool,
         #[arg(long, default_value = ".aegis/quarantine")]
         quarantine_dir: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Download a remote .yar/.yara (or text) ruleset into --yara-dir (capped lab feed)
     Pull {
@@ -281,6 +290,8 @@ enum YaraCmd {
         /// Overwrite existing file
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1463,7 +1474,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
-        Commands::UpdateDefs => {
+        Commands::UpdateDefs { json } => {
             let mut rules = load_rules(&cli.rules);
             if rules.version.is_empty() {
                 rules = LocalRules::seed();
@@ -1475,26 +1486,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rules.version = "0.1.0".into();
             }
             save_rules(&cli.rules, &rules)?;
+            let mut patterns_written = false;
             if !cli.patterns.exists() {
                 if let Some(p) = cli.patterns.parent() {
                     let _ = fs::create_dir_all(p);
                 }
                 let _ = fs::write(&cli.patterns, yara_lite::default_seed());
+                patterns_written = true;
             }
             let yara_seed = yara_x_engine::write_seed_rules(&cli.yara_dir, false)?;
-            println!(
-                "{}",
-                format!(
-                    "[cyberdefender] wrote local rules {} (hashes={}, names={}); patterns {}; yara {}",
-                    cli.rules.display(),
-                    rules.blocked_hashes.len(),
-                    rules.blocked_name_substrings.len(),
-                    cli.patterns.display(),
-                    yara_seed.display()
-                )
-                .green()
-                .bold()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "update-defs",
+                        "rules": cli.rules.display().to_string(),
+                        "hashes": rules.blocked_hashes.len(),
+                        "names": rules.blocked_name_substrings.len(),
+                        "patterns": cli.patterns.display().to_string(),
+                        "patterns_written": patterns_written,
+                        "yara_seed": yara_seed.display().to_string(),
+                        "yara_dir": cli.yara_dir.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdefender] wrote local rules {} (hashes={}, names={}); patterns {}; yara {}",
+                        cli.rules.display(),
+                        rules.blocked_hashes.len(),
+                        rules.blocked_name_substrings.len(),
+                        cli.patterns.display(),
+                        yara_seed.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            }
             emit(
                 &cli.event_log,
                 EventAction::Observed,
@@ -1557,23 +1587,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            PatternsCmd::Init { force } => {
+            PatternsCmd::Init { force, json } => {
                 if cli.patterns.exists() && !force {
-                    println!(
-                        "[cyberdefender] {} exists (use --force to overwrite)",
-                        cli.patterns.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "patterns-init",
+                                "path": cli.patterns.display().to_string(),
+                                "written": false,
+                                "skipped": true,
+                                "message": "exists (use --force to overwrite)",
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "[cyberdefender] {} exists (use --force to overwrite)",
+                            cli.patterns.display()
+                        );
+                    }
                 } else {
                     if let Some(p) = cli.patterns.parent() {
                         fs::create_dir_all(p)?;
                     }
                     fs::write(&cli.patterns, yara_lite::default_seed())?;
-                    println!(
-                        "{}",
-                        format!("[cyberdefender] wrote {}", cli.patterns.display())
-                            .green()
-                            .bold()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "patterns-init",
+                                "path": cli.patterns.display().to_string(),
+                                "written": true,
+                                "forced": force,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format!("[cyberdefender] wrote {}", cli.patterns.display())
+                                .green()
+                                .bold()
+                        );
+                    }
                 }
             }
             PatternsCmd::Test { path, text, json } => {
@@ -1657,11 +1714,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Commands::Yara { command } => match command {
-            YaraCmd::Init { force } => {
+            YaraCmd::Init { force, json } => {
+                let already = yara_x_engine::collect_rule_files(&cli.yara_dir);
                 let path = yara_x_engine::write_seed_rules(&cli.yara_dir, force)?;
-                if path.exists() && !force {
+                if !json && path.exists() && !force {
                     // write_seed_rules returns existing path without overwrite
-                    let already = yara_x_engine::collect_rule_files(&cli.yara_dir);
                     if !already.is_empty() && !force {
                         println!(
                             "[cyberdefender] {} exists ({} rule file(s); use --force to overwrite seed)",
@@ -1670,16 +1727,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
-                println!(
-                    "{}",
-                    format!(
-                        "[cyberdefender] yara-x seed ready: {} (engine {})",
-                        path.display(),
-                        yara_x_engine::engine_version()
-                    )
-                    .green()
-                    .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "yara-init",
+                            "seed": path.display().to_string(),
+                            "yara_dir": cli.yara_dir.display().to_string(),
+                            "engine": yara_x_engine::engine_version(),
+                            "forced": force,
+                            "prior_files": already.len(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] yara-x seed ready: {} (engine {})",
+                            path.display(),
+                            yara_x_engine::engine_version()
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
             }
             YaraCmd::List { json } => {
                 let files = yara_x_engine::collect_rule_files(&cli.yara_dir);
@@ -1799,70 +1871,154 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name,
                 max_bytes,
                 force,
+                json,
             } => {
                 let fname = name
                     .trim()
                     .trim_start_matches(['/', '\\'])
                     .to_string();
                 if fname.is_empty() || fname.contains("..") {
-                    eprintln!("[cyberdefender] invalid --name");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "yara-pull",
+                                "error": "invalid --name",
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] invalid --name");
+                    }
                     std::process::exit(2);
                 }
                 fs::create_dir_all(&cli.yara_dir)?;
                 let dest = cli.yara_dir.join(&fname);
                 if dest.exists() && !force {
-                    eprintln!(
-                        "[cyberdefender] {} exists (use --force)",
-                        dest.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "yara-pull",
+                                "error": "destination exists (use --force)",
+                                "path": dest.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[cyberdefender] {} exists (use --force)",
+                            dest.display()
+                        );
+                    }
                     std::process::exit(3);
                 }
-                println!("[cyberdefender] pulling {url} (max_bytes={max_bytes})...");
+                if !json {
+                    println!("[cyberdefender] pulling {url} (max_bytes={max_bytes})...");
+                }
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(60))
                     .user_agent("S2O-CyberDefender/0.5 (+yara pull)")
                     .build()?;
                 let res = client.get(&url).send().await?;
                 if !res.status().is_success() {
-                    eprintln!("[cyberdefender] HTTP {}", res.status());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "yara-pull",
+                                "error": format!("HTTP {}", res.status()),
+                                "url": url,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] HTTP {}", res.status());
+                    }
                     std::process::exit(1);
                 }
                 let bytes = res.bytes().await?;
                 if bytes.len() > max_bytes {
-                    eprintln!(
-                        "[cyberdefender] download {} bytes exceeds max_bytes={max_bytes}",
-                        bytes.len()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "yara-pull",
+                                "error": format!("download {} bytes exceeds max_bytes={max_bytes}", bytes.len()),
+                                "bytes": bytes.len(),
+                                "max_bytes": max_bytes,
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[cyberdefender] download {} bytes exceeds max_bytes={max_bytes}",
+                            bytes.len()
+                        );
+                    }
                     std::process::exit(1);
                 }
                 // basic sanity: look like YARA text
                 let text = String::from_utf8_lossy(&bytes);
-                if !text.contains("rule ") && !text.contains("rule\t") {
+                let maybe_not_yara = !text.contains("rule ") && !text.contains("rule\t");
+                if maybe_not_yara && !json {
                     eprintln!("[cyberdefender] WARN: body may not be YARA (no 'rule ' token)");
                 }
                 // validate this source alone (dir may already have same rule names)
                 match YaraEngine::compile_source(&text, &fname) {
                     Ok(eng) => {
                         fs::write(&dest, &bytes)?;
-                        println!(
-                            "{}",
-                            format!(
-                                "[cyberdefender] wrote {} ({} bytes); file rules={}",
-                                dest.display(),
-                                bytes.len(),
-                                eng.rule_count
-                            )
-                            .green()
-                            .bold()
-                        );
-                        if let Err(e) = YaraEngine::compile_dir(&cli.yara_dir) {
-                            eprintln!(
-                                "[cyberdefender] WARN: full yara-dir compile: {e} (resolve duplicate rule names)"
+                        let dir_compile_warn = match YaraEngine::compile_dir(&cli.yara_dir) {
+                            Ok(_) => None,
+                            Err(e) => Some(e.to_string()),
+                        };
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "yara-pull",
+                                    "url": url,
+                                    "path": dest.display().to_string(),
+                                    "bytes": bytes.len(),
+                                    "rule_count": eng.rule_count,
+                                    "maybe_not_yara": maybe_not_yara,
+                                    "dir_compile_warn": dir_compile_warn,
+                                }))?
                             );
+                        } else {
+                            println!(
+                                "{}",
+                                format!(
+                                    "[cyberdefender] wrote {} ({} bytes); file rules={}",
+                                    dest.display(),
+                                    bytes.len(),
+                                    eng.rule_count
+                                )
+                                .green()
+                                .bold()
+                            );
+                            if let Some(e) = dir_compile_warn {
+                                eprintln!(
+                                    "[cyberdefender] WARN: full yara-dir compile: {e} (resolve duplicate rule names)"
+                                );
+                            }
                         }
                     }
                     Err(e) => {
-                        eprintln!("[cyberdefender] download rejected (compile): {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "yara-pull",
+                                    "error": format!("download rejected (compile): {e}"),
+                                    "url": url,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[cyberdefender] download rejected (compile): {e}");
+                        }
                         std::process::exit(2);
                     }
                 }
@@ -1874,11 +2030,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_bytes,
                 quarantine,
                 quarantine_dir,
+                json,
             } => {
                 let eng = match YaraEngine::compile_dir(&cli.yara_dir) {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("[cyberdefender] {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "yara-scan",
+                                    "error": e.to_string(),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[cyberdefender] {e}");
+                        }
                         std::process::exit(2);
                     }
                 };
@@ -1886,24 +2054,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let rules = load_rules(&cli.rules);
                 let hash_set = BTreeSet::new();
                 let patterns: Vec<Pattern> = vec![];
-                println!(
-                    "{}",
-                    format!(
-                        "[cyberdefender] yara-x scan '{}' rules={} files_dir={}",
-                        root.display(),
-                        eng.rule_count,
-                        cli.yara_dir.display()
-                    )
-                    .cyan()
-                );
+                if !json {
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] yara-x scan '{}' rules={} files_dir={}",
+                            root.display(),
+                            eng.rule_count,
+                            cli.yara_dir.display()
+                        )
+                        .cyan()
+                    );
+                }
                 let targets = match collect_targets(&root, recursive, max_files) {
                     Ok(t) if !t.is_empty() => t,
                     Ok(_) => {
-                        eprintln!("{}", "[cyberdefender] no files to scan".yellow());
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "yara-scan",
+                                    "path": root.display().to_string(),
+                                    "files": 0,
+                                    "blocked": 0,
+                                    "quarantined": 0,
+                                    "results": [],
+                                }))?
+                            );
+                        } else {
+                            eprintln!("{}", "[cyberdefender] no files to scan".yellow());
+                        }
                         std::process::exit(1);
                     }
                     Err(e) => {
-                        eprintln!("{}", format!("Scan Error: {e}").red());
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "yara-scan",
+                                    "error": e.to_string(),
+                                    "path": root.display().to_string(),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("{}", format!("Scan Error: {e}").red());
+                        }
                         std::process::exit(1);
                     }
                 };
@@ -1917,19 +2114,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     max_bytes,
                     quarantine,
                     quarantine_dir: &quarantine_dir,
-                    quiet: false,
+                    quiet: json,
                 };
                 let mut blocked = 0u32;
                 let mut quarantined = 0u32;
+                let mut results = Vec::new();
                 for t in &targets {
-                    let st = scan_one(t, &ctx, false);
+                    let st = scan_one(t, &ctx, json);
                     blocked += st.blocked;
                     quarantined += st.quarantined;
+                    results.push(serde_json::json!({
+                        "path": st.path,
+                        "verdict": st.verdict,
+                        "rule": st.rule,
+                        "sha256": st.sha256,
+                        "quarantined": st.quarantined_path,
+                        "blocked": st.blocked > 0,
+                    }));
                 }
-                println!(
-                    " Files: {}  blocked: {blocked}  quarantined: {quarantined}",
-                    targets.len()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": blocked == 0,
+                            "action": "yara-scan",
+                            "path": root.display().to_string(),
+                            "recursive": recursive,
+                            "files": targets.len(),
+                            "blocked": blocked,
+                            "quarantined": quarantined,
+                            "rule_count": eng.rule_count,
+                            "results": results,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        " Files: {}  blocked: {blocked}  quarantined: {quarantined}",
+                        targets.len()
+                    );
+                }
                 if blocked > 0 {
                     std::process::exit(3);
                 }

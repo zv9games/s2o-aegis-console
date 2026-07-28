@@ -173,6 +173,9 @@
 - Cyberwall `enable|disable|lock|unlock --json` (status after mutator)
 - Fleet `policy set|show|apply|push|pull --json`; `aegis restore --json`; `config init --json`
 - CyberDNS `system-dns backup|set|restore --json`; ThreatGrid `sync --json`; `service status --json`
+- Service `install|uninstall|start|stop --json`; policy `example --json`; playbook `init --json`
+- Defender `update-defs|patterns init|yara init|scan|pull --json`
+- Mesh `show|up|down --json`; peers `set|live|publish|pull --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

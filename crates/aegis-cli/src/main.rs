@@ -438,6 +438,8 @@ enum ServiceCmd {
         /// Also register AtLogOn Scheduled Task (user-level fallback)
         #[arg(long)]
         task: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Remove Windows Service registration
     Uninstall {
@@ -445,16 +447,22 @@ enum ServiceCmd {
         name: String,
         #[arg(long)]
         task: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Start the service (or Scheduled Task)
     Start {
         #[arg(long, default_value = "S2OAegisd")]
         name: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Stop the service
     Stop {
         #[arg(long, default_value = "S2OAegisd")]
         name: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -527,6 +535,8 @@ enum PolicyCmd {
         /// wall | edge
         #[arg(long, default_value = "edge")]
         kind: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -536,6 +546,8 @@ enum PlaybookCmd {
     Init {
         #[arg(long, default_value = ".aegis/playbooks.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// List rules (enabled, when, actions)
     List {
@@ -2149,13 +2161,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Policy { command } => match command {
-            PolicyCmd::Example { kind } => {
+            PolicyCmd::Example { kind, json } => {
                 let doc = if kind.eq_ignore_ascii_case("wall") {
                     PolicyDocument::example_wall_enable()
                 } else {
                     PolicyDocument::example_edge_pack()
                 };
-                println!("{}", serde_json::to_string_pretty(&doc)?);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "kind": kind,
+                            "document": doc,
+                        }))?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&doc)?);
+                }
             }
             PolicyCmd::Validate { path, json } => {
                 use s2o_schema::POLICY_SCHEMA_VERSION;
@@ -2729,18 +2752,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Playbook { command } => match command {
-            PlaybookCmd::Init { path } => {
+            PlaybookCmd::Init { path, json } => {
                 if let Some(p) = path.parent() {
                     std::fs::create_dir_all(p)?;
                 }
                 let pb = default_playbooks();
                 std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
-                println!(
-                    "{}",
-                    format!("[aegis] wrote playbook {}", path.display())
-                        .green()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "playbook-init",
+                            "path": path.display().to_string(),
+                            "rules": pb.rules.len(),
+                            "playbook": pb,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[aegis] wrote playbook {}", path.display())
+                            .green()
+                            .bold()
+                    );
+                }
             }
             PlaybookCmd::List { path, json } => {
                 if !path.exists() {
@@ -5195,9 +5231,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     data_dir,
                     health_bind,
                     task,
+                    json,
                 } => {
                     let Some(exe) = resolve_aegisd_bin(bin) else {
-                        eprintln!("[aegis] aegisd.exe not found — build first or pass --bin");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "install",
+                                    "error": "aegisd.exe not found — build first or pass --bin",
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[aegis] aegisd.exe not found — build first or pass --bin");
+                        }
                         std::process::exit(2);
                     };
                     let data_dir = data_dir.unwrap_or_else(default_service_data_dir);
@@ -5210,8 +5258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         event_log.display(),
                         health_bind
                     );
-                    println!("[aegis] installing service {name}");
-                    println!("  binPath : {bin_path}");
+                    if !json {
+                        println!("[aegis] installing service {name}");
+                        println!("  binPath : {bin_path}");
+                    }
                     let (code, stdout, stderr) = run_sc(&[
                         "create",
                         &name,
@@ -5219,11 +5269,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "start= auto",
                         "DisplayName= S2O Aegis Suite Kernel (aegisd)",
                     ])?;
-                    print!("{stdout}{stderr}");
+                    if !json {
+                        print!("{stdout}{stderr}");
+                    }
                     if code != 0 {
-                        eprintln!(
-                            "[aegis] sc create failed (exit {code}). Run elevated Administrator shell."
-                        );
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "install",
+                                    "name": name,
+                                    "exit_code": code,
+                                    "error": "sc create failed — run elevated Administrator shell",
+                                    "stdout": stdout,
+                                    "stderr": stderr,
+                                    "bin_path": bin_path,
+                                }))?
+                            );
+                        } else {
+                            eprintln!(
+                                "[aegis] sc create failed (exit {code}). Run elevated Administrator shell."
+                            );
+                        }
                         std::process::exit(code);
                     }
                     let _ = run_sc(&[
@@ -5231,8 +5299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &name,
                         "S2O Aegis control plane: health HTTP, status matrix, event store",
                     ]);
-                    println!("{}", format!("[aegis] service {name} installed").green().bold());
-                    println!("  start : aegis service start --name {name}");
+                    let mut task_ok: Option<bool> = None;
+                    let mut task_error: Option<String> = None;
                     if task {
                         let action = format!(
                             "\"{}\" start --event-log \"{}\" --health-bind {}",
@@ -5255,57 +5323,173 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ])
                             .output()?;
                         if out.status.success() {
-                            println!("  task  : S2O-Aegisd registered (AtLogOn)");
+                            task_ok = Some(true);
+                            if !json {
+                                println!("  task  : S2O-Aegisd registered (AtLogOn)");
+                            }
                         } else {
-                            eprintln!(
-                                "  task  : failed: {}",
-                                String::from_utf8_lossy(&out.stderr)
-                            );
+                            task_ok = Some(false);
+                            let err = String::from_utf8_lossy(&out.stderr).to_string();
+                            task_error = Some(err.clone());
+                            if !json {
+                                eprintln!("  task  : failed: {err}");
+                            }
                         }
                     }
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "install",
+                                "name": name,
+                                "bin": exe.display().to_string(),
+                                "bin_path": bin_path,
+                                "data_dir": data_dir.display().to_string(),
+                                "event_log": event_log.display().to_string(),
+                                "health_bind": health_bind,
+                                "task_requested": task,
+                                "task_ok": task_ok,
+                                "task_error": task_error,
+                            }))?
+                        );
+                    } else {
+                        println!("{}", format!("[aegis] service {name} installed").green().bold());
+                        println!("  start : aegis service start --name {name}");
+                    }
                 }
-                ServiceCmd::Uninstall { name, task } => {
+                ServiceCmd::Uninstall { name, task, json } => {
                     let _ = run_sc(&["stop", &name]);
                     let (code, stdout, stderr) = run_sc(&["delete", &name])?;
-                    print!("{stdout}{stderr}");
-                    if code != 0 {
+                    if !json {
+                        print!("{stdout}{stderr}");
+                    }
+                    let mut task_deleted = false;
+                    if task {
+                        let st = Command::new("schtasks")
+                            .args(["/Delete", "/TN", "S2O-Aegisd", "/F"])
+                            .status()?;
+                        task_deleted = st.success();
+                        if !json {
+                            println!("[aegis] task S2O-Aegisd delete attempted");
+                        }
+                    }
+                    let ok = code == 0;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": ok,
+                                "action": "uninstall",
+                                "name": name,
+                                "exit_code": code,
+                                "stdout": stdout,
+                                "stderr": stderr,
+                                "task_requested": task,
+                                "task_deleted": task_deleted,
+                                "error": if ok { serde_json::Value::Null } else {
+                                    serde_json::json!("sc delete failed (may need Administrator)")
+                                },
+                            }))?
+                        );
+                    } else if code != 0 {
                         eprintln!("[aegis] sc delete exit {code} (may need Administrator)");
                     } else {
                         println!("{}", format!("[aegis] service {name} removed").yellow());
                     }
-                    if task {
-                        let _ = Command::new("schtasks")
-                            .args(["/Delete", "/TN", "S2O-Aegisd", "/F"])
-                            .status();
-                        println!("[aegis] task S2O-Aegisd delete attempted");
+                    if !ok {
+                        std::process::exit(if code == 0 { 1 } else { code });
                     }
                 }
-                ServiceCmd::Start { name } => {
+                ServiceCmd::Start { name, json } => {
                     let (code, stdout, stderr) = run_sc(&["start", &name])?;
-                    print!("{stdout}{stderr}");
+                    if !json {
+                        print!("{stdout}{stderr}");
+                    }
                     if code != 0 {
                         // fallback task
                         let t = Command::new("schtasks")
                             .args(["/Run", "/TN", "S2O-Aegisd"])
                             .output()?;
                         if t.status.success() {
-                            println!("[aegis] started via Scheduled Task S2O-Aegisd");
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": true,
+                                        "action": "start",
+                                        "name": name,
+                                        "via": "scheduled_task",
+                                        "task": "S2O-Aegisd",
+                                        "scm_exit_code": code,
+                                    }))?
+                                );
+                            } else {
+                                println!("[aegis] started via Scheduled Task S2O-Aegisd");
+                            }
                         } else {
-                            eprintln!("[aegis] service start failed (exit {code})");
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": false,
+                                        "action": "start",
+                                        "name": name,
+                                        "exit_code": code,
+                                        "stdout": stdout,
+                                        "stderr": stderr,
+                                        "error": "service start failed (SCM and task)",
+                                    }))?
+                                );
+                            } else {
+                                eprintln!("[aegis] service start failed (exit {code})");
+                            }
                             std::process::exit(code);
                         }
+                    } else if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "start",
+                                "name": name,
+                                "via": "scm",
+                                "exit_code": code,
+                            }))?
+                        );
                     } else {
                         println!("{}", format!("[aegis] service {name} started").green().bold());
                     }
                 }
-                ServiceCmd::Stop { name } => {
+                ServiceCmd::Stop { name, json } => {
                     let (code, stdout, stderr) = run_sc(&["stop", &name])?;
-                    print!("{stdout}{stderr}");
-                    if code != 0 {
+                    if !json {
+                        print!("{stdout}{stderr}");
+                    }
+                    let ok = code == 0;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": ok,
+                                "action": "stop",
+                                "name": name,
+                                "exit_code": code,
+                                "stdout": stdout,
+                                "stderr": stderr,
+                                "error": if ok { serde_json::Value::Null } else {
+                                    serde_json::json!(format!("service stop exit {code}"))
+                                },
+                            }))?
+                        );
+                    } else if code != 0 {
                         eprintln!("[aegis] service stop exit {code}");
+                    } else {
+                        println!("{}", format!("[aegis] service {name} stopped").yellow());
+                    }
+                    if !ok {
                         std::process::exit(code);
                     }
-                    println!("{}", format!("[aegis] service {name} stopped").yellow());
                 }
             }
         }

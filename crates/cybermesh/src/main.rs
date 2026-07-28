@@ -39,7 +39,10 @@ enum Commands {
         json: bool,
     },
     /// Print system `wg show` if available (does not create tunnels)
-    Show,
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
     /// TCP connect probe to peer endpoints (userspace reachability; not WG handshake)
     Probe {
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
@@ -56,11 +59,15 @@ enum Commands {
     Up {
         #[arg(long, default_value = ".aegis/wg0.conf")]
         conf: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Attempt `wg-quick down`
     Down {
         #[arg(long, default_value = ".aegis/wg0.conf")]
         conf: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Peer registry + live system peers
     Peers {
@@ -186,9 +193,14 @@ enum PeersCmd {
         keepalive: Option<u16>,
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Live peers from system `wg` (if installed)
-    Live,
+    Live {
+        #[arg(long)]
+        json: bool,
+    },
     /// POST local public key to aegisd mesh directory
     Publish {
         /// Path to public key file or base64 string
@@ -201,6 +213,8 @@ enum PeersCmd {
         allowed_ips: String,
         #[arg(long, default_value = "http://127.0.0.1:9090/mesh/peers")]
         url: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Pull remote peer directory from aegisd into local registry
     Pull {
@@ -211,6 +225,8 @@ enum PeersCmd {
         /// Merge with existing (default replace)
         #[arg(long)]
         merge: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -775,20 +791,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         }
-        Commands::Show => {
+        Commands::Show { json } => {
             let Some(bin) = find_wg() else {
-                eprintln!("[cybermesh] `wg` not found on PATH");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "action": "show",
+                            "error": "wg not found on PATH",
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cybermesh] `wg` not found on PATH");
+                }
                 std::process::exit(2);
             };
-            let status = Command::new(bin).arg("show").status()?;
-            std::process::exit(status.code().unwrap_or(1));
-        }
-        Commands::Up { conf } => {
-            if !conf.exists() {
-                eprintln!(
-                    "[cybermesh] conf missing: {} — run cybermesh config",
-                    conf.display()
+            let out = Command::new(bin).arg("show").output()?;
+            let code = out.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": out.status.success(),
+                        "action": "show",
+                        "bin": bin,
+                        "exit_code": code,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                    }))?
                 );
+            } else {
+                print!("{stdout}{stderr}");
+            }
+            if !out.status.success() {
+                std::process::exit(code);
+            }
+        }
+        Commands::Up { conf, json } => {
+            if !conf.exists() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "action": "up",
+                            "error": format!("conf missing: {}", conf.display()),
+                            "conf": conf.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    eprintln!(
+                        "[cybermesh] conf missing: {} — run cybermesh config",
+                        conf.display()
+                    );
+                }
                 std::process::exit(1);
             }
             // Prefer wg-quick; on Windows WireGuard may use different tooling
@@ -797,21 +856,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("wg0");
             if let Some(wq) = find_wg_quick() {
-                println!("[cybermesh] running {wq} up {} ...", conf.display());
-                let st = Command::new(wq).arg("up").arg(&conf).status()?;
-                std::process::exit(st.code().unwrap_or(1));
+                if !json {
+                    println!("[cybermesh] running {wq} up {} ...", conf.display());
+                }
+                let out = Command::new(wq).arg("up").arg(&conf).output()?;
+                let code = out.status.code().unwrap_or(1);
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": out.status.success(),
+                            "action": "up",
+                            "tool": wq,
+                            "conf": conf.display().to_string(),
+                            "iface": iface,
+                            "exit_code": code,
+                            "stdout": stdout,
+                            "stderr": stderr,
+                        }))?
+                    );
+                } else {
+                    print!("{stdout}{stderr}");
+                }
+                std::process::exit(code);
             }
-            eprintln!("[cybermesh] wg-quick not found.");
-            eprintln!("Import {} with system WireGuard UI, or install wireguard-tools.", conf.display());
-            eprintln!("Interface name hint: {iface}");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "up",
+                        "conf": conf.display().to_string(),
+                        "iface": iface,
+                        "error": "wg-quick not found — import conf with system WireGuard UI or install wireguard-tools",
+                    }))?
+                );
+            } else {
+                eprintln!("[cybermesh] wg-quick not found.");
+                eprintln!("Import {} with system WireGuard UI, or install wireguard-tools.", conf.display());
+                eprintln!("Interface name hint: {iface}");
+            }
             std::process::exit(2);
         }
-        Commands::Down { conf } => {
+        Commands::Down { conf, json } => {
             if let Some(wq) = find_wg_quick() {
-                let st = Command::new(wq).arg("down").arg(&conf).status()?;
-                std::process::exit(st.code().unwrap_or(1));
+                let out = Command::new(wq).arg("down").arg(&conf).output()?;
+                let code = out.status.code().unwrap_or(1);
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": out.status.success(),
+                            "action": "down",
+                            "tool": wq,
+                            "conf": conf.display().to_string(),
+                            "exit_code": code,
+                            "stdout": stdout,
+                            "stderr": stderr,
+                        }))?
+                    );
+                } else {
+                    print!("{stdout}{stderr}");
+                }
+                std::process::exit(code);
             }
-            eprintln!("[cybermesh] wg-quick not found — tear down via system WireGuard tools.");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "down",
+                        "conf": conf.display().to_string(),
+                        "error": "wg-quick not found — tear down via system WireGuard tools",
+                    }))?
+                );
+            } else {
+                eprintln!("[cybermesh] wg-quick not found — tear down via system WireGuard tools.");
+            }
             std::process::exit(2);
         }
         Commands::Peers { command } => match command {
@@ -999,6 +1124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 allowed_ips,
                 keepalive,
                 file,
+                json,
             } => {
                 let mut reg = PeerRegistry::load(&file);
                 let Some(p) = reg
@@ -1006,7 +1132,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter_mut()
                     .find(|p| p.name.eq_ignore_ascii_case(&name))
                 else {
-                    eprintln!("[cybermesh] peer not found: {name}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "peers-set",
+                                "error": "peer not found",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cybermesh] peer not found: {name}");
+                    }
                     std::process::exit(1);
                 };
                 let mut changed = Vec::new();
@@ -1026,40 +1164,123 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     changed.push(format!("keepalive={k}"));
                 }
                 if changed.is_empty() {
-                    eprintln!(
-                        "[cybermesh] peers set: pass --endpoint, --clear-endpoint, --allowed-ips, and/or --keepalive"
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "peers-set",
+                                "error": "pass --endpoint, --clear-endpoint, --allowed-ips, and/or --keepalive",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[cybermesh] peers set: pass --endpoint, --clear-endpoint, --allowed-ips, and/or --keepalive"
+                        );
+                    }
                     std::process::exit(2);
                 }
                 let shown = p.name.clone();
+                let peer_snap = p.clone();
                 reg.save(&file)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[cybermesh] peer '{shown}' updated ({}) → {}",
-                        changed.join(", "),
-                        file.display()
-                    )
-                    .green()
-                    .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "peers-set",
+                            "name": shown,
+                            "changed": changed,
+                            "path": file.display().to_string(),
+                            "peer": peer_snap,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[cybermesh] peer '{shown}' updated ({}) → {}",
+                            changed.join(", "),
+                            file.display()
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
             }
-            PeersCmd::Live => {
+            PeersCmd::Live { json } => {
                 if let Some(bin) = find_wg() {
                     let out = Command::new(bin).args(["show", "all", "peers"]).output();
                     match out {
                         Ok(o) if o.status.success() => {
-                            let t = String::from_utf8_lossy(&o.stdout);
-                            if t.trim().is_empty() {
+                            let t = String::from_utf8_lossy(&o.stdout).to_string();
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": true,
+                                        "action": "peers-live",
+                                        "bin": bin,
+                                        "stdout": t,
+                                        "empty": t.trim().is_empty(),
+                                    }))?
+                                );
+                            } else if t.trim().is_empty() {
                                 println!("[cybermesh] no peers reported by wg");
                             } else {
                                 print!("{t}");
                             }
                         }
-                        _ => {
-                            let _ = Command::new(bin).arg("show").status();
+                        Ok(o) => {
+                            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                            if json {
+                                // fall back to plain show output if available
+                                let fallback = Command::new(bin).arg("show").output().ok();
+                                let fb_out = fallback
+                                    .as_ref()
+                                    .map(|f| String::from_utf8_lossy(&f.stdout).to_string())
+                                    .unwrap_or_default();
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": false,
+                                        "action": "peers-live",
+                                        "bin": bin,
+                                        "stdout": stdout,
+                                        "stderr": stderr,
+                                        "fallback_show": fb_out,
+                                    }))?
+                                );
+                            } else {
+                                let _ = Command::new(bin).arg("show").status();
+                            }
+                        }
+                        Err(e) => {
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": false,
+                                        "action": "peers-live",
+                                        "error": e.to_string(),
+                                    }))?
+                                );
+                            } else {
+                                let _ = Command::new(bin).arg("show").status();
+                            }
                         }
                     }
+                } else if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "action": "peers-live",
+                            "error": "wg not found — install WireGuard tools for live peers",
+                        }))?
+                    );
                 } else {
                     println!("[cybermesh] wg not found — install WireGuard tools for live peers.");
                 }
@@ -1070,6 +1291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 endpoint,
                 allowed_ips,
                 url,
+                json,
             } => {
                 let pk = if Path::new(&public_key).exists() {
                     fs::read_to_string(&public_key)?.trim().to_string()
@@ -1093,19 +1315,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = client.post(&url).json(&peer).send().await?;
                 let status = res.status();
                 let body = res.text().await.unwrap_or_default();
-                println!("[cybermesh] publish {url} -> {status}");
-                println!("{body}");
-                if !status.is_success() {
+                let ok = status.is_success();
+                if json {
+                    let body_json: serde_json::Value =
+                        serde_json::from_str(&body).unwrap_or(serde_json::json!(body));
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": ok,
+                            "action": "peers-publish",
+                            "url": url,
+                            "status": status.as_u16(),
+                            "peer": peer,
+                            "body": body_json,
+                        }))?
+                    );
+                } else {
+                    println!("[cybermesh] publish {url} -> {status}");
+                    println!("{body}");
+                }
+                if !ok {
                     std::process::exit(1);
                 }
             }
-            PeersCmd::Pull { url, file, merge } => {
+            PeersCmd::Pull {
+                url,
+                file,
+                merge,
+                json,
+            } => {
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(15))
                     .build()?;
                 let res = client.get(&url).send().await?;
                 if !res.status().is_success() {
-                    eprintln!("[cybermesh] pull failed: {}", res.status());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "peers-pull",
+                                "url": url,
+                                "error": format!("pull failed: {}", res.status()),
+                                "status": res.status().as_u16(),
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cybermesh] pull failed: {}", res.status());
+                    }
                     std::process::exit(1);
                 }
                 let remote: PeerRegistry = res.json().await?;
@@ -1119,11 +1376,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     remote
                 };
                 reg.save(&file)?;
-                println!(
-                    "[cybermesh] pulled {} peer(s) -> {}",
-                    reg.peers.len(),
-                    file.display()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "peers-pull",
+                            "url": url,
+                            "path": file.display().to_string(),
+                            "merge": merge,
+                            "count": reg.peers.len(),
+                            "peers": reg.peers,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[cybermesh] pulled {} peer(s) -> {}",
+                        reg.peers.len(),
+                        file.display()
+                    );
+                }
             }
         },
         Commands::Genkey {

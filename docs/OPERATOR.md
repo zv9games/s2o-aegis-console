@@ -161,6 +161,16 @@ cargo run -p cyberdns -- system-dns backup --json
 cargo run -p aegis-cli -- fleet policy set policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- fleet policy show --json
 cargo run -p aegis-cli -- service status --json
+cargo run -p aegis-cli -- service stop --json
+cargo run -p aegis-cli -- policy example --kind edge --json
+cargo run -p aegis-cli -- playbook init --json
+cargo run -p cyberdefender -- update-defs --json
+cargo run -p cyberdefender -- patterns init --json
+cargo run -p cyberdefender -- yara init --json
+cargo run -p cyberdefender -- yara scan Cargo.toml --json
+cargo run -p cybermesh -- show --json
+cargo run -p cybermesh -- up --json
+cargo run -p cybermesh -- peers set lab-peer --keepalive 30 --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json
