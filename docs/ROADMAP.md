@@ -194,6 +194,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ ThreatGrid doctor/remove + CyberLog doctor + `aegis health` probe  
 - ✅ Policy validate + DNS export/dedupe + wall rules managed filter  
 - ✅ Session revoke (CLI + playbook) + EDR TCP export  
+- ✅ Gate access-export + mesh peers export + expanded selftest  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

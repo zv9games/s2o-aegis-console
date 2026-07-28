@@ -117,6 +117,18 @@ enum PeersCmd {
     List {
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export peers registry (json/csv)
+    Export {
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        file: PathBuf,
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Add or update a peer in the registry
     Add {
@@ -697,9 +709,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
         Commands::Peers { command } => match command {
-            PeersCmd::List { file } => {
+            PeersCmd::List { file, json } => {
                 let reg = PeerRegistry::load(&file);
-                if reg.peers.is_empty() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": file.display().to_string(),
+                            "version": reg.version,
+                            "count": reg.peers.len(),
+                            "peers": reg.peers,
+                        }))?
+                    );
+                } else if reg.peers.is_empty() {
                     println!("[cybermesh] no peers in {} — peers add …", file.display());
                 } else {
                     for p in &reg.peers {
@@ -712,6 +734,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     println!("--- {} peer(s) in {}", reg.peers.len(), file.display());
+                }
+            }
+            PeersCmd::Export { file, format, out } => {
+                let reg = PeerRegistry::load(&file);
+                let text = if format.eq_ignore_ascii_case("csv") {
+                    let mut s =
+                        String::from("name,public_key,endpoint,allowed_ips,keepalive\n");
+                    for p in &reg.peers {
+                        s.push_str(&format!(
+                            "{},{},{},{},{}\n",
+                            p.name,
+                            p.public_key,
+                            p.endpoint.as_deref().unwrap_or(""),
+                            p.allowed_ips,
+                            p.keepalive
+                        ));
+                    }
+                    s
+                } else {
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "path": file.display().to_string(),
+                        "version": reg.version,
+                        "count": reg.peers.len(),
+                        "peers": reg.peers,
+                    }))?
+                };
+                if let Some(path) = out {
+                    if let Some(p) = path.parent() {
+                        fs::create_dir_all(p)?;
+                    }
+                    fs::write(&path, &text)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[cybermesh] exported {} peer(s) → {}",
+                            reg.peers.len(),
+                            path.display()
+                        )
+                        .green()
+                        .bold()
+                    );
+                } else {
+                    print!("{text}");
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
                 }
             }
             PeersCmd::Add {

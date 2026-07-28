@@ -2969,6 +2969,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .name
                     .starts_with(cyberwall_core::MANAGED_RULE_PREFIX),
             ));
+            // policy pack load + shape
+            let edge = PathBuf::from("policies/examples/edge-pack.json");
+            let policy_ok = if edge.exists() {
+                load_policy_file(&edge).is_ok()
+            } else {
+                true // optional when run outside repo root
+            };
+            checks.push(("policy_load_edge", policy_ok));
+            // relative --since parser
+            checks.push((
+                "parse_since_1h",
+                parse_since("1h").is_ok() && parse_since("bogus").is_err(),
+            ));
+            // session revoke_user round-trip (temp store under .aegis)
+            let sess_ok = (|| {
+                let path = PathBuf::from(".aegis/selftest-sessions.json");
+                let mut store = s2o_session::SessionStore::default();
+                store.mint("selftest-user", "selftest-host", 80, 1);
+                store.mint("other", "selftest-host", 80, 1);
+                let n = store.revoke_user("selftest-user");
+                store.save(&path).ok()?;
+                let _ = std::fs::remove_file(&path);
+                Some(n == 1 && store.active().count() == 1)
+            })()
+            .unwrap_or(false);
+            checks.push(("session_revoke_user", sess_ok));
+            // IOC remove round-trip (in-memory)
+            let ioc_ok = {
+                let mut s = s2o_ioc::IocStore::default();
+                s.upsert(s2o_ioc::IocEntry {
+                    kind: s2o_ioc::IocKind::Domain,
+                    value: "selftest.drop.s2o".into(),
+                    source: "selftest".into(),
+                    severity: s2o_ioc::IocSeverity::Low,
+                    note: None,
+                    added_at: chrono::Utc::now(),
+                });
+                s.remove("selftest.drop.s2o", Some(s2o_ioc::IocKind::Domain)) == 1
+                    && s.entries.is_empty()
+            };
+            checks.push(("ioc_remove", ioc_ok));
+            // playbook known actions non-empty
+            checks.push((
+                "playbook_actions",
+                !known_playbook_actions().is_empty()
+                    && known_playbook_actions().contains(&"session_revoke_attr"),
+            ));
 
             println!("{}", "Aegis selftest".bold().green());
             for (name, ok) in &checks {

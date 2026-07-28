@@ -120,6 +120,9 @@
 - CyberID `sessions --json|--all|--user` + `revoke --user`; `SessionStore::revoke_user`
 - Playbook actions: `session_revoke` / `session_revoke_user` / `session_revoke_attr`
 - CyberEDR `export` TCP snapshot (`json`/`csv`, state filter, `--out`)
+- Gate `access-export` (json/csv/text + `--since`/`--filter`) + `routes --json`
+- CyberMesh `peers list --json` + `peers export` (json/csv)
+- Expanded `aegis selftest` (policy load, parse_since, session revoke_user, ioc remove, playbook actions)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

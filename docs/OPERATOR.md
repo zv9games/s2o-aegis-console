@@ -25,11 +25,16 @@ cargo run -p aegis-cli -- events --severity high --limit 10 --text
 cargo run -p cyberwall -- doctor
 cargo run -p cyberdefender -- doctor
 cargo run -p cyberztna -- doctor
+cargo run -p cyberztna -- routes --json
+cargo run -p cyberztna -- access-export --since 24h --format csv --out .aegis/gate-access.csv
+cargo run -p cybermesh -- peers list --json
+cargo run -p cybermesh -- peers export --format csv --out .aegis/mesh-peers.csv
 cargo run -p aegis-cli -- fleet doctor
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- doctor --json
 cargo run -p aegis-cli -- health                 # probe aegisd /health
 cargo run -p aegis-cli -- health --status --metrics
+cargo run -p aegis-cli -- selftest
 cargo run -p cybersiem -- doctor
 cargo run -p cyberintel -- doctor
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
@@ -163,7 +168,8 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|revoke\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
-| Gate | `cyberztna doctor\|serve\|access-stats\|oauth\|jwt` |
+| Gate | `cyberztna doctor\|serve\|access-stats\|access-export\|routes\|oauth\|jwt` |
+| Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 
 ## Gate HTTPS + session
 

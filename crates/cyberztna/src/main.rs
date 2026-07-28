@@ -35,7 +35,27 @@ enum Commands {
     /// Write a starter route config
     Init,
     /// List configured routes
-    Routes,
+    Routes {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export access log lines (json/csv/text) with optional --since/--filter
+    AccessExport {
+        #[arg(long, default_value = ".aegis/gate-access.log")]
+        log: PathBuf,
+        /// json | csv | text
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        filter: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 10_000)]
+        limit: usize,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Generate lab mTLS CA + server + client certs
     Mtls {
         #[command(subcommand)]
@@ -358,6 +378,74 @@ fn access_line_ts(line: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(tok)
         .ok()
         .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+/// Best-effort parse of gate access log line into structured fields.
+fn parse_access_line(line: &str) -> serde_json::Value {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let ts = tokens.first().copied().unwrap_or("");
+    let decision = tokens
+        .iter()
+        .find(|t| **t == "ALLOW" || **t == "DENY")
+        .copied()
+        .unwrap_or("");
+    let mut reason = None;
+    let mut status = None;
+    let mut route = None;
+    let mut user = None;
+    let mut ip = None;
+    let mut path = None;
+    let mut method = None;
+    if let Some(idx) = line.find("reason=") {
+        reason = line[idx + 7..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+    }
+    if let Some(idx) = line.find("status=") {
+        status = line[idx + 7..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+    }
+    if let Some(idx) = line.find("route=") {
+        route = line[idx + 6..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+    }
+    if let Some(idx) = line.find("user=") {
+        user = line[idx + 5..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+    }
+    if let Some(idx) = line.find("ip=") {
+        ip = line[idx + 3..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+    }
+    if let Some(pos) = tokens.iter().position(|t| *t == "ALLOW" || *t == "DENY") {
+        if tokens[pos] == "ALLOW" {
+            method = tokens.get(pos + 1).map(|s| (*s).to_string());
+            path = tokens.get(pos + 2).map(|s| (*s).to_string());
+        } else {
+            path = tokens.get(pos + 1).map(|s| (*s).to_string());
+        }
+    }
+    serde_json::json!({
+        "raw": line,
+        "ts": ts,
+        "decision": decision,
+        "method": method,
+        "path": path,
+        "reason": reason,
+        "status": status,
+        "route": route,
+        "user": user,
+        "ip": ip,
+    })
 }
 
 #[tokio::main]
@@ -855,9 +943,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("Edit routes, then: cyberztna serve");
         }
-        Commands::Routes => {
+        Commands::Routes { json } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
-            if cfg.routes.is_empty() {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "config": cli.config.display().to_string(),
+                        "listen": cfg.listen,
+                        "min_score": cfg.min_score,
+                        "require_session": cfg.require_session,
+                        "rate_limit_per_minute": cfg.rate_limit_per_minute,
+                        "allow_ips": cfg.allow_ips,
+                        "routes": cfg.routes,
+                    }))?
+                );
+            } else if cfg.routes.is_empty() {
                 println!("[gate] no routes — run: cyberztna init");
             } else {
                 println!("listen={} min_score={}", cfg.listen, cfg.min_score);
@@ -866,6 +967,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "  {:<16} prefix={:<12} -> {}",
                         r.name, r.path_prefix, r.upstream
                     );
+                }
+            }
+        }
+        Commands::AccessExport {
+            log,
+            format,
+            filter,
+            since,
+            limit,
+            out,
+        } => {
+            use std::fs;
+            use std::io::{BufRead, BufReader};
+            if !log.exists() {
+                eprintln!("[gate] access log missing: {}", log.display());
+                std::process::exit(2);
+            }
+            let since_bound = match since.as_ref() {
+                Some(s) => match parse_since(s) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        eprintln!("[gate] {e}");
+                        std::process::exit(2);
+                    }
+                },
+                None => None,
+            };
+            let f = fs::File::open(&log)?;
+            let mut rows: Vec<serde_json::Value> = Vec::new();
+            let mut raw_lines: Vec<String> = Vec::new();
+            for line in BufReader::new(f).lines().flatten() {
+                if let Some(ref filt) = filter {
+                    if !line.contains(filt.as_str()) {
+                        continue;
+                    }
+                }
+                if let Some(bound) = since_bound {
+                    match access_line_ts(&line) {
+                        Some(ts) if ts >= bound => {}
+                        _ => continue,
+                    }
+                }
+                raw_lines.push(line.clone());
+                rows.push(parse_access_line(&line));
+            }
+            // keep last `limit` matches (newest at end of file)
+            if rows.len() > limit {
+                let skip = rows.len() - limit;
+                rows = rows.split_off(skip);
+                raw_lines = raw_lines.split_off(skip);
+            }
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from(
+                    "ts,decision,method,path,reason,status,route,user,ip\n",
+                );
+                for r in &rows {
+                    s.push_str(&format!(
+                        "{},{},{},{},{},{},{},{},{}\n",
+                        r.get("ts").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("decision").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("method").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("reason").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("status").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("route").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("user").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
+                    ));
+                }
+                s
+            } else if format.eq_ignore_ascii_case("text") {
+                raw_lines.join("\n") + if raw_lines.is_empty() { "" } else { "\n" }
+            } else {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "log": log.display().to_string(),
+                    "since": since,
+                    "filter": filter,
+                    "count": rows.len(),
+                    "lines": rows,
+                }))?
+            };
+            if let Some(path) = out {
+                if let Some(p) = path.parent() {
+                    fs::create_dir_all(p)?;
+                }
+                fs::write(&path, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[gate] exported {} access line(s) → {}",
+                        rows.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
                 }
             }
         }
