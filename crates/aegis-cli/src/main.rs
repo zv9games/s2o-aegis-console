@@ -431,6 +431,16 @@ struct PlaybookWhen {
     severity: Option<String>,
     #[serde(default)]
     message_contains: Option<String>,
+    /// Event kind filter (e.g. dns, alert, netflow)
+    #[serde(default)]
+    kind: Option<String>,
+    /// Require this attr key to exist; pair with attr_equals / attr_contains
+    #[serde(default)]
+    attr: Option<String>,
+    #[serde(default)]
+    attr_equals: Option<String>,
+    #[serde(default)]
+    attr_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -451,6 +461,15 @@ struct PlaybookAction {
     severity: Option<String>,
     #[serde(default)]
     product: Option<String>,
+    /// IOC kind for ioc_add / ioc_add_attr: domain|ip|hash|url
+    #[serde(default)]
+    kind: Option<String>,
+    /// Static IOC value for action_type = ioc_add
+    #[serde(default)]
+    value: Option<String>,
+    /// IOC source label (default: playbook)
+    #[serde(default)]
+    source: Option<String>,
 }
 
 fn default_playbooks() -> PlaybookFile {
@@ -464,6 +483,10 @@ fn default_playbooks() -> PlaybookFile {
                     action: Some("blocked".into()),
                     severity: None,
                     message_contains: None,
+                    kind: None,
+                    attr: None,
+                    attr_equals: None,
+                    attr_contains: None,
                 },
                 then: vec![PlaybookAction {
                     action_type: "log".into(),
@@ -473,6 +496,9 @@ fn default_playbooks() -> PlaybookFile {
                     message: None,
                     severity: None,
                     product: None,
+                    kind: None,
+                    value: None,
+                    source: None,
                 }],
             },
             PlaybookRule {
@@ -483,6 +509,10 @@ fn default_playbooks() -> PlaybookFile {
                     action: Some("blocked".into()),
                     severity: Some("high".into()),
                     message_contains: None,
+                    kind: None,
+                    attr: None,
+                    attr_equals: None,
+                    attr_contains: None,
                 },
                 then: vec![PlaybookAction {
                     action_type: "dns_block_attr".into(),
@@ -492,6 +522,9 @@ fn default_playbooks() -> PlaybookFile {
                     message: None,
                     severity: None,
                     product: None,
+                    kind: None,
+                    value: None,
+                    source: None,
                 }],
             },
             PlaybookRule {
@@ -502,6 +535,10 @@ fn default_playbooks() -> PlaybookFile {
                     action: Some("blocked".into()),
                     severity: Some("high".into()),
                     message_contains: None,
+                    kind: None,
+                    attr: None,
+                    attr_equals: None,
+                    attr_contains: None,
                 },
                 then: vec![PlaybookAction {
                     action_type: "emit".into(),
@@ -511,6 +548,9 @@ fn default_playbooks() -> PlaybookFile {
                     message: Some("playbook: {message}".into()),
                     severity: Some("high".into()),
                     product: Some("aegis".into()),
+                    kind: None,
+                    value: None,
+                    source: None,
                 }],
             },
             PlaybookRule {
@@ -521,6 +561,10 @@ fn default_playbooks() -> PlaybookFile {
                     action: Some("blocked".into()),
                     severity: Some("high".into()),
                     message_contains: None,
+                    kind: None,
+                    attr: None,
+                    attr_equals: None,
+                    attr_contains: None,
                 },
                 then: vec![PlaybookAction {
                     action_type: "webhook".into(),
@@ -530,6 +574,35 @@ fn default_playbooks() -> PlaybookFile {
                     message: None,
                     severity: None,
                     product: None,
+                    kind: None,
+                    value: None,
+                    source: None,
+                }],
+            },
+            PlaybookRule {
+                name: "ioc-from-dns-block".into(),
+                enabled: true,
+                when: PlaybookWhen {
+                    product: Some("cyberdns".into()),
+                    action: Some("blocked".into()),
+                    severity: None,
+                    message_contains: None,
+                    kind: None,
+                    attr: Some("domain".into()),
+                    attr_equals: None,
+                    attr_contains: None,
+                },
+                then: vec![PlaybookAction {
+                    action_type: "ioc_add_attr".into(),
+                    attr: Some("domain".into()),
+                    domain: None,
+                    url: None,
+                    message: None,
+                    severity: Some("high".into()),
+                    product: None,
+                    kind: Some("domain".into()),
+                    value: None,
+                    source: Some("playbook".into()),
                 }],
             },
         ],
@@ -555,12 +628,85 @@ fn event_matches(ev: &s2o_schema::AegisEvent, when: &PlaybookWhen) -> bool {
             return false;
         }
     }
+    if let Some(ref k) = when.kind {
+        let kid = format!("{:?}", ev.kind).to_ascii_lowercase();
+        let kf = k.to_ascii_lowercase();
+        if kid != kf && !kid.contains(&kf) {
+            return false;
+        }
+    }
     if let Some(ref m) = when.message_contains {
         if !ev.message.to_ascii_lowercase().contains(&m.to_ascii_lowercase()) {
             return false;
         }
     }
+    if let Some(ref key) = when.attr {
+        let raw = ev.attrs.get(key).and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .or_else(|| Some(v.to_string().trim_matches('"').to_string()))
+        });
+        let Some(val) = raw else {
+            return false;
+        };
+        if let Some(ref eq) = when.attr_equals {
+            if !val.eq_ignore_ascii_case(eq) {
+                return false;
+            }
+        }
+        if let Some(ref sub) = when.attr_contains {
+            if !val.to_ascii_lowercase().contains(&sub.to_ascii_lowercase()) {
+                return false;
+            }
+        }
+    } else if when.attr_equals.is_some() || when.attr_contains.is_some() {
+        // attr key required when equals/contains set
+        return false;
+    }
     true
+}
+
+fn parse_ioc_kind(s: &str) -> Option<s2o_ioc::IocKind> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "domain" | "dom" | "host" => Some(s2o_ioc::IocKind::Domain),
+        "ip" | "ipv4" | "ipv6" => Some(s2o_ioc::IocKind::Ip),
+        "hash" | "sha256" | "md5" | "sha1" => Some(s2o_ioc::IocKind::Hash),
+        "url" | "uri" => Some(s2o_ioc::IocKind::Url),
+        _ => None,
+    }
+}
+
+fn parse_ioc_severity(s: Option<&str>) -> s2o_ioc::IocSeverity {
+    match s.map(|x| x.to_ascii_lowercase()).as_deref() {
+        Some("critical") => s2o_ioc::IocSeverity::Critical,
+        Some("high") => s2o_ioc::IocSeverity::High,
+        Some("low") => s2o_ioc::IocSeverity::Low,
+        _ => s2o_ioc::IocSeverity::Medium,
+    }
+}
+
+fn playbook_ioc_upsert(
+    kind: s2o_ioc::IocKind,
+    value: &str,
+    source: &str,
+    severity: s2o_ioc::IocSeverity,
+    note: Option<String>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let path = Path::new(".aegis/ioc-store.json");
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut store = s2o_ioc::IocStore::load(path)?;
+    let inserted = store.upsert(s2o_ioc::IocEntry {
+        kind,
+        value: value.into(),
+        source: source.into(),
+        severity,
+        note,
+        added_at: chrono::Utc::now(),
+    });
+    store.save(path)?;
+    Ok(inserted)
 }
 
 fn zip_dir(src_dir: &Path, zip_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -755,6 +901,90 @@ async fn run_playbook_actions(
                     }
                 } else {
                     println!("    -> webhook {url} (dry-run)");
+                }
+            }
+            "ioc_add" => {
+                let kind_s = act.kind.as_deref().unwrap_or("domain");
+                let Some(kind) = parse_ioc_kind(kind_s) else {
+                    println!("    -> ioc_add skipped (bad kind {kind_s})");
+                    continue;
+                };
+                let value = act
+                    .value
+                    .clone()
+                    .or_else(|| act.domain.clone())
+                    .unwrap_or_default();
+                if value.trim().is_empty() {
+                    println!("    -> ioc_add skipped (no value)");
+                    continue;
+                }
+                let source = act.source.as_deref().unwrap_or("playbook");
+                let sev = parse_ioc_severity(act.severity.as_deref());
+                if apply {
+                    match playbook_ioc_upsert(
+                        kind,
+                        &value,
+                        source,
+                        sev,
+                        Some(format!("playbook:{}", rule.name)),
+                    ) {
+                        Ok(true) => println!("    -> ioc_add {kind_s}:{value} APPLIED"),
+                        Ok(false) => println!("    -> ioc_add {kind_s}:{value} (already present)"),
+                        Err(e) => println!("    -> ioc_add ERROR {e}"),
+                    }
+                } else {
+                    println!("    -> ioc_add {kind_s}:{value} (dry-run)");
+                }
+            }
+            "ioc_add_attr" => {
+                let key = act.attr.as_deref().unwrap_or("domain");
+                let value = ev
+                    .attrs
+                    .get(key)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(v.to_string().trim_matches('"').to_string()))
+                    })
+                    .or_else(|| act.value.clone())
+                    .or_else(|| act.domain.clone());
+                let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
+                    println!("    -> ioc_add_attr skipped (no attr {key})");
+                    continue;
+                };
+                let kind_s = act.kind.as_deref().unwrap_or(if key == "ip" || key == "remote_ip" {
+                    "ip"
+                } else if key == "hash" || key == "sha256" {
+                    "hash"
+                } else if key == "url" {
+                    "url"
+                } else {
+                    "domain"
+                });
+                let Some(kind) = parse_ioc_kind(kind_s) else {
+                    println!("    -> ioc_add_attr skipped (bad kind {kind_s})");
+                    continue;
+                };
+                let source = act.source.as_deref().unwrap_or("playbook");
+                let sev = parse_ioc_severity(act.severity.as_deref());
+                if apply {
+                    match playbook_ioc_upsert(
+                        kind,
+                        &value,
+                        source,
+                        sev,
+                        Some(format!("playbook:{} attr={}", rule.name, key)),
+                    ) {
+                        Ok(true) => {
+                            println!("    -> ioc_add_attr {kind_s}:{value} APPLIED")
+                        }
+                        Ok(false) => {
+                            println!("    -> ioc_add_attr {kind_s}:{value} (already present)")
+                        }
+                        Err(e) => println!("    -> ioc_add_attr ERROR {e}"),
+                    }
+                } else {
+                    println!("    -> ioc_add_attr {kind_s}:{value} (dry-run)");
                 }
             }
             other => println!("    -> unknown action {other}"),

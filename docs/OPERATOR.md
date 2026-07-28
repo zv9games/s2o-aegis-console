@@ -22,14 +22,18 @@ cargo run -p aegis-cli -- emit "remote" --http http://127.0.0.1:9090/events --no
 cargo run -p aegis-cli -- emit "udp" --udp 127.0.0.1:9091 --no-local
 cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
-cargo run -p aegis-cli -- playbook run              # dry-run
-cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist etc.
+cargo run -p aegis-cli -- playbook run              # dry-run (log/dns/emit/ioc_add_attr/…)
+cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist / IOC store etc.
 cargo run -p aegis-cli -- selftest
 cargo run -p aegis-cli -- cleanup              # dry-run sessions/fleet/events hygiene
 cargo run -p aegis-cli -- cleanup --apply
 cargo run -p cyberintel -- export --format csv --out .aegis/ioc.csv --limit 1000
+cargo run -p cyberintel -- stats
+cargo run -p cyberintel -- stats --json
 cargo run -p cyberintel -- prune --older-days 90 --source openphish   # dry-run
 cargo run -p cyberintel -- prune --older-days 90 --apply
+cargo run -p cyberztna -- access-stats --since 24h
+cargo run -p cyberztna -- access-stats --since 1h --json
 cargo run -p aegis-cli -- backup
 cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
 # mesh endpoint TCP probe (userspace; not WG handshake)
@@ -125,7 +129,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
 | Mesh | `cybermesh doctor\|probe\|peers\|config\|genkey` |
-| Intel | `cyberintel sync\|prune\|export\|lookup\|add` |
+| Intel | `cyberintel sync\|prune\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna serve\|access-stats\|oauth\|jwt` |

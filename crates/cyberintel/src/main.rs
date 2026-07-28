@@ -86,6 +86,14 @@ enum Commands {
         #[arg(long, default_value_t = 50_000)]
         limit: usize,
     },
+    /// Counts by kind / source / severity
+    Stats {
+        /// Max source rows to print
+        #[arg(long, default_value_t = 15)]
+        top: usize,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn host_id() -> String {
@@ -211,7 +219,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "local IOC store, lookup/add/sync, prune, export (capped multi-feed)".green()
+                "local IOC store, lookup/add/sync, prune, export, stats (capped multi-feed)"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -517,6 +526,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             } else {
                 print!("{text}");
+            }
+        }
+        Commands::Stats { top, json } => {
+            use std::collections::BTreeMap;
+            let store = IocStore::load(&cli.store)?;
+            let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+            let mut by_source: BTreeMap<String, usize> = BTreeMap::new();
+            let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
+            for e in &store.entries {
+                *by_kind
+                    .entry(format!("{:?}", e.kind).to_ascii_lowercase())
+                    .or_default() += 1;
+                let src = if e.source.is_empty() {
+                    "(empty)".into()
+                } else {
+                    e.source.clone()
+                };
+                *by_source.entry(src).or_default() += 1;
+                *by_sev
+                    .entry(format!("{:?}", e.severity).to_ascii_lowercase())
+                    .or_default() += 1;
+            }
+            if json {
+                let out = serde_json::json!({
+                    "store": cli.store.display().to_string(),
+                    "total": store.entries.len(),
+                    "by_kind": by_kind,
+                    "by_source": by_source,
+                    "by_severity": by_sev,
+                    "updated_at": store.updated_at.to_rfc3339(),
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      ThreatGrid IOC stats                               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Store : {}", cli.store.display());
+                println!(" Total : {}", store.entries.len());
+                println!("-- by kind --");
+                for (k, v) in &by_kind {
+                    println!("  {k:<12} {v}");
+                }
+                println!("-- by severity --");
+                for (k, v) in &by_sev {
+                    println!("  {k:<12} {v}");
+                }
+                let mut sources: Vec<_> = by_source.into_iter().collect();
+                sources.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                println!("-- by source (top {top}) --");
+                for (k, v) in sources.into_iter().take(top) {
+                    println!("  {v:<6} {k}");
+                }
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
             }
         }
     }

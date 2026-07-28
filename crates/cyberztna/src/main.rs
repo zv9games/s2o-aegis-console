@@ -58,6 +58,9 @@ enum Commands {
         /// Only count lines containing this substring (optional)
         #[arg(long)]
         filter: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -301,6 +304,49 @@ fn emit(event_log: &Path, action: EventAction, severity: Severity, message: impl
     }
 }
 
+/// Parse relative duration (`15m`, `1h`, `24h`, `7d`) or RFC3339 into a UTC lower bound.
+fn parse_since(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty --since value".into());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc));
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 {
+        return Err(format!(
+            "invalid --since '{s}' (use 15m, 1h, 24h, 7d, or RFC3339)"
+        ));
+    }
+    let unit = *bytes.last().unwrap() as char;
+    let num_str = &s[..s.len() - 1];
+    let n: i64 = num_str.parse().map_err(|_| {
+        format!("invalid --since '{s}' (use 15m, 1h, 24h, 7d, or RFC3339)")
+    })?;
+    if n <= 0 {
+        return Err("--since duration must be positive".into());
+    }
+    let now = chrono::Utc::now();
+    match unit {
+        's' | 'S' => Ok(now - chrono::Duration::seconds(n)),
+        'm' | 'M' => Ok(now - chrono::Duration::minutes(n)),
+        'h' | 'H' => Ok(now - chrono::Duration::hours(n)),
+        'd' | 'D' => Ok(now - chrono::Duration::days(n)),
+        'w' | 'W' => Ok(now - chrono::Duration::weeks(n)),
+        _ => Err(format!(
+            "invalid --since unit in '{s}' (use s/m/h/d/w or RFC3339)"
+        )),
+    }
+}
+
+fn access_line_ts(line: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let tok = line.split_whitespace().next()?;
+    chrono::DateTime::parse_from_rfc3339(tok)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -348,7 +394,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "=========================================================".cyan()
             );
         }
-        Commands::AccessStats { log, filter, json } => {
+        Commands::AccessStats {
+            log,
+            filter,
+            since,
+            json,
+        } => {
             use std::collections::BTreeMap;
             use std::fs;
             use std::io::{BufRead, BufReader};
@@ -357,10 +408,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[gate] access log missing: {}", log.display());
                 std::process::exit(2);
             }
+            let since_bound = match since.as_ref() {
+                Some(s) => match parse_since(s) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        eprintln!("[gate] {e}");
+                        std::process::exit(2);
+                    }
+                },
+                None => None,
+            };
             let f = fs::File::open(&log)?;
             let mut total = 0u64;
             let mut allow = 0u64;
             let mut deny = 0u64;
+            let mut skipped_ts = 0u64;
             let mut by_reason: BTreeMap<String, u64> = BTreeMap::new();
             let mut by_status: BTreeMap<String, u64> = BTreeMap::new();
             let mut by_path: BTreeMap<String, u64> = BTreeMap::new();
@@ -368,6 +430,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ref filt) = filter {
                     if !line.contains(filt.as_str()) {
                         continue;
+                    }
+                }
+                if let Some(bound) = since_bound {
+                    match access_line_ts(&line) {
+                        Some(ts) if ts >= bound => {}
+                        Some(_) => {
+                            skipped_ts += 1;
+                            continue;
+                        }
+                        None => {
+                            skipped_ts += 1;
+                            continue;
+                        }
                     }
                 }
                 total += 1;
@@ -415,9 +490,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if json {
                 let out = serde_json::json!({
                     "log": log.display().to_string(),
+                    "since": since,
                     "total": total,
                     "allow": allow,
                     "deny": deny,
+                    "skipped_outside_since": skipped_ts,
                     "by_reason": by_reason,
                     "by_status": by_status,
                     "by_path": by_path,
@@ -439,6 +516,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "=========================================================".cyan()
                 );
                 println!(" Log    : {}", log.display());
+                if let Some(ref s) = since {
+                    println!(" Since  : {s}");
+                }
                 println!(" Total  : {total}");
                 println!(" Allow  : {}", allow.to_string().green());
                 println!(" Deny   : {}", deny.to_string().red());

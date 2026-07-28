@@ -44,6 +44,7 @@ dependencies = [
  "reqwest",
  "s2o-bus",
  "s2o-fleet",
+ "s2o-ioc",
  "s2o-kernel",
  "s2o-schema",
  "s2o-session",

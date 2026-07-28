@@ -99,6 +99,9 @@
 - CyberLog `--since` time window (`15m`/`1h`/`24h`/`7d`/RFC3339) on events/alerts/stats/top/export/correlate
 - CyberMesh `probe` TCP reachability for peer endpoints (or `--endpoint`); not a WG handshake
 - Expanded `aegis report` suite inventory (IOC, fleet, sessions, mesh peers, quarantine, gate access, DNS lists)
+- Playbook richer `when` (`kind`, `attr`/`attr_equals`/`attr_contains`) + `ioc_add` / `ioc_add_attr` actions (default rule seeds IOC from DNS blocks)
+- ThreatGrid `stats` (by kind/source/severity, `--json`)
+- Gate `access-stats --since` time window (relative or RFC3339)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
