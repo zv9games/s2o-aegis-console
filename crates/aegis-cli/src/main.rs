@@ -1012,13 +1012,116 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 0
             };
+            // Suite inventory (file-backed; honest counts only)
+            let ioc_path = Path::new(".aegis/ioc-store.json");
+            let ioc_count = if ioc_path.exists() {
+                std::fs::read_to_string(ioc_path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| v.get("entries").and_then(|e| e.as_array()).map(|a| a.len()))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let fleet = s2o_fleet::FleetStore::load(Path::new(".aegis/fleet.json"));
+            let fleet_summary = fleet.summary(60);
+            let sessions = s2o_session::SessionStore::load(Path::new(".aegis/sessions.json"));
+            let session_total = sessions.sessions.len();
+            let session_active = sessions.active().count();
+            let mesh_peers = {
+                let p = Path::new(".aegis/mesh-peers.json");
+                if p.exists() {
+                    std::fs::read_to_string(p)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| v.get("peers").and_then(|e| e.as_array()).map(|a| a.len()))
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+            let quarantine_dir = Path::new(".aegis/quarantine");
+            let quarantine_files = if quarantine_dir.is_dir() {
+                std::fs::read_dir(quarantine_dir)
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .filter(|e| {
+                                let n = e.file_name().to_string_lossy().to_string();
+                                e.path().is_file() && !n.ends_with(".meta.json")
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let gate_access = Path::new(".aegis/gate-access.log");
+            let gate_access_lines = if gate_access.exists() {
+                std::fs::read_to_string(gate_access)
+                    .map(|t| t.lines().filter(|l| !l.trim().is_empty()).count())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let dns_block_lines = {
+                let p = Path::new(".aegis/dns-blocklist.txt");
+                if p.exists() {
+                    std::fs::read_to_string(p)
+                        .map(|t| {
+                            t.lines()
+                                .filter(|l| {
+                                    let s = l.split('#').next().unwrap_or("").trim();
+                                    !s.is_empty()
+                                })
+                                .count()
+                        })
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+            let dns_allow_lines = {
+                let p = Path::new(".aegis/dns-allowlist.txt");
+                if p.exists() {
+                    std::fs::read_to_string(p)
+                        .map(|t| {
+                            t.lines()
+                                .filter(|l| {
+                                    let s = l.split('#').next().unwrap_or("").trim();
+                                    !s.is_empty()
+                                })
+                                .count()
+                        })
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+            let inventory = serde_json::json!({
+                "ioc_entries": ioc_count,
+                "fleet_hosts": fleet_summary.total,
+                "fleet_stale": fleet_summary.stale,
+                "sessions_total": session_total,
+                "sessions_active": session_active,
+                "mesh_peers": mesh_peers,
+                "quarantine_files": quarantine_files,
+                "gate_access_lines": gate_access_lines,
+                "dns_blocklist_entries": dns_block_lines,
+                "dns_allowlist_entries": dns_allow_lines,
+            });
             let files = [
                 (".aegis/events.jsonl", event_log.exists()),
                 (".aegis/dns-blocklist.txt", Path::new(".aegis/dns-blocklist.txt").exists()),
+                (".aegis/dns-allowlist.txt", Path::new(".aegis/dns-allowlist.txt").exists()),
                 (".aegis/ioc-store.json", Path::new(".aegis/ioc-store.json").exists()),
                 (".aegis/gate-routes.json", Path::new(".aegis/gate-routes.json").exists()),
+                (".aegis/gate-access.log", gate_access.exists()),
                 (".aegis/wg0.conf", Path::new(".aegis/wg0.conf").exists()),
+                (".aegis/mesh-peers.json", Path::new(".aegis/mesh-peers.json").exists()),
                 (".aegis/defender-rules.json", Path::new(".aegis/defender-rules.json").exists()),
+                (".aegis/fleet.json", Path::new(".aegis/fleet.json").exists()),
+                (".aegis/sessions.json", Path::new(".aegis/sessions.json").exists()),
+                (".aegis/quarantine", quarantine_dir.is_dir()),
             ];
             let by_state = {
                 let mut m = std::collections::BTreeMap::new();
@@ -1036,6 +1139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "events": event_count,
                     "bytes": event_bytes,
                 },
+                "inventory": inventory,
                 "data_files": files.iter().map(|(p, ok)| serde_json::json!({"path": p, "present": ok})).collect::<Vec<_>>(),
                 "module_state_counts": by_state,
                 "kernel_version": KERNEL_VERSION,
@@ -1059,6 +1163,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if posture.passes(50) { "PASS@50" } else { "BELOW 50" }
                 ));
                 md.push_str(&format!("- **Events:** {event_count} ({event_bytes} bytes)\n\n"));
+                md.push_str("## Suite inventory\n\n");
+                md.push_str(&format!("- IOC entries: {ioc_count}\n"));
+                md.push_str(&format!(
+                    "- Fleet hosts: {} (stale@60m: {})\n",
+                    fleet_summary.total, fleet_summary.stale
+                ));
+                md.push_str(&format!(
+                    "- Sessions: {session_total} total / {session_active} active\n"
+                ));
+                md.push_str(&format!("- Mesh peers: {mesh_peers}\n"));
+                md.push_str(&format!("- Quarantine files: {quarantine_files}\n"));
+                md.push_str(&format!("- Gate access log lines: {gate_access_lines}\n"));
+                md.push_str(&format!(
+                    "- DNS blocklist / allowlist: {dns_block_lines} / {dns_allow_lines}\n\n"
+                ));
                 md.push_str("## Modules\n\n");
                 md.push_str("| ID | State | Detail |\n|----|-------|--------|\n");
                 for m in &status.modules {

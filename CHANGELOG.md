@@ -96,6 +96,9 @@
 - CyberLog `alerts` (high/critical+blocked) + `top` (products/severities/attrs)
 - CyberEDR `net-watch`: poll ESTABLISHED TCP for new connections (userspace)
 - ThreatGrid `prune` (age/source) + `export` (json/csv); `aegis cleanup` (sessions GC, fleet prune, event rotate check)
+- CyberLog `--since` time window (`15m`/`1h`/`24h`/`7d`/RFC3339) on events/alerts/stats/top/export/correlate
+- CyberMesh `probe` TCP reachability for peer endpoints (or `--endpoint`); not a WG handshake
+- Expanded `aegis report` suite inventory (IOC, fleet, sessions, mesh peers, quarantine, gate access, DNS lists)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

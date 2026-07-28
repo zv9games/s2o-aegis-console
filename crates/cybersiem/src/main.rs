@@ -48,6 +48,9 @@ enum Commands {
         limit: usize,
         #[arg(long)]
         product: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
         /// Send syslog lines over UDP (format=syslog). Example: 127.0.0.1:514
         #[arg(long)]
         syslog_udp: Option<String>,
@@ -63,6 +66,9 @@ enum Commands {
         severity: Option<String>,
         #[arg(long)]
         kind: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Counts by product / severity / kind
     Stats {
@@ -70,6 +76,9 @@ enum Commands {
         event_log: PathBuf,
         #[arg(long, default_value_t = 10_000)]
         limit: usize,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Recent high/critical (and optional blocked) events
     Alerts {
@@ -83,6 +92,9 @@ enum Commands {
         /// Also include EventAction::Blocked regardless of severity
         #[arg(long, default_value_t = true)]
         include_blocked: bool,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -97,6 +109,9 @@ enum Commands {
         /// Attr key to rank (default: domain, else path)
         #[arg(long, default_value = "domain")]
         attr: String,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Simple multi-product trail for a domain/hash/string
     Correlate {
@@ -105,6 +120,9 @@ enum Commands {
         event_log: PathBuf,
         #[arg(long, default_value_t = 5_000)]
         limit: usize,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Follow the event log (poll for new JSONL lines)
     Follow {
@@ -117,6 +135,56 @@ enum Commands {
         #[arg(long, default_value_t = 5)]
         from_recent: usize,
     },
+}
+
+/// Parse relative duration (`15m`, `1h`, `24h`, `7d`, `2w`) or RFC3339 into a UTC lower bound.
+fn parse_since(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty --since value".into());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc));
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 {
+        return Err(format!(
+            "invalid --since '{s}' (use 15m, 1h, 24h, 7d, 2w, or RFC3339)"
+        ));
+    }
+    let unit = *bytes.last().unwrap() as char;
+    let num_str = &s[..s.len() - 1];
+    let n: i64 = num_str.parse().map_err(|_| {
+        format!("invalid --since '{s}' (use 15m, 1h, 24h, 7d, 2w, or RFC3339)")
+    })?;
+    if n <= 0 {
+        return Err("--since duration must be positive".into());
+    }
+    let now = chrono::Utc::now();
+    let bound = match unit {
+        's' | 'S' => now - chrono::Duration::seconds(n),
+        'm' | 'M' => now - chrono::Duration::minutes(n),
+        'h' | 'H' => now - chrono::Duration::hours(n),
+        'd' | 'D' => now - chrono::Duration::days(n),
+        'w' | 'W' => now - chrono::Duration::weeks(n),
+        _ => {
+            return Err(format!(
+                "invalid --since unit in '{s}' (use s/m/h/d/w or RFC3339)"
+            ));
+        }
+    };
+    Ok(bound)
+}
+
+fn apply_since_filter(
+    events: &mut Vec<AegisEvent>,
+    since: &Option<String>,
+) -> Result<(), String> {
+    if let Some(ref s) = since {
+        let bound = parse_since(s)?;
+        events.retain(|e| e.ts >= bound);
+    }
+    Ok(())
 }
 
 fn product_matches(p: ProductId, filter: &str) -> bool {
@@ -207,6 +275,21 @@ mod tests {
         assert!(matches!(severity_from_pri(Some(14)), Severity::Info));
         assert!(matches!(severity_from_pri(Some(3)), Severity::High));
     }
+
+    #[test]
+    fn parse_since_relative_and_rfc3339() {
+        let h = parse_since("1h").expect("1h");
+        let now = chrono::Utc::now();
+        assert!(now.signed_duration_since(h).num_minutes() >= 59);
+        assert!(now.signed_duration_since(h).num_minutes() <= 61);
+        let d = parse_since("7d").expect("7d");
+        assert!(now.signed_duration_since(d).num_days() >= 6);
+        let rfc = "2020-01-01T00:00:00Z";
+        let abs = parse_since(rfc).expect("rfc");
+        assert_eq!(abs.to_rfc3339(), "2020-01-01T00:00:00+00:00");
+        assert!(parse_since("bogus").is_err());
+        assert!(parse_since("0h").is_err());
+    }
 }
 
 #[tokio::main]
@@ -231,7 +314,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "JSONL read/export, stats, alerts, top, correlate, UDP collect".green()
+                "JSONL read/export, stats, alerts, top, correlate, --since window, UDP collect"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -334,6 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_log,
             limit,
             product,
+            since,
             syslog_udp,
         } => {
             if !event_log.exists() {
@@ -341,9 +426,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
-            let mut events = store.recent(limit)?;
+            let read_n = if since.is_some() {
+                limit.saturating_mul(20).max(limit)
+            } else {
+                limit
+            };
+            let mut events = store.recent(read_n)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             if let Some(ref p) = product {
                 events.retain(|e| product_matches(e.product, p));
+            }
+            if events.len() > limit {
+                events = events.split_off(events.len() - limit);
             }
             if format.eq_ignore_ascii_case("json") && syslog_udp.is_none() {
                 println!("{}", serde_json::to_string_pretty(&events)?);
@@ -387,13 +484,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             product,
             severity,
             kind,
+            since,
         } => {
             if !event_log.exists() {
                 println!("[cyberlog] no events yet.");
                 return Ok(());
             }
             let store = EventStore::open(&event_log)?;
-            let mut events = store.recent(limit * 5)?; // over-read then filter
+            let over = if since.is_some() {
+                limit.saturating_mul(50).max(limit * 5)
+            } else {
+                limit * 5
+            };
+            let mut events = store.recent(over)?; // over-read then filter
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             if let Some(ref p) = product {
                 events.retain(|e| product_matches(e.product, p));
             }
@@ -445,6 +552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit,
             max,
             include_blocked,
+            since,
             json,
         } => {
             if !event_log.exists() {
@@ -452,7 +560,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
-            let events = store.recent(limit)?;
+            let mut events = store.recent(limit)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             let mut hits: Vec<_> = events
                 .into_iter()
                 .filter(|e| {
@@ -513,13 +625,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit,
             n,
             attr,
+            since,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
-            let events = store.recent(limit)?;
+            let mut events = store.recent(limit)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             let mut by_product: BTreeMap<String, usize> = BTreeMap::new();
             let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
             let mut by_attr: BTreeMap<String, usize> = BTreeMap::new();
@@ -563,13 +680,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             print_top("severities", by_sev);
             print_top(&format!("attr:{attr}"), by_attr);
         }
-        Commands::Stats { event_log, limit } => {
+        Commands::Stats {
+            event_log,
+            limit,
+            since,
+        } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
-            let events = store.recent(limit)?;
+            let mut events = store.recent(limit)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             let mut by_product: BTreeMap<String, usize> = BTreeMap::new();
             let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
             let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
@@ -600,6 +725,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+            if let Some(ref s) = since {
+                println!(" Since         : {s}");
+            }
             println!(" Window events : {}", events.len());
             println!("-- by product --");
             for (k, v) in &by_product {
@@ -622,6 +750,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             query,
             event_log,
             limit,
+            since,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
@@ -629,7 +758,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let q = query.to_ascii_lowercase();
             let store = EventStore::open(&event_log)?;
-            let events = store.recent(limit)?;
+            let mut events = store.recent(limit)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
             let mut hits = Vec::new();
             for e in events {
                 let msg = e.message.to_ascii_lowercase();

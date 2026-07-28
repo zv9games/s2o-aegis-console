@@ -35,6 +35,18 @@ enum Commands {
     },
     /// Print system `wg show` if available (does not create tunnels)
     Show,
+    /// TCP connect probe to peer endpoints (userspace reachability; not WG handshake)
+    Probe {
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        peers_file: PathBuf,
+        /// Single host:port (skips registry when set)
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long, default_value_t = 3)]
+        timeout_secs: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Attempt `wg-quick up` on a conf (requires admin + wg-quick)
     Up {
         #[arg(long, default_value = ".aegis/wg0.conf")]
@@ -170,6 +182,44 @@ fn wg_pubkey_from_private(private_b64: &str) -> Result<String, String> {
     let secret = StaticSecret::from(arr);
     let public = PublicKey::from(&secret);
     Ok(B64.encode(public.as_bytes()))
+}
+
+/// TCP connect probe result for one endpoint.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProbeResult {
+    name: String,
+    endpoint: String,
+    ok: bool,
+    latency_ms: Option<u64>,
+    detail: String,
+}
+
+async fn tcp_probe(endpoint: &str, timeout_secs: u64) -> ProbeResult {
+    let start = std::time::Instant::now();
+    let to = std::time::Duration::from_secs(timeout_secs.max(1));
+    match tokio::time::timeout(to, tokio::net::TcpStream::connect(endpoint)).await {
+        Ok(Ok(_stream)) => ProbeResult {
+            name: String::new(),
+            endpoint: endpoint.to_string(),
+            ok: true,
+            latency_ms: Some(start.elapsed().as_millis() as u64),
+            detail: "tcp connect ok".into(),
+        },
+        Ok(Err(e)) => ProbeResult {
+            name: String::new(),
+            endpoint: endpoint.to_string(),
+            ok: false,
+            latency_ms: Some(start.elapsed().as_millis() as u64),
+            detail: format!("connect error: {e}"),
+        },
+        Err(_) => ProbeResult {
+            name: String::new(),
+            endpoint: endpoint.to_string(),
+            ok: false,
+            latency_ms: Some(start.elapsed().as_millis() as u64),
+            detail: format!("timeout after {timeout_secs}s"),
+        },
+    }
 }
 
 fn find_wg() -> Option<&'static str> {
@@ -335,7 +385,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "X25519 keys, multi-peer registry, conf writer, doctor, wg show/wg-quick".green()
+                "X25519 keys, multi-peer registry, conf writer, doctor, probe, wg show/wg-quick"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -500,6 +551,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             if fail > 0 {
                 std::process::exit(2);
+            }
+        }
+        Commands::Probe {
+            peers_file,
+            endpoint,
+            timeout_secs,
+            json,
+        } => {
+            let mut targets: Vec<(String, String)> = Vec::new();
+            if let Some(ep) = endpoint {
+                targets.push(("cli".into(), ep));
+            } else {
+                let reg = PeerRegistry::load(&peers_file);
+                if reg.peers.is_empty() {
+                    eprintln!(
+                        "[mesh] no peers in {} — add with cybermesh peers add, or --endpoint host:port",
+                        peers_file.display()
+                    );
+                    std::process::exit(2);
+                }
+                for p in &reg.peers {
+                    match &p.endpoint {
+                        Some(ep) if !ep.trim().is_empty() => {
+                            targets.push((p.name.clone(), ep.clone()));
+                        }
+                        _ => {
+                            if !json {
+                                println!(
+                                    "  {} {} — {}",
+                                    "SKIP".yellow().bold(),
+                                    p.name,
+                                    "no endpoint"
+                                );
+                            }
+                        }
+                    }
+                }
+                if targets.is_empty() {
+                    eprintln!("[mesh] no peer endpoints to probe");
+                    std::process::exit(2);
+                }
+            }
+
+            let mut results = Vec::new();
+            for (name, ep) in &targets {
+                let mut r = tcp_probe(ep, timeout_secs).await;
+                r.name = name.clone();
+                results.push(r);
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberMesh probe (TCP)                          "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " {}",
+                    "Note: TCP connect only — does not validate WireGuard handshake.".yellow()
+                );
+                let mut ok_n = 0u32;
+                let mut fail_n = 0u32;
+                for r in &results {
+                    if r.ok {
+                        ok_n += 1;
+                        println!(
+                            "  {} {} @ {} — {} ({}ms)",
+                            "OK".green().bold(),
+                            r.name,
+                            r.endpoint,
+                            r.detail,
+                            r.latency_ms.unwrap_or(0)
+                        );
+                    } else {
+                        fail_n += 1;
+                        println!(
+                            "  {} {} @ {} — {} ({}ms)",
+                            "FAIL".red().bold(),
+                            r.name,
+                            r.endpoint,
+                            r.detail,
+                            r.latency_ms.unwrap_or(0)
+                        );
+                    }
+                }
+                println!(" Summary: {ok_n} ok, {fail_n} fail (timeout={timeout_secs}s)");
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if results.iter().any(|r| !r.ok) {
+                std::process::exit(3);
             }
         }
         Commands::Show => {

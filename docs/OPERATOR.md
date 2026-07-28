@@ -32,6 +32,9 @@ cargo run -p cyberintel -- prune --older-days 90 --source openphish   # dry-run
 cargo run -p cyberintel -- prune --older-days 90 --apply
 cargo run -p aegis-cli -- backup
 cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
+# mesh endpoint TCP probe (userspace; not WG handshake)
+cargo run -p cybermesh -- probe
+cargo run -p cybermesh -- probe --endpoint 1.1.1.1:443 --json
 ```
 
 ### Syslog export
@@ -39,6 +42,11 @@ cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
 ```powershell
 # print RFC5424-ish lines
 cargo run -p cybersiem -- export --format syslog --limit 20
+# time window (relative or RFC3339)
+cargo run -p cybersiem -- events --since 1h --limit 50
+cargo run -p cybersiem -- alerts --since 24h
+cargo run -p cybersiem -- stats --since 15m
+cargo run -p cybersiem -- top --since 7d --attr domain
 # send UDP (listener must accept)
 cargo run -p cybersiem -- export --format syslog --syslog-udp 127.0.0.1:5514 --limit 20
 # live collect (UDP syslog → JSONL)
@@ -115,7 +123,8 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
-| SIEM | `cybersiem stats\|alerts\|top\|correlate\|collect\|follow` |
+| SIEM | `cybersiem stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
+| Mesh | `cybermesh doctor\|probe\|peers\|config\|genkey` |
 | Intel | `cyberintel sync\|prune\|export\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
