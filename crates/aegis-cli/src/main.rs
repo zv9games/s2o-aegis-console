@@ -381,6 +381,20 @@ enum PlaybookCmd {
         #[arg(long, default_value = ".aegis/playbooks.json")]
         path: PathBuf,
     },
+    /// List rules (enabled, when, actions)
+    List {
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate playbook JSON + known action types
+    Validate {
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Evaluate playbooks against recent events
     Run {
         #[arg(long, default_value = ".aegis/playbooks.json")]
@@ -664,6 +678,20 @@ fn event_matches(ev: &s2o_schema::AegisEvent, when: &PlaybookWhen) -> bool {
         return false;
     }
     true
+}
+
+fn known_playbook_actions() -> &'static [&'static str] {
+    &[
+        "log",
+        "dns_block",
+        "dns_block_attr",
+        "dns_allow",
+        "dns_allow_attr",
+        "emit",
+        "webhook",
+        "ioc_add",
+        "ioc_add_attr",
+    ]
 }
 
 fn parse_ioc_kind(s: &str) -> Option<s2o_ioc::IocKind> {
@@ -1632,6 +1660,193 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .green()
                         .bold()
                 );
+            }
+            PlaybookCmd::List { path, json } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let pb: PlaybookFile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                if json {
+                    let rows: Vec<_> = pb
+                        .rules
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "name": r.name,
+                                "enabled": r.enabled,
+                                "when": r.when,
+                                "actions": r.then.iter().map(|a| &a.action_type).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "rules": rows,
+                            "enabled": pb.rules.iter().filter(|r| r.enabled).count(),
+                            "total": pb.rules.len(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[aegis] playbook {} ({} rules, {} enabled)",
+                        path.display(),
+                        pb.rules.len(),
+                        pb.rules.iter().filter(|r| r.enabled).count()
+                    );
+                    for r in &pb.rules {
+                        let flag = if r.enabled {
+                            "ON ".green().bold().to_string()
+                        } else {
+                            "OFF".yellow().to_string()
+                        };
+                        let when_bits: Vec<String> = [
+                            r.when.product.as_ref().map(|p| format!("product={p}")),
+                            r.when.action.as_ref().map(|a| format!("action={a}")),
+                            r.when.severity.as_ref().map(|s| format!("sev={s}")),
+                            r.when.kind.as_ref().map(|k| format!("kind={k}")),
+                            r.when.attr.as_ref().map(|a| format!("attr={a}")),
+                            r.when
+                                .message_contains
+                                .as_ref()
+                                .map(|m| format!("msg~{m}")),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                        let when_s = if when_bits.is_empty() {
+                            "*".into()
+                        } else {
+                            when_bits.join(" ")
+                        };
+                        let acts: Vec<_> =
+                            r.then.iter().map(|a| a.action_type.as_str()).collect();
+                        println!(
+                            "  [{flag}] {} | when: {when_s} | then: {}",
+                            r.name,
+                            acts.join(",")
+                        );
+                    }
+                }
+            }
+            PlaybookCmd::Validate { path, json } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let text = std::fs::read_to_string(&path)?;
+                let pb: PlaybookFile = match serde_json::from_str(&text) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[aegis] playbook JSON invalid: {e}");
+                        std::process::exit(2);
+                    }
+                };
+                let known: std::collections::BTreeSet<&str> =
+                    known_playbook_actions().iter().copied().collect();
+                let mut issues: Vec<String> = Vec::new();
+                let mut names = std::collections::BTreeSet::new();
+                if pb.rules.is_empty() {
+                    issues.push("no rules defined".into());
+                }
+                for (i, r) in pb.rules.iter().enumerate() {
+                    if r.name.trim().is_empty() {
+                        issues.push(format!("rule[{i}]: empty name"));
+                    } else if !names.insert(r.name.clone()) {
+                        issues.push(format!("duplicate rule name '{}'", r.name));
+                    }
+                    if r.then.is_empty() {
+                        issues.push(format!("rule '{}': no actions", r.name));
+                    }
+                    for (j, a) in r.then.iter().enumerate() {
+                        if !known.contains(a.action_type.as_str()) {
+                            issues.push(format!(
+                                "rule '{}' action[{j}]: unknown type '{}'",
+                                r.name, a.action_type
+                            ));
+                        }
+                        match a.action_type.as_str() {
+                            "webhook" if a.url.as_ref().map(|u| u.is_empty()).unwrap_or(true) => {
+                                issues.push(format!(
+                                    "rule '{}': webhook missing url",
+                                    r.name
+                                ));
+                            }
+                            "ioc_add"
+                                if a.value.as_ref().map(|v| v.is_empty()).unwrap_or(true)
+                                    && a.domain.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+                            {
+                                issues.push(format!(
+                                    "rule '{}': ioc_add needs value or domain",
+                                    r.name
+                                ));
+                            }
+                            "dns_block"
+                                if a.domain.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+                            {
+                                issues.push(format!(
+                                    "rule '{}': dns_block needs domain",
+                                    r.name
+                                ));
+                            }
+                            "dns_allow"
+                                if a.domain.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+                            {
+                                issues.push(format!(
+                                    "rule '{}': dns_allow needs domain",
+                                    r.name
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                    if r.when.attr.is_none()
+                        && (r.when.attr_equals.is_some() || r.when.attr_contains.is_some())
+                    {
+                        issues.push(format!(
+                            "rule '{}': attr_equals/attr_contains require when.attr",
+                            r.name
+                        ));
+                    }
+                }
+                let ok = issues.is_empty();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "ok": ok,
+                            "rules": pb.rules.len(),
+                            "enabled": pb.rules.iter().filter(|r| r.enabled).count(),
+                            "known_actions": known_playbook_actions(),
+                            "issues": issues,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[aegis] playbook validate {} ({} rules)",
+                        path.display(),
+                        pb.rules.len()
+                    );
+                    if ok {
+                        println!("{}", "  OK — no issues".green().bold());
+                    } else {
+                        for iss in &issues {
+                            println!("  {} {iss}", "ISSUE".red().bold());
+                        }
+                    }
+                }
+                if !ok {
+                    std::process::exit(3);
+                }
             }
             PlaybookCmd::Run {
                 path,

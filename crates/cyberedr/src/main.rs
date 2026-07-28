@@ -99,6 +99,11 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         emit_event: bool,
     },
+    /// Validate userspace telemetry + baseline health (no ETW claim)
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
     /// Placeholder for true ETW/eBPF (use `watch --rich` / `net-watch` for userspace poll)
     Trace,
 }
@@ -410,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, listen, net-watch, process inventory (+rich), baseline/drift, alerts, watch"
+                "TCP table, listen, net-watch, process inventory (+rich), baseline/drift, alerts, watch, doctor"
                     .green()
             );
             println!(
@@ -442,6 +447,165 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "cyberedr status (userspace only)",
                 &[("hooks", serde_json::json!("none"))],
             );
+        }
+        Commands::Doctor { json } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberEDR doctor                                "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " {}",
+                    "Userspace only — no kernel ETW/eBPF claim.".yellow()
+                );
+            }
+
+            check(
+                "event log",
+                cli.event_log.exists(),
+                true,
+                &format!("{}", cli.event_log.display()),
+            );
+
+            let baseline_n = if cli.baseline.exists() {
+                fs::read_to_string(&cli.baseline)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<ProcessBaseline>(&t).ok())
+                    .map(|b| b.images.len())
+            } else {
+                None
+            };
+            check(
+                "baseline",
+                baseline_n.is_some(),
+                true,
+                &match baseline_n {
+                    Some(n) => format!("{} ({n} images)", cli.baseline.display()),
+                    None => format!("{} missing (run: cyberedr baseline)", cli.baseline.display()),
+                },
+            );
+
+            let procs = list_processes(200, false);
+            check(
+                "process inventory",
+                !procs.is_empty(),
+                false,
+                &if procs.is_empty() {
+                    "empty (tasklist/ps failed?)".into()
+                } else {
+                    format!("{} processes sampled", procs.len())
+                },
+            );
+
+            let (tcp_ok, established, listen, tcp_detail) =
+                match tokio::task::spawn_blocking(|| {
+                    s2o_net_lib::telemetry::get_active_tcp_connections()
+                })
+                .await
+                {
+                    Ok(conns) => {
+                        let est = conns
+                            .iter()
+                            .filter(|c| c.state.eq_ignore_ascii_case("ESTABLISHED"))
+                            .count();
+                        let lis = conns
+                            .iter()
+                            .filter(|c| c.state.eq_ignore_ascii_case("LISTEN"))
+                            .count();
+                        (
+                            true,
+                            est,
+                            lis,
+                            format!("{} rows (est={est} listen={lis})", conns.len()),
+                        )
+                    }
+                    Err(e) => (false, 0, 0, format!("join error: {e}")),
+                };
+            // get_active may return empty vec on non-windows without error
+            let tcp_soft = cfg!(not(windows));
+            check(
+                "tcp table",
+                tcp_ok && (established + listen > 0 || tcp_soft),
+                tcp_soft,
+                &tcp_detail,
+            );
+
+            check(
+                "kernel hooks",
+                false,
+                true,
+                "none attached (use watch / net-watch for poll)",
+            );
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "processes_sampled": procs.len(),
+                        "tcp_established": established,
+                        "tcp_listen": listen,
+                        "baseline_images": baseline_n,
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
         }
         Commands::Processes { limit, emit_event } => {
             let conns = tokio::task::spawn_blocking(|| {

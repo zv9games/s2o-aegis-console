@@ -14,7 +14,33 @@ use colored::*;
 use s2o_ioc::IocStore;
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Count non-comment domain lines and raw duplicates before set-normalize.
+fn list_line_stats(path: &Path) -> (usize, usize, bool) {
+    if !path.exists() {
+        return (0, 0, false);
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return (0, 0, true);
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut lines = 0usize;
+    let mut dups = 0usize;
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        lines += 1;
+        let n = normalize_domain(line);
+        if !seen.insert(n) {
+            dups += 1;
+        }
+    }
+    (lines, dups, true)
+}
 
 fn domain_denied(
     blocklist: &Path,
@@ -94,6 +120,20 @@ enum Commands {
     List {
         #[arg(long)]
         allow: bool,
+    },
+    /// Validate lists, overlap, IOC, optional DoH probe
+    Doctor {
+        /// Resolve example.com via DoH chain
+        #[arg(long)]
+        probe_doh: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Diagnose allow/block/IOC decision for a domain (no DoH)
+    Check {
+        domain: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Local UDP DNS proxy (allowlist > blocklist + DoH A answers)
     Serve {
@@ -237,6 +277,308 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("{d}");
                     }
                 }
+            }
+        }
+        Commands::Doctor { probe_doh, json } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberDNS doctor                                "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+
+            let (bl_lines, bl_dups, bl_present) = list_line_stats(&cli.blocklist);
+            let block = load_blocklist(&cli.blocklist).unwrap_or_default();
+            check(
+                "blocklist file",
+                bl_present,
+                true,
+                &if bl_present {
+                    format!(
+                        "{} ({} unique, {} raw lines, {} dups)",
+                        cli.blocklist.display(),
+                        block.len(),
+                        bl_lines,
+                        bl_dups
+                    )
+                } else {
+                    format!("{} missing", cli.blocklist.display())
+                },
+            );
+            if bl_dups > 0 {
+                check(
+                    "blocklist dups",
+                    false,
+                    true,
+                    &format!("{bl_dups} duplicate lines (load dedupes)"),
+                );
+            }
+
+            let (al_lines, al_dups, al_present) = list_line_stats(&cli.allowlist);
+            let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
+            check(
+                "allowlist file",
+                al_present || allow.is_empty(),
+                true,
+                &if al_present {
+                    format!(
+                        "{} ({} unique, {} raw, {} dups)",
+                        cli.allowlist.display(),
+                        allow.len(),
+                        al_lines,
+                        al_dups
+                    )
+                } else {
+                    format!("{} missing (ok if unused)", cli.allowlist.display())
+                },
+            );
+
+            let overlap: Vec<_> = allow.intersection(&block).cloned().collect();
+            check(
+                "allow∩block",
+                overlap.is_empty(),
+                true,
+                &if overlap.is_empty() {
+                    "no overlap".into()
+                } else {
+                    format!(
+                        "{} domain(s) in both (allow wins): {}",
+                        overlap.len(),
+                        overlap.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                    )
+                },
+            );
+
+            let ioc_domains = if cli.ioc_store.exists() {
+                IocStore::load(&cli.ioc_store)
+                    .map(|s| s.count_by_kind(s2o_ioc::IocKind::Domain))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            check(
+                "ioc store",
+                cli.ioc_store.exists(),
+                true,
+                &if cli.ioc_store.exists() {
+                    format!(
+                        "{} ({} domain IOCs)",
+                        cli.ioc_store.display(),
+                        ioc_domains
+                    )
+                } else {
+                    format!("{} missing", cli.ioc_store.display())
+                },
+            );
+
+            check(
+                "event log",
+                cli.event_log.exists(),
+                true,
+                &format!("{}", cli.event_log.display()),
+            );
+
+            check(
+                "doh chain",
+                !doh_eps.is_empty(),
+                false,
+                &doh_eps.join(" → "),
+            );
+
+            let mut doh_detail = serde_json::Value::Null;
+            if probe_doh {
+                match doh::resolve_a_strings("example.com", &doh_eps).await {
+                    Ok((ips, used)) if !ips.is_empty() => {
+                        check(
+                            "doh probe",
+                            true,
+                            false,
+                            &format!("example.com → {} via {used}", ips.join(",")),
+                        );
+                        doh_detail = serde_json::json!({
+                            "ok": true,
+                            "resolver": used,
+                            "ips": ips,
+                        });
+                    }
+                    Ok((_, used)) => {
+                        check(
+                            "doh probe",
+                            false,
+                            true,
+                            &format!("no A for example.com via {used}"),
+                        );
+                        doh_detail = serde_json::json!({"ok": false, "resolver": used});
+                    }
+                    Err(e) => {
+                        check("doh probe", false, false, &format!("error: {e}"));
+                        doh_detail = serde_json::json!({"ok": false, "error": e.to_string()});
+                    }
+                }
+            } else if !json {
+                println!(
+                    "  {} doh probe — skipped (pass --probe-doh)",
+                    "SKIP".dimmed()
+                );
+            }
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "blocklist_unique": block.len(),
+                        "allowlist_unique": allow.len(),
+                        "overlap": overlap,
+                        "ioc_domains": ioc_domains,
+                        "doh_endpoints": doh_eps,
+                        "doh_probe": doh_detail,
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
+        }
+        Commands::Check { domain, json } => {
+            let d = normalize_domain(&domain);
+            if d.is_empty() {
+                eprintln!("[cyberdns] empty domain");
+                std::process::exit(2);
+            }
+            let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
+            let block = load_blocklist(&cli.blocklist).unwrap_or_default();
+            let allowed = is_allowed(&allow, &d);
+            let blocked = is_blocked(&block, &d);
+            let ioc_hit = IocStore::load(&cli.ioc_store)
+                .ok()
+                .and_then(|s| s.is_domain_blocked(&d).map(|e| e.value.clone()));
+            let denied = domain_denied(&cli.blocklist, &cli.allowlist, &cli.ioc_store, &d);
+            let decision = if allowed {
+                "ALLOW (allowlist)"
+            } else if let Some(r) = denied {
+                match r {
+                    "blocklist" => "DENY (blocklist)",
+                    "threatgrid_ioc" => "DENY (threatgrid_ioc)",
+                    other => other,
+                }
+            } else {
+                "ALLOW (would resolve)"
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "domain": d,
+                        "decision": decision,
+                        "allowlist_hit": allowed,
+                        "blocklist_hit": blocked,
+                        "ioc_hit": ioc_hit,
+                        "deny_reason": denied,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!("  CyberDNS check: {d}").bold().green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Decision   : {}",
+                    if denied.is_some() && !allowed {
+                        decision.red().bold().to_string()
+                    } else {
+                        decision.green().bold().to_string()
+                    }
+                );
+                println!(
+                    " Allowlist  : {}",
+                    if allowed {
+                        "HIT (overrides block/IOC)".green().to_string()
+                    } else {
+                        "miss".dimmed().to_string()
+                    }
+                );
+                println!(
+                    " Blocklist  : {}",
+                    if blocked {
+                        "HIT".red().to_string()
+                    } else {
+                        "miss".dimmed().to_string()
+                    }
+                );
+                println!(
+                    " ThreatGrid : {}",
+                    match &ioc_hit {
+                        Some(v) => format!("HIT ({v})").red().to_string(),
+                        None => "miss".dimmed().to_string(),
+                    }
+                );
+                println!(" Note       : check does not call DoH (use resolve)");
+            }
+            if denied.is_some() && !allowed {
+                std::process::exit(3);
             }
         }
         Commands::Block { domain } => {

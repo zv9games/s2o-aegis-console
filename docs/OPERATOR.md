@@ -22,8 +22,14 @@ cargo run -p aegis-cli -- emit "remote" --http http://127.0.0.1:9090/events --no
 cargo run -p aegis-cli -- emit "udp" --udp 127.0.0.1:9091 --no-local
 cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
+cargo run -p aegis-cli -- playbook list
+cargo run -p aegis-cli -- playbook validate
 cargo run -p aegis-cli -- playbook run              # dry-run (log/dns/emit/ioc_add_attr/…)
 cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist / IOC store etc.
+cargo run -p cyberdns -- doctor
+cargo run -p cyberdns -- doctor --probe-doh
+cargo run -p cyberdns -- check evil.example --json
+cargo run -p cyberedr -- doctor
 cargo run -p aegis-cli -- selftest
 cargo run -p aegis-cli -- cleanup              # dry-run sessions/fleet/events hygiene
 cargo run -p aegis-cli -- cleanup --apply
@@ -123,7 +129,8 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
 | DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|yara [pull]\|quarantine\|patterns\|watch` |
-| EDR | `cyberedr processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
+| EDR | `cyberedr doctor\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
+| DNS | `cyberdns doctor\|check\|resolve\|block\|allow\|serve\|system-dns` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |

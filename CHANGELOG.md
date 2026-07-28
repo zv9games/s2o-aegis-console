@@ -102,6 +102,9 @@
 - Playbook richer `when` (`kind`, `attr`/`attr_equals`/`attr_contains`) + `ioc_add` / `ioc_add_attr` actions (default rule seeds IOC from DNS blocks)
 - ThreatGrid `stats` (by kind/source/severity, `--json`)
 - Gate `access-stats --since` time window (relative or RFC3339)
+- CyberDNS `doctor` (lists/overlap/IOC/DoH) + `check` (deny-path diagnosis without resolve)
+- CyberEDR `doctor` (process/TCP/baseline userspace health)
+- `aegis playbook list` + `validate` (known actions, webhook/ioc_add shape)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
