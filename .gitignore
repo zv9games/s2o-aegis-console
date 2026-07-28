@@ -1,3 +1,5 @@
 /target
 /old_xall_builds
 .aegis/
+
+.aegis-setup-smoke/
