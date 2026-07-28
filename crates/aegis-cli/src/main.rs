@@ -5,10 +5,10 @@ mod config;
 use clap::{Parser, Subcommand};
 use colored::*;
 use config::SuiteConfig;
-use s2o_fleet::{FleetPolicyBundle, FleetStore, HeartbeatPayload};
+use s2o_fleet::{FleetPolicyBundle, FleetStore, HeartbeatPayload, HeartbeatResponse};
 use s2o_kernel::{
-    apply_policy, collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode,
-    host_id, load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
+    collect_platform_status, compute_posture_score, create_firewall_engine, demo_mode, host_id,
+    load_policy_file, KERNEL_VERSION, PHASE_LABEL, TIER_CEILING,
 };
 use s2o_schema::{AegisEvent, HealthState, PolicyDocument, SCHEMA_VERSION};
 use s2o_store::EventStore;
@@ -372,6 +372,29 @@ enum FleetCmd {
         #[command(subcommand)]
         command: FleetPolicyCmd,
     },
+    /// Day-2 agent loop: heartbeat to aegisd → pull+apply policy if stale
+    Sync {
+        /// aegisd base URL (no trailing path)
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        base_url: String,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Rebase pack paths / posture signals onto this data root
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// Apply even when already on desired policy version
+        #[arg(long)]
+        force: bool,
+        /// Heartbeat only; never pull/apply
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -400,6 +423,9 @@ enum FleetPolicyCmd {
         /// Record applied version onto this host in fleet.json
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        /// Rebase pack paths / posture onto this data root
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -4908,7 +4934,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 push,
                 json,
             } => {
-                let pv = local_policy_version(Path::new(".aegis/fleet-policy.json"));
+                let policy_path = fleet
+                    .parent()
+                    .map(|p| p.join("fleet-policy.json"))
+                    .unwrap_or_else(|| PathBuf::from(".aegis/fleet-policy.json"));
+                let pv = local_policy_version(&policy_path);
                 let hb = build_local_heartbeat(&fw, hid, None, vec![], Some(pv)).await?;
                 if let Some(url) = push {
                     let client = reqwest::Client::builder()
@@ -4917,6 +4947,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let res = client.post(&url).json(&hb).send().await?;
                     let status = res.status();
                     let text = res.text().await.unwrap_or_default();
+                    let resp: Option<HeartbeatResponse> =
+                        serde_json::from_str(&text).ok();
+                    // also keep local roster in sync
+                    let mut store = FleetStore::load(&fleet);
+                    let h = store.upsert_heartbeat(hb.clone());
+                    store.save(&fleet)?;
                     if json {
                         println!(
                             "{}",
@@ -4925,12 +4961,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "action": "heartbeat_push",
                                 "url": url,
                                 "status": status.as_u16(),
-                                "body": text,
+                                "local_policy_version": pv,
+                                "desired_policy_version": resp.as_ref().map(|r| r.desired_policy_version),
+                                "policy_stale": resp.as_ref().map(|r| r.policy_stale),
+                                "host": h,
                                 "payload": hb,
+                                "body": if resp.is_some() {
+                                    serde_json::to_value(&resp).unwrap_or(serde_json::json!(text))
+                                } else {
+                                    serde_json::json!(text)
+                                },
                             }))?
                         );
                     } else {
-                        println!("[aegis] fleet push {url} -> {status} {text}");
+                        println!("[aegis] fleet push {url} -> {status}");
+                        if let Some(r) = &resp {
+                            println!(
+                                "  host={} posture={} local_v={} desired_v={} stale={}",
+                                r.host.host_id,
+                                r.host.posture_score,
+                                r.host.policy_version,
+                                r.desired_policy_version,
+                                r.policy_stale
+                            );
+                            if r.policy_stale {
+                                println!(
+                                    "  tip: aegis fleet sync --base-url {}  (or fleet policy pull --apply)",
+                                    url.trim_end_matches("/fleet/heartbeat")
+                                        .trim_end_matches('/')
+                                );
+                            }
+                        } else {
+                            println!("  {text}");
+                        }
                     }
                     if !status.is_success() {
                         std::process::exit(1);
@@ -4956,6 +5019,299 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+            }
+            FleetCmd::Sync {
+                base_url,
+                fleet,
+                policy,
+                event_log,
+                data_dir,
+                force,
+                dry_run,
+                json,
+            } => {
+                let base = base_url.trim_end_matches('/').to_string();
+                let hb_url = format!("{base}/fleet/heartbeat");
+                let pol_url = format!("{base}/fleet/policy");
+                let dd = data_dir
+                    .clone()
+                    .unwrap_or_else(s2o_kernel::default_data_dir);
+                let local_v = local_policy_version(&policy);
+                let hb = build_local_heartbeat(&fw, None, None, vec![], Some(local_v)).await?;
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(20))
+                    .build()?;
+
+                // 1) heartbeat (always update local roster)
+                let mut store = FleetStore::load(&fleet);
+                let _ = store.upsert_heartbeat(hb.clone());
+                store.save(&fleet)?;
+
+                let mut push_ok = false;
+                let mut desired_v: u64 = 0;
+                let mut policy_stale = false;
+                let mut push_error: Option<String> = None;
+                let mut hb_host: Option<s2o_fleet::FleetHost> = None;
+
+                match client.post(&hb_url).json(&hb).send().await {
+                    Ok(res) => {
+                        let status = res.status();
+                        let text = res.text().await.unwrap_or_default();
+                        if status.is_success() {
+                            push_ok = true;
+                            if let Ok(r) = serde_json::from_str::<HeartbeatResponse>(&text) {
+                                desired_v = r.desired_policy_version;
+                                policy_stale = r.policy_stale;
+                                hb_host = Some(r.host.clone());
+                                // merge server view into local roster
+                                let mut st = FleetStore::load(&fleet);
+                                st.upsert_heartbeat(HeartbeatPayload {
+                                    host_id: r.host.host_id.clone(),
+                                    display_name: Some(r.host.display_name.clone()),
+                                    os: Some(r.host.os.clone()),
+                                    phase: Some(r.host.phase.clone()),
+                                    kernel: Some(r.host.kernel.clone()),
+                                    posture_score: Some(r.host.posture_score),
+                                    modules_implemented: Some(r.host.modules_implemented),
+                                    modules_partial: Some(r.host.modules_partial),
+                                    modules_other: Some(r.host.modules_other),
+                                    tags: Some(r.host.tags.clone()),
+                                    last_ip: r.host.last_ip.clone(),
+                                    policy_version: Some(r.host.policy_version),
+                                });
+                                let _ = st.save(&fleet);
+                            } else {
+                                push_error = Some(format!("heartbeat OK but body not HeartbeatResponse: {text}"));
+                            }
+                        } else {
+                            push_error = Some(format!("HTTP {status}: {text}"));
+                        }
+                    }
+                    Err(e) => {
+                        push_error = Some(e.to_string());
+                    }
+                }
+
+                // Fallback stale detect from local desired policy if push failed
+                if !push_ok {
+                    if let Some(b) = FleetPolicyBundle::load(&policy) {
+                        desired_v = b.version;
+                        policy_stale = b.version > local_v;
+                    }
+                }
+
+                let should_apply = !dry_run && (force || policy_stale);
+                let mut pulled = false;
+                let mut applied = false;
+                let mut apply_result: Option<s2o_schema::PolicyApplyResult> = None;
+                let mut apply_error: Option<String> = None;
+                let mut new_version = local_v;
+
+                if should_apply {
+                    // 2) pull policy from control plane when reachable
+                    match client.get(&pol_url).send().await {
+                        Ok(res) if res.status().is_success() => {
+                            match res.json::<FleetPolicyBundle>().await {
+                                Ok(bundle) => {
+                                    bundle.save(&policy)?;
+                                    pulled = true;
+                                    new_version = bundle.version;
+                                    let mut doc: PolicyDocument =
+                                        serde_json::from_value(bundle.document.clone())?;
+                                    let _ = s2o_kernel::rebase_policy_paths(&mut doc, &dd);
+                                    let store = Arc::new(EventStore::open(&event_log)?);
+                                    match s2o_kernel::apply_policy_at(
+                                        &doc,
+                                        &fw,
+                                        Some(store),
+                                        Some(dd.as_path()),
+                                    )
+                                    .await
+                                    {
+                                        Ok(result) => {
+                                            applied = result.ok;
+                                            apply_result = Some(result);
+                                            // stamp local roster with applied version
+                                            let mut roster = FleetStore::load(&fleet);
+                                            let stamp = build_local_heartbeat(
+                                                &fw,
+                                                None,
+                                                None,
+                                                vec![],
+                                                Some(new_version),
+                                            )
+                                            .await?;
+                                            roster.upsert_heartbeat(stamp.clone());
+                                            roster.save(&fleet)?;
+                                            // re-heartbeat with new version if control plane up
+                                            if push_ok {
+                                                let _ = client.post(&hb_url).json(&stamp).send().await;
+                                            }
+                                        }
+                                        Err(e) => apply_error = Some(e.to_string()),
+                                    }
+                                }
+                                Err(e) => apply_error = Some(format!("decode policy: {e}")),
+                            }
+                        }
+                        Ok(res) => {
+                            // offline / no remote policy — try local fleet-policy.json
+                            if let Some(bundle) = FleetPolicyBundle::load(&policy) {
+                                new_version = bundle.version;
+                                let mut doc: PolicyDocument =
+                                    serde_json::from_value(bundle.document.clone())?;
+                                let _ = s2o_kernel::rebase_policy_paths(&mut doc, &dd);
+                                let store = Arc::new(EventStore::open(&event_log)?);
+                                match s2o_kernel::apply_policy_at(
+                                    &doc,
+                                    &fw,
+                                    Some(store),
+                                    Some(dd.as_path()),
+                                )
+                                .await
+                                {
+                                    Ok(result) => {
+                                        applied = result.ok;
+                                        apply_result = Some(result);
+                                        let mut roster = FleetStore::load(&fleet);
+                                        let stamp = build_local_heartbeat(
+                                            &fw,
+                                            None,
+                                            None,
+                                            vec![],
+                                            Some(new_version),
+                                        )
+                                        .await?;
+                                        roster.upsert_heartbeat(stamp);
+                                        roster.save(&fleet)?;
+                                    }
+                                    Err(e) => apply_error = Some(e.to_string()),
+                                }
+                            } else {
+                                apply_error = Some(format!(
+                                    "policy pull HTTP {} and no local {}",
+                                    res.status(),
+                                    policy.display()
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            // network down — local apply if force/stale and file present
+                            if let Some(bundle) = FleetPolicyBundle::load(&policy) {
+                                new_version = bundle.version;
+                                let mut doc: PolicyDocument =
+                                    serde_json::from_value(bundle.document.clone())?;
+                                let _ = s2o_kernel::rebase_policy_paths(&mut doc, &dd);
+                                let store = Arc::new(EventStore::open(&event_log)?);
+                                match s2o_kernel::apply_policy_at(
+                                    &doc,
+                                    &fw,
+                                    Some(store),
+                                    Some(dd.as_path()),
+                                )
+                                .await
+                                {
+                                    Ok(result) => {
+                                        applied = result.ok;
+                                        apply_result = Some(result);
+                                        let mut roster = FleetStore::load(&fleet);
+                                        let stamp = build_local_heartbeat(
+                                            &fw,
+                                            None,
+                                            None,
+                                            vec![],
+                                            Some(new_version),
+                                        )
+                                        .await?;
+                                        roster.upsert_heartbeat(stamp);
+                                        roster.save(&fleet)?;
+                                    }
+                                    Err(e2) => {
+                                        apply_error = Some(format!("pull {e}; local apply {e2}"))
+                                    }
+                                }
+                            } else {
+                                apply_error = Some(format!("pull failed: {e}"));
+                            }
+                        }
+                    }
+                }
+
+                let ok = push_ok || apply_result.as_ref().map(|r| r.ok).unwrap_or(false) || dry_run;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": apply_error.is_none() && (push_ok || dry_run || applied || !should_apply),
+                            "action": "fleet-sync",
+                            "base_url": base,
+                            "heartbeat_url": hb_url,
+                            "policy_url": pol_url,
+                            "push_ok": push_ok,
+                            "push_error": push_error,
+                            "local_policy_version": local_v,
+                            "desired_policy_version": desired_v,
+                            "policy_stale": policy_stale,
+                            "force": force,
+                            "dry_run": dry_run,
+                            "should_apply": should_apply,
+                            "pulled": pulled,
+                            "applied": applied,
+                            "new_policy_version": new_version,
+                            "data_dir": dd.display().to_string(),
+                            "host": hb_host,
+                            "apply_result": apply_result,
+                            "apply_error": apply_error,
+                        }))?
+                    );
+                } else {
+                    println!("{}", "Aegis fleet sync".bold().green());
+                    println!("  control : {base}");
+                    println!(
+                        "  heartbeat: {}",
+                        if push_ok {
+                            "ok".green().to_string()
+                        } else {
+                            format!("fail ({})", push_error.as_deref().unwrap_or("?"))
+                                .yellow()
+                                .to_string()
+                        }
+                    );
+                    println!("  local_v : {local_v}  desired_v: {desired_v}  stale={}", policy_stale);
+                    if dry_run {
+                        println!("  mode    : dry-run (no apply)");
+                    } else if should_apply {
+                        println!(
+                            "  pull    : {}  apply: {}",
+                            if pulled { "yes" } else { "local/fallback" },
+                            if applied {
+                                "ok".green().to_string()
+                            } else {
+                                "fail".red().to_string()
+                            }
+                        );
+                        if let Some(ref e) = apply_error {
+                            println!("  error   : {e}");
+                        }
+                        if let Some(ref r) = apply_result {
+                            for a in &r.applied {
+                                println!("    applied : {}", a.green());
+                            }
+                            for e in &r.errors {
+                                println!("    error   : {}", e.red());
+                            }
+                        }
+                    } else {
+                        println!("  policy  : up to date (use --force to re-apply)");
+                    }
+                }
+                if apply_error.is_some() || (should_apply && !applied) {
+                    std::process::exit(1);
+                }
+                if !push_ok && !dry_run && !applied && should_apply {
+                    // already exited above
+                }
+                let _ = ok;
             }
             FleetCmd::List {
                 fleet,
@@ -5515,6 +5871,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     policy,
                     event_log,
                     fleet,
+                    data_dir,
                     json,
                 } => {
                     let Some(bundle) = FleetPolicyBundle::load(&policy) else {
@@ -5531,9 +5888,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         std::process::exit(2);
                     };
-                    let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
+                    let mut doc: PolicyDocument =
+                        serde_json::from_value(bundle.document.clone())?;
+                    let dd = data_dir.unwrap_or_else(s2o_kernel::default_data_dir);
+                    let rebased = s2o_kernel::rebase_policy_paths_report(&mut doc, &dd);
                     let store = Arc::new(EventStore::open(&event_log)?);
-                    let result = apply_policy(&doc, &fw, Some(store)).await?;
+                    let result = s2o_kernel::apply_policy_at(
+                        &doc,
+                        &fw,
+                        Some(store),
+                        Some(dd.as_path()),
+                    )
+                    .await?;
                     // stamp host policy_version
                     let mut roster = FleetStore::load(&fleet);
                     let hb = build_local_heartbeat(
@@ -5554,6 +5920,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "version": bundle.version,
                                 "result": result,
                                 "policy": policy.display().to_string(),
+                                "data_dir": dd.display().to_string(),
+                                "rebased_paths": rebased.iter().map(|(a,b)| serde_json::json!({"from":a,"to":b})).collect::<Vec<_>>(),
                             }))?
                         );
                     } else if result.ok {
@@ -5646,9 +6014,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     bundle.save(&policy)?;
                     let mut apply_result: Option<s2o_schema::PolicyApplyResult> = None;
                     if apply {
-                        let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
+                        let mut doc: PolicyDocument =
+                            serde_json::from_value(bundle.document.clone())?;
+                        let dd = s2o_kernel::default_data_dir();
+                        let _ = s2o_kernel::rebase_policy_paths(&mut doc, &dd);
                         let store = Arc::new(EventStore::open(&event_log)?);
-                        let result = apply_policy(&doc, &fw, Some(store)).await?;
+                        let result = s2o_kernel::apply_policy_at(
+                            &doc,
+                            &fw,
+                            Some(store),
+                            Some(dd.as_path()),
+                        )
+                        .await?;
                         let mut roster = FleetStore::load(&fleet);
                         let hb = build_local_heartbeat(
                             &fw,

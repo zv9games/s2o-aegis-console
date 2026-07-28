@@ -53,6 +53,8 @@ if ($Json) {
     Run-Ok 'gate init --json' { cargo run -p cyberztna -q -- init --json }
     Run-Ok 'aegis events --json' { cargo run -p aegis-cli -q -- events --limit 3 --json }
     Run-Ok 'aegisd reload --json' { cargo run -p aegisd -q -- reload --json; if ($LASTEXITCODE -eq 2) { $global:LASTEXITCODE = 0 } }
+    Run-Ok 'fleet sync dry-run --json' { cargo run -p aegis-cli -q -- fleet sync --dry-run --json; if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 } }
+    Run-Ok 'fleet policy apply --json' { cargo run -p aegis-cli -q -- fleet policy apply --json }
 } else {
     Run-Ok 'aegis doctor' { cargo run -p aegis-cli -q -- doctor }
     Run-Ok 'aegis status' { cargo run -p aegis-cli -q -- status }

@@ -1,6 +1,6 @@
 //! Policy document load + route (v0: multi-fragment).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use s2o_schema::{
@@ -105,6 +105,7 @@ fn strip_aegis_prefix(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use s2o_schema::{
         DnsPolicyIntent, GatePolicyIntent, MeshPeerIntent, MeshPolicyIntent, POLICY_SCHEMA_VERSION,
     };

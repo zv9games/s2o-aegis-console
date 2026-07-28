@@ -220,6 +220,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Setup suite-lab default + fleet enroll + report pack inventory + sc install fix  
 - ✅ Policy path rebase (`--data-dir`) so setup/custom roots apply packs correctly  
 - ✅ Posture data-dir awareness + setup fleet-policy seed for lab distribution  
+- ✅ Fleet day-2 `sync` loop + release-package.ps1 staging  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

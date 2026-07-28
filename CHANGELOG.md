@@ -193,6 +193,10 @@
 - CI: `s2o-kernel` tests + validate suite-lab/mesh-seed packs on Ubuntu
 - Posture suite signals honor `AEGIS_DATA_DIR` / `compute_posture_score_at` / `apply_policy_at`
 - Setup seeds `fleet-policy.json` (rebased pack) for local fleet distribution
+- `aegis fleet sync`: day-2 agent loop (heartbeat → pull/apply if stale; `--dry-run`/`--force`/`--json`)
+- Fleet heartbeat push parses desired policy version + stale tip; local roster stays in sync
+- Fleet policy apply/pull use path rebase + `apply_policy_at`
+- `scripts/release-package.ps1` stages release bin + packs + MANIFEST.json SHA-256
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

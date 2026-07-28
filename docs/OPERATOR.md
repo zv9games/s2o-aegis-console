@@ -177,7 +177,16 @@ cargo run -p cyberwall -- enable --json
 cargo run -p cyberdns -- system-dns backup --json
 cargo run -p aegis-cli -- fleet policy set policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- fleet policy show --json
+cargo run -p aegis-cli -- fleet policy apply --json
+cargo run -p aegis-cli -- fleet sync --dry-run --json
+cargo run -p aegis-cli -- fleet sync --json
+# With aegisd up: agent re-applies when desired policy is newer
+#   cargo run -p aegisd -- start --health-bind 127.0.0.1:9090
+#   cargo run -p aegis-cli -- fleet heartbeat --push http://127.0.0.1:9090/fleet/heartbeat --json
+#   cargo run -p aegis-cli -- fleet sync --base-url http://127.0.0.1:9090 --json
 cargo run -p aegis-cli -- service status --json
+# Release stage (Windows):
+#   pwsh -File scripts/release-package.ps1
 cargo run -p aegis-cli -- service stop --json
 cargo run -p aegis-cli -- policy example --kind edge --json
 cargo run -p aegis-cli -- playbook init --json
@@ -430,6 +439,7 @@ cargo run -p aegis-cli -- fleet policy push policies/examples/gate-pack.json --u
 
 # Agent: pull + apply
 cargo run -p aegis-cli -- fleet policy pull --url http://127.0.0.1:9090/fleet/policy --apply
+cargo run -p aegis-cli -- fleet sync --base-url http://127.0.0.1:9090 --json
 cargo run -p aegis-cli -- fleet heartbeat --push http://127.0.0.1:9090/fleet/heartbeat
 # response includes desired_policy_version + policy_stale
 ```
