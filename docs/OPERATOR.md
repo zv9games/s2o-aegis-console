@@ -19,7 +19,11 @@ cargo run -p aegis-cli -- policy plan policies/examples/edge-pack.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
 cargo run -p aegis-cli -- policy plan policies/examples/suite-lab-pack.json --json
 cargo run -p aegis-cli -- policy apply policies/examples/suite-lab-pack.json --json
+cargo run -p aegis-cli -- policy apply policies/examples/suite-lab-pack.json --data-dir .aegis --json
 cargo run -p aegis-cli -- policy apply policies/examples/mesh-seed-pack.json --json
+# Custom data root (setup already rebases):
+#   cargo run -p aegis-cli -- setup --data-dir D:\aegis-data --policy suite --json
+#   cargo run -p aegis-cli -- policy apply policies/examples/suite-lab-pack.json --data-dir D:\aegis-data --event-log D:\aegis-data\events.jsonl --json
 # Full JSON automation smoke (after cargo build):
 #   pwsh -File scripts/dev-smoke.ps1 -Json
 cargo run -p cyberdefender -- rules list

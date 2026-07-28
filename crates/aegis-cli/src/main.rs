@@ -530,6 +530,9 @@ enum PolicyCmd {
         path: PathBuf,
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        /// Rewrite `.aegis/...` paths in the pack onto this data root (default: no rewrite)
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -2634,12 +2637,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            PolicyCmd::Apply { path, event_log, json } => {
-                let doc = load_policy_file(&path)?;
+            PolicyCmd::Apply {
+                path,
+                event_log,
+                data_dir,
+                json,
+            } => {
+                let mut doc = load_policy_file(&path)?;
+                let mut rebased: Vec<(String, String)> = Vec::new();
+                if let Some(ref dd) = data_dir {
+                    rebased = s2o_kernel::rebase_policy_paths_report(&mut doc, dd);
+                    if !json && !rebased.is_empty() {
+                        println!(
+                            "[aegis] rebased {} path(s) under {}",
+                            rebased.len(),
+                            dd.display()
+                        );
+                    }
+                }
                 let store = Arc::new(EventStore::open(&event_log)?);
                 let result = apply_policy(&doc, &fw, Some(store)).await?;
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": result.ok,
+                            "policy_name": result.policy_name,
+                            "applied": result.applied,
+                            "skipped": result.skipped,
+                            "errors": result.errors,
+                            "data_dir": data_dir.as_ref().map(|p| p.display().to_string()),
+                            "rebased_paths": rebased.iter().map(|(a,b)| serde_json::json!({
+                                "from": a,
+                                "to": b,
+                            })).collect::<Vec<_>>(),
+                        }))?
+                    );
                 } else {
                     if result.ok {
                         println!(
@@ -4107,13 +4140,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut policy_ok: Option<bool> = None;
             let mut policy_path_s: Option<String> = None;
             let mut policy_applied_lines: Vec<String> = Vec::new();
+            let mut policy_rebased: Vec<(String, String)> = Vec::new();
             if do_policy {
                 if let Some(path) = resolved_policy {
                     policy_path_s = Some(path.display().to_string());
                     if !json {
                         println!("[aegis] applying policy {} ...", path.display());
                     }
-                    let doc = load_policy_file(&path)?;
+                    let mut doc = load_policy_file(&path)?;
+                    // Map example pack `.aegis/...` paths onto this setup data_dir
+                    policy_rebased =
+                        s2o_kernel::rebase_policy_paths_report(&mut doc, &data_dir);
+                    if !json && !policy_rebased.is_empty() {
+                        println!(
+                            "[aegis] rebased {} path(s) → {}",
+                            policy_rebased.len(),
+                            data_dir.display()
+                        );
+                    }
                     let store = Arc::new(EventStore::open(&event_log)?);
                     let result = s2o_kernel::apply_policy(&doc, &fw, Some(store)).await?;
                     policy_ok = Some(result.ok);
@@ -4171,6 +4215,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "policy_path": policy_path_s,
                         "policy_ok": policy_ok,
                         "policy_applied_lines": policy_applied_lines,
+                        "policy_rebased_paths": policy_rebased.iter().map(|(a,b)| serde_json::json!({
+                            "from": a,
+                            "to": b,
+                        })).collect::<Vec<_>>(),
                         "fleet_enrolled": fleet_enrolled,
                     }))?
                 );

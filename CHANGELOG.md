@@ -189,6 +189,8 @@
 - `aegis setup --policy suite|edge|mesh|path` (default suite-lab), `--enroll-fleet`, richer seed files
 - `aegis report` inventory: playbook rules, fleet policy, example packs present
 - Windows `sc create` via `cmd /C` (service install + install-aegis-service.ps1)
+- Policy path rebase: `policy apply --data-dir` / setup rewrites `.aegis/...` pack paths onto data root
+- CI: `s2o-kernel` tests + validate suite-lab/mesh-seed packs on Ubuntu
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

@@ -36,8 +36,13 @@ jobs:
             -p cybermesh \
             -p aegisd \
             -p aegis-cli
-      - name: Test schema/store/ioc
-        run: cargo test -p s2o-schema -p s2o-store -p s2o-ioc
+      - name: Test schema/store/ioc/kernel
+        run: cargo test -p s2o-schema -p s2o-store -p s2o-ioc -p s2o-kernel
+      - name: Validate example policy packs
+        run: |
+          cargo run -q -p aegis-cli -- policy validate policies/examples/suite-lab-pack.json --json
+          cargo run -q -p aegis-cli -- policy validate policies/examples/mesh-seed-pack.json --json
+          cargo run -q -p aegis-cli -- policy plan policies/examples/suite-lab-pack.json --json | head -c 2000
 
   # Full Windows suite when net-lib is available as a sibling checkout
   windows-suite:

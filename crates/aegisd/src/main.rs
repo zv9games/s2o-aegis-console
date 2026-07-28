@@ -108,6 +108,9 @@ enum PolicyCmd {
         path: PathBuf,
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        /// Rewrite `.aegis/...` pack paths onto this data root
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -1493,12 +1496,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PolicyCmd::Apply {
                 path,
                 event_log,
+                data_dir,
                 json,
             } => {
                 if !json {
                     println!("[aegisd] loading policy {}", path.display());
                 }
-                let doc = match load_policy_file(&path) {
+                let mut doc = match load_policy_file(&path) {
                     Ok(d) => d,
                     Err(e) => {
                         if json {
@@ -1517,6 +1521,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         std::process::exit(2);
                     }
                 };
+                let mut rebased = Vec::new();
+                if let Some(ref dd) = data_dir {
+                    rebased = s2o_kernel::rebase_policy_paths_report(&mut doc, dd);
+                }
                 let store = Arc::new(EventStore::open(&event_log)?);
                 let result = apply_policy(&doc, &fw, Some(store)).await?;
                 if json {
@@ -1527,6 +1535,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             "action": "policy-apply",
                             "path": path.display().to_string(),
                             "event_log": event_log.display().to_string(),
+                            "data_dir": data_dir.as_ref().map(|p| p.display().to_string()),
+                            "rebased_paths": rebased.iter().map(|(a,b)| serde_json::json!({"from": a, "to": b})).collect::<Vec<_>>(),
                             "result": result,
                         }))?
                     );
