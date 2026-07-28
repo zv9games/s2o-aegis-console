@@ -61,6 +61,8 @@ enum Commands {
         /// Dry-run: report only
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Import domains from DNS blocklist + optional URL feed(s)
     Sync {
@@ -429,9 +431,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             source,
             max,
             dry_run,
+            json,
         } => {
             if !path.exists() {
-                eprintln!("[threatgrid] missing {}", path.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("missing {}", path.display()),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[threatgrid] missing {}", path.display());
+                }
                 std::process::exit(2);
             }
             let text = std::fs::read_to_string(&path)?;
@@ -535,23 +548,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            if dry_run {
-                println!(
-                    "[threatgrid] import-file dry-run: scanned={scanned} new={added} store_was={before} total_after={}",
-                    before + added
-                );
-            } else {
+            if !dry_run {
                 store.save(&cli.store)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[threatgrid] import-file added={added} scanned={scanned} total={} from {}",
-                        store.entries.len(),
-                        path.display()
-                    )
-                    .green()
-                    .bold()
-                );
                 emit(
                     &cli.event_log,
                     EventAction::Observed,
@@ -563,6 +561,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ("scanned", serde_json::json!(scanned)),
                     ],
                     None,
+                );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "dry_run": dry_run,
+                        "path": path.display().to_string(),
+                        "scanned": scanned,
+                        "added": added,
+                        "before": before,
+                        "total_after": if dry_run { before + added } else { store.entries.len() },
+                        "store": cli.store.display().to_string(),
+                    }))?
+                );
+            } else if dry_run {
+                println!(
+                    "[threatgrid] import-file dry-run: scanned={scanned} new={added} store_was={before} total_after={}",
+                    before + added
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[threatgrid] import-file added={added} scanned={scanned} total={} from {}",
+                        store.entries.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
                 );
             }
         }

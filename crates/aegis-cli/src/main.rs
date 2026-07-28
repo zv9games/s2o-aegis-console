@@ -471,6 +471,8 @@ enum ConfigCmd {
         key: String,
         #[arg(long, default_value = ".aegis/config.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Set one config key and save
     Set {
@@ -479,6 +481,8 @@ enum ConfigCmd {
         value: String,
         #[arg(long, default_value = ".aegis/config.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -544,12 +548,16 @@ enum PlaybookCmd {
         name: String,
         #[arg(long, default_value = ".aegis/playbooks.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Disable a rule by name
     Disable {
         name: String,
         #[arg(long, default_value = ".aegis/playbooks.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a rule by name
     Remove {
@@ -559,6 +567,8 @@ enum PlaybookCmd {
         /// Actually delete (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Evaluate playbooks against recent events
     Run {
@@ -2988,12 +2998,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(3);
                 }
             }
-            PlaybookCmd::Enable { name, path } => {
+            PlaybookCmd::Enable { name, path, json } => {
                 if !path.exists() {
-                    eprintln!(
-                        "[aegis] missing {} — run: aegis playbook init",
-                        path.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("missing {} — run: aegis playbook init", path.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[aegis] missing {} — run: aegis playbook init",
+                            path.display()
+                        );
+                    }
                     std::process::exit(1);
                 }
                 let mut pb: PlaybookFile =
@@ -3003,14 +3023,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter_mut()
                     .find(|r| r.name.eq_ignore_ascii_case(&name))
                 else {
-                    eprintln!("[aegis] playbook rule not found: {name}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "rule not found",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[aegis] playbook rule not found: {name}");
+                    }
                     std::process::exit(1);
                 };
-                if rule.enabled {
-                    println!("[aegis] rule '{name}' already enabled");
-                } else {
+                let already = rule.enabled;
+                if !already {
                     rule.enabled = true;
                     std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "enable",
+                            "name": name,
+                            "changed": !already,
+                            "enabled": true,
+                            "path": path.display().to_string(),
+                        }))?
+                    );
+                } else if already {
+                    println!("[aegis] rule '{name}' already enabled");
+                } else {
                     println!(
                         "{}",
                         format!("[aegis] enabled rule '{name}' → {}", path.display())
@@ -3019,12 +3065,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            PlaybookCmd::Disable { name, path } => {
+            PlaybookCmd::Disable { name, path, json } => {
                 if !path.exists() {
-                    eprintln!(
-                        "[aegis] missing {} — run: aegis playbook init",
-                        path.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("missing {}", path.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[aegis] missing {} — run: aegis playbook init",
+                            path.display()
+                        );
+                    }
                     std::process::exit(1);
                 }
                 let mut pb: PlaybookFile =
@@ -3034,14 +3090,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter_mut()
                     .find(|r| r.name.eq_ignore_ascii_case(&name))
                 else {
-                    eprintln!("[aegis] playbook rule not found: {name}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "rule not found",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[aegis] playbook rule not found: {name}");
+                    }
                     std::process::exit(1);
                 };
-                if !rule.enabled {
-                    println!("[aegis] rule '{name}' already disabled");
-                } else {
+                let already = !rule.enabled;
+                if !already {
                     rule.enabled = false;
                     std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "disable",
+                            "name": name,
+                            "changed": !already,
+                            "enabled": false,
+                            "path": path.display().to_string(),
+                        }))?
+                    );
+                } else if already {
+                    println!("[aegis] rule '{name}' already disabled");
+                } else {
                     println!(
                         "{}",
                         format!("[aegis] disabled rule '{name}' → {}", path.display())
@@ -3050,12 +3132,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            PlaybookCmd::Remove { name, path, apply } => {
+            PlaybookCmd::Remove { name, path, apply, json } => {
                 if !path.exists() {
-                    eprintln!(
-                        "[aegis] missing {} — run: aegis playbook init",
-                        path.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("missing {}", path.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[aegis] missing {} — run: aegis playbook init",
+                            path.display()
+                        );
+                    }
                     std::process::exit(1);
                 }
                 let mut pb: PlaybookFile =
@@ -3066,7 +3158,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .position(|r| r.name.eq_ignore_ascii_case(&name));
                 let Some(i) = idx else {
-                    eprintln!("[aegis] playbook rule not found: {name}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "rule not found",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[aegis] playbook rule not found: {name}");
+                    }
                     std::process::exit(1);
                 };
                 let removed = pb.rules[i].name.clone();
@@ -3074,15 +3177,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if apply {
                     pb.rules.remove(i);
                     std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "apply": true,
+                                "removed": removed,
+                                "was_enabled": enabled,
+                                "remaining": pb.rules.len(),
+                                "path": path.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format!(
+                                "[aegis] removed rule '{removed}' (was enabled={enabled}) → {} ({} remaining)",
+                                path.display(),
+                                pb.rules.len()
+                            )
+                            .yellow()
+                            .bold()
+                        );
+                    }
+                } else if json {
                     println!(
                         "{}",
-                        format!(
-                            "[aegis] removed rule '{removed}' (was enabled={enabled}) → {} ({} remaining)",
-                            path.display(),
-                            pb.rules.len()
-                        )
-                        .yellow()
-                        .bold()
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": false,
+                            "would_remove": removed,
+                            "was_enabled": enabled,
+                            "total_rules": before,
+                            "path": path.display().to_string(),
+                        }))?
                     );
                 } else {
                     println!(
@@ -3257,7 +3386,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("[aegis] wrote {}", path.display()).green().bold()
                 );
             }
-            ConfigCmd::Get { key, path } => {
+            ConfigCmd::Get { key, path, json } => {
                 let cfg = SuiteConfig::load(&path);
                 let k = key.trim().to_ascii_lowercase();
                 let val = match k.as_str() {
@@ -3268,15 +3397,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "playbooks" | "playbook" => cfg.playbooks,
                     "gate_config" | "gate-config" | "gate" => cfg.gate_config,
                     _ => {
-                        eprintln!(
-                            "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
-                        );
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": format!("unknown key '{key}'"),
+                                    "keys": ["data_dir","event_log","health_bind","min_posture","playbooks","gate_config"],
+                                }))?
+                            );
+                        } else {
+                            eprintln!(
+                                "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
+                            );
+                        }
                         std::process::exit(2);
                     }
                 };
-                println!("{val}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "key": k,
+                            "value": val,
+                            "path": path.display().to_string(),
+                            "present": path.exists(),
+                        }))?
+                    );
+                } else {
+                    println!("{val}");
+                }
             }
-            ConfigCmd::Set { key, value, path } => {
+            ConfigCmd::Set {
+                key,
+                value,
+                path,
+                json,
+            } => {
                 let mut cfg = SuiteConfig::load(&path);
                 let k = key.trim().to_ascii_lowercase();
                 match k.as_str() {
@@ -3287,11 +3445,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match value.parse::<u32>() {
                             Ok(n) if n <= 100 => cfg.min_posture = n,
                             Ok(_) => {
-                                eprintln!("[aegis] min_posture must be 0..=100");
+                                if json {
+                                    println!(
+                                        "{}",
+                                        serde_json::to_string_pretty(&serde_json::json!({
+                                            "ok": false,
+                                            "error": "min_posture must be 0..=100",
+                                        }))?
+                                    );
+                                } else {
+                                    eprintln!("[aegis] min_posture must be 0..=100");
+                                }
                                 std::process::exit(2);
                             }
                             Err(_) => {
-                                eprintln!("[aegis] min_posture must be an integer");
+                                if json {
+                                    println!(
+                                        "{}",
+                                        serde_json::to_string_pretty(&serde_json::json!({
+                                            "ok": false,
+                                            "error": "min_posture must be an integer",
+                                        }))?
+                                    );
+                                } else {
+                                    eprintln!("[aegis] min_posture must be an integer");
+                                }
                                 std::process::exit(2);
                             }
                         }
@@ -3299,19 +3477,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "playbooks" | "playbook" => cfg.playbooks = value.clone(),
                     "gate_config" | "gate-config" | "gate" => cfg.gate_config = value.clone(),
                     _ => {
-                        eprintln!(
-                            "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
-                        );
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": format!("unknown key '{key}'"),
+                                }))?
+                            );
+                        } else {
+                            eprintln!(
+                                "[aegis] unknown key '{key}' (data_dir|event_log|health_bind|min_posture|playbooks|gate_config)"
+                            );
+                        }
                         std::process::exit(2);
                     }
                 }
                 cfg.save(&path)?;
-                println!(
-                    "{}",
-                    format!("[aegis] set {k}={value} → {}", path.display())
-                        .green()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "key": k,
+                            "value": value,
+                            "path": path.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[aegis] set {k}={value} → {}", path.display())
+                            .green()
+                            .bold()
+                    );
+                }
             }
         },
         Commands::Setup {

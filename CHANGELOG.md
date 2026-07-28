@@ -168,6 +168,9 @@
 - CyberDNS `dedupe|import --json`; Defender `rules add/remove --json`
 - Mesh `peers add|remove --json` + `genkey|pubkey --json`; Gate `route-add|route-remove --json`
 - `aegis setup --json`; example `policies/examples/mesh-seed-pack.json`
+- `aegis config get|set --json`; playbook `enable|disable|remove --json`
+- Defender `quarantine restore|purge --json`; ThreatGrid `import-file --json`
+- Cyberwall `enable|disable|lock|unlock --json` (status after mutator)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

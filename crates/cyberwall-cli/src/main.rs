@@ -32,13 +32,25 @@ enum Commands {
         json: bool,
     },
     /// Enable the OS firewall across profiles (where supported)
-    Enable,
+    Enable {
+        #[arg(long)]
+        json: bool,
+    },
     /// Disable the OS firewall (where safely supported)
-    Disable,
+    Disable {
+        #[arg(long)]
+        json: bool,
+    },
     /// Engage emergency outbound isolation
-    Lock,
+    Lock {
+        #[arg(long)]
+        json: bool,
+    },
     /// Disengage outbound isolation
-    Unlock,
+    Unlock {
+        #[arg(long)]
+        json: bool,
+    },
     /// List active OS firewall filtering rules
     Rules {
         /// Only managed S2O-Aegis-* rules
@@ -157,79 +169,139 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Commands::Enable => {
-            println!("[cyberwall] enabling firewall...");
+        Commands::Enable { json } => {
+            if !json {
+                println!("[cyberwall] enabling firewall...");
+            }
             wall_set_enabled(&engine, true, store_ref).await?;
             let status = cyberwall_core::FirewallEngine::get_status(engine.as_ref()).await?;
-            if status.enabled {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": status.enabled,
+                        "action": "enable",
+                        "enabled": status.enabled,
+                        "status": status,
+                    }))?
+                );
+            } else if status.enabled {
                 println!(
                     "{}",
                     "[cyberwall] OK: firewall reports enabled.".green().bold()
                 );
-            } else {
-                eprintln!(
-                    "{}",
-                    "[cyberwall] command returned OK but status still disabled."
-                        .red()
-                        .bold()
-                );
+            }
+            if !status.enabled {
+                if !json {
+                    eprintln!(
+                        "{}",
+                        "[cyberwall] command returned OK but status still disabled."
+                            .red()
+                            .bold()
+                    );
+                }
                 std::process::exit(1);
             }
         }
-        Commands::Disable => {
-            println!("[cyberwall] disabling firewall...");
+        Commands::Disable { json } => {
+            if !json {
+                println!("[cyberwall] disabling firewall...");
+            }
             wall_set_enabled(&engine, false, store_ref).await?;
             let status = cyberwall_core::FirewallEngine::get_status(engine.as_ref()).await?;
-            if !status.enabled {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": !status.enabled,
+                        "action": "disable",
+                        "enabled": status.enabled,
+                        "status": status,
+                    }))?
+                );
+            } else if !status.enabled {
                 println!(
                     "{}",
                     "[cyberwall] OK: firewall reports disabled.".yellow().bold()
                 );
-            } else {
-                eprintln!(
-                    "{}",
-                    "[cyberwall] command returned OK but status still enabled."
-                        .red()
-                        .bold()
-                );
+            }
+            if status.enabled {
+                if !json {
+                    eprintln!(
+                        "{}",
+                        "[cyberwall] command returned OK but status still enabled."
+                            .red()
+                            .bold()
+                    );
+                }
                 std::process::exit(1);
             }
         }
-        Commands::Lock => {
-            println!("[cyberwall] enabling outbound block...");
+        Commands::Lock { json } => {
+            if !json {
+                println!("[cyberwall] enabling outbound block...");
+            }
             wall_set_outbound_block(&engine, true, store_ref).await?;
             let status = cyberwall_core::FirewallEngine::get_status(engine.as_ref()).await?;
-            if status.outbound_blocked {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": status.outbound_blocked,
+                        "action": "lock",
+                        "outbound_blocked": status.outbound_blocked,
+                        "status": status,
+                    }))?
+                );
+            } else if status.outbound_blocked {
                 println!(
                     "{}",
                     "[cyberwall] OK: outbound default is BLOCK.".red().bold()
                 );
-            } else {
-                eprintln!(
-                    "{}",
-                    "[cyberwall] lock returned OK but outbound not blocked."
-                        .red()
-                        .bold()
-                );
+            }
+            if !status.outbound_blocked {
+                if !json {
+                    eprintln!(
+                        "{}",
+                        "[cyberwall] lock returned OK but outbound not blocked."
+                            .red()
+                            .bold()
+                    );
+                }
                 std::process::exit(1);
             }
         }
-        Commands::Unlock => {
-            println!("[cyberwall] restoring outbound allow...");
+        Commands::Unlock { json } => {
+            if !json {
+                println!("[cyberwall] restoring outbound allow...");
+            }
             wall_set_outbound_block(&engine, false, store_ref).await?;
             let status = cyberwall_core::FirewallEngine::get_status(engine.as_ref()).await?;
-            if !status.outbound_blocked {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": !status.outbound_blocked,
+                        "action": "unlock",
+                        "outbound_blocked": status.outbound_blocked,
+                        "status": status,
+                    }))?
+                );
+            } else if !status.outbound_blocked {
                 println!(
                     "{}",
                     "[cyberwall] OK: outbound traffic allowed.".green().bold()
                 );
-            } else {
-                eprintln!(
-                    "{}",
-                    "[cyberwall] unlock returned OK but outbound still blocked."
-                        .red()
-                        .bold()
-                );
+            }
+            if status.outbound_blocked {
+                if !json {
+                    eprintln!(
+                        "{}",
+                        "[cyberwall] unlock returned OK but outbound still blocked."
+                            .red()
+                            .bold()
+                    );
+                }
                 std::process::exit(1);
             }
         }

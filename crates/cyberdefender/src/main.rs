@@ -193,6 +193,8 @@ enum QuarantineCmd {
         /// Destination override (default: original path from meta)
         #[arg(long)]
         to: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
     },
     /// Delete quarantine files (and meta); older_days=0 deletes all
     Purge {
@@ -204,6 +206,8 @@ enum QuarantineCmd {
         /// Actually delete (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2274,7 +2278,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            QuarantineCmd::Restore { target, dir, force, to } => {
+            QuarantineCmd::Restore {
+                target,
+                dir,
+                force,
+                to,
+                json,
+            } => {
                 let qpath = {
                     let t = PathBuf::from(&target);
                     if t.is_file() {
@@ -2284,25 +2294,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
                 if !qpath.is_file() {
-                    eprintln!("[cyberdefender] not found: {}", qpath.display());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("not found: {}", qpath.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] not found: {}", qpath.display());
+                    }
                     std::process::exit(2);
                 }
                 let meta_path = quarantine_meta_path(&qpath);
                 let meta: QuarantineMeta = if meta_path.exists() {
                     serde_json::from_str(&fs::read_to_string(&meta_path)?)?
                 } else {
-                    eprintln!(
-                        "[cyberdefender] missing meta {}; cannot restore to original",
-                        meta_path.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("missing meta {}", meta_path.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[cyberdefender] missing meta {}; cannot restore to original",
+                            meta_path.display()
+                        );
+                    }
                     std::process::exit(2);
                 };
                 let dest = to.unwrap_or_else(|| PathBuf::from(&meta.original));
                 if dest.exists() && !force {
-                    eprintln!(
-                        "[cyberdefender] destination exists (use --force): {}",
-                        dest.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("destination exists (use --force): {}", dest.display()),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[cyberdefender] destination exists (use --force): {}",
+                            dest.display()
+                        );
+                    }
                     std::process::exit(3);
                 }
                 if let Some(parent) = dest.parent() {
@@ -2313,16 +2353,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = fs::remove_file(&qpath);
                 }
                 let _ = fs::remove_file(&meta_path);
-                println!(
-                    "{}",
-                    format!(
-                        "[cyberdefender] restored {} → {}",
-                        qpath.display(),
-                        dest.display()
-                    )
-                    .green()
-                    .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "from": qpath.display().to_string(),
+                            "to": dest.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] restored {} → {}",
+                            qpath.display(),
+                            dest.display()
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
@@ -2339,9 +2390,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dir,
                 older_days,
                 apply,
+                json,
             } => {
                 if !dir.is_dir() {
-                    println!("[cyberdefender] nothing to purge");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "apply": apply,
+                                "count": 0,
+                                "paths": [],
+                            }))?
+                        );
+                    } else {
+                        println!("[cyberdefender] nothing to purge");
+                    }
                     return Ok(());
                 }
                 let cutoff = if older_days == 0 {
@@ -2352,6 +2416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 };
                 let mut n = 0u32;
+                let mut paths: Vec<String> = Vec::new();
                 for (p, meta) in list_quarantine_entries(&dir) {
                     let old = if cutoff.is_none() {
                         true
@@ -2380,15 +2445,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     n += 1;
+                    paths.push(p.display().to_string());
                     if apply {
                         let _ = fs::remove_file(&p);
                         let _ = fs::remove_file(quarantine_meta_path(&p));
-                        println!("  deleted {}", p.display());
-                    } else {
+                        if !json {
+                            println!("  deleted {}", p.display());
+                        }
+                    } else if !json {
                         println!("  would delete {}", p.display());
                     }
                 }
-                if apply {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": apply,
+                            "older_days": older_days,
+                            "count": n,
+                            "paths": paths,
+                            "dir": dir.display().to_string(),
+                        }))?
+                    );
+                } else if apply {
                     println!(
                         "{}",
                         format!("[cyberdefender] purge deleted {n} file(s) older than {older_days}d")
