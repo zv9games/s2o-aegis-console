@@ -93,6 +93,8 @@
 - CyberID `doctor` posture + session store health
 - CyberDNS multi-resolver DoH (Cloudflare → Google `/resolve`, `--doh` chain) + fallback stat
 - Gate `access-stats` on access log (allow/deny, reasons, paths, `--json`)
+- CyberLog `alerts` (high/critical+blocked) + `top` (products/severities/attrs)
+- CyberEDR `net-watch`: poll ESTABLISHED TCP for new connections (userspace)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

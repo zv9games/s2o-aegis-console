@@ -184,6 +184,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ DNS proxy stats + YARA pull + expanded selftest  
 - ✅ Ingest metrics + fleet prune + CyberID doctor  
 - ✅ DoH multi-resolver fallback + Gate access-stats  
+- ✅ CyberLog alerts/top + EDR net-watch  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

@@ -56,7 +56,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             os,
             CapabilityTier::T1,
             if matches!(os, OsFamily::Windows) {
-                "partial: TCP + listen inventory + process/baseline/drift + heuristics; no ETW/eBPF"
+                "partial: TCP + listen + net-watch + process/baseline/drift + heuristics; no ETW/eBPF"
             } else {
                 "partial: process inventory/baseline (ps); TCP needs Windows net_lib"
             },
@@ -66,7 +66,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             HealthState::Partial,
             os,
             CapabilityTier::T0,
-            "partial: JSONL read/export/filter/stats/correlate + UDP syslog collect; no remote EPS",
+            "partial: JSONL read/export/stats/alerts/top/correlate + UDP collect; no remote EPS",
         ),
         ProductId::ThreatGrid => ModuleStatus::new(
             product,

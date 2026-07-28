@@ -71,6 +71,33 @@ enum Commands {
         #[arg(long, default_value_t = 10_000)]
         limit: usize,
     },
+    /// Recent high/critical (and optional blocked) events
+    Alerts {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 5_000)]
+        limit: usize,
+        /// Max alerts to print
+        #[arg(long, default_value_t = 30)]
+        max: usize,
+        /// Also include EventAction::Blocked regardless of severity
+        #[arg(long, default_value_t = true)]
+        include_blocked: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Top products / severities / attr keys (domain, path) from recent window
+    Top {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 10_000)]
+        limit: usize,
+        #[arg(long, default_value_t = 10)]
+        n: usize,
+        /// Attr key to rank (default: domain, else path)
+        #[arg(long, default_value = "domain")]
+        attr: String,
+    },
     /// Simple multi-product trail for a domain/hash/string
     Correlate {
         query: String,
@@ -204,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "JSONL read/export, filter, stats, correlate, UDP syslog collect".green()
+                "JSONL read/export, stats, alerts, top, correlate, UDP collect".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -412,6 +439,129 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "---------------------------------------------------------".cyan()
                 );
             }
+        }
+        Commands::Alerts {
+            event_log,
+            limit,
+            max,
+            include_blocked,
+            json,
+        } => {
+            if !event_log.exists() {
+                eprintln!("[cyberlog] no event log");
+                std::process::exit(1);
+            }
+            let store = EventStore::open(&event_log)?;
+            let events = store.recent(limit)?;
+            let mut hits: Vec<_> = events
+                .into_iter()
+                .filter(|e| {
+                    matches!(e.severity, Severity::High | Severity::Critical)
+                        || (include_blocked
+                            && matches!(e.action, s2o_schema::EventAction::Blocked))
+                })
+                .collect();
+            // newest last in recent() — reverse so newest first
+            hits.reverse();
+            if hits.len() > max {
+                hits.truncate(max);
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!("  CyberLog alerts (high/critical{})", if include_blocked { "+blocked" } else { "" })
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                if hits.is_empty() {
+                    println!("{}", "No alert-level events in window.".green());
+                }
+                for ev in &hits {
+                    let sev = format!("{:?}", ev.severity);
+                    let color = match ev.severity {
+                        Severity::Critical | Severity::High => sev.red().bold().to_string(),
+                        Severity::Medium => sev.yellow().to_string(),
+                        _ => sev,
+                    };
+                    println!(
+                        "[{}] {} {:?} / {:?} | {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        color,
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
+                println!(" Alerts: {}", hits.len());
+            }
+            if !hits.is_empty() {
+                std::process::exit(3);
+            }
+        }
+        Commands::Top {
+            event_log,
+            limit,
+            n,
+            attr,
+        } => {
+            if !event_log.exists() {
+                eprintln!("[cyberlog] no event log");
+                std::process::exit(1);
+            }
+            let store = EventStore::open(&event_log)?;
+            let events = store.recent(limit)?;
+            let mut by_product: BTreeMap<String, usize> = BTreeMap::new();
+            let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
+            let mut by_attr: BTreeMap<String, usize> = BTreeMap::new();
+            for e in &events {
+                *by_product.entry(e.product.as_str().into()).or_default() += 1;
+                *by_sev
+                    .entry(format!("{:?}", e.severity).to_ascii_lowercase())
+                    .or_default() += 1;
+                if let Some(v) = e.attrs.get(&attr).and_then(|x| x.as_str()) {
+                    *by_attr.entry(v.to_string()).or_default() += 1;
+                } else if attr == "domain" {
+                    // fallback: path attr for gate, or message tokens
+                    if let Some(v) = e.attrs.get("path").and_then(|x| x.as_str()) {
+                        *by_attr.entry(format!("path:{v}")).or_default() += 1;
+                    }
+                }
+            }
+            let print_top = |title: &str, map: BTreeMap<String, usize>| {
+                let mut v: Vec<_> = map.into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                println!("-- {title} --");
+                for (k, c) in v.into_iter().take(n) {
+                    println!("  {c:<6} {k}");
+                }
+            };
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                format!("  CyberLog top (window={}, n={})", events.len(), n)
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            print_top("products", by_product);
+            print_top("severities", by_sev);
+            print_top(&format!("attr:{attr}"), by_attr);
         }
         Commands::Stats { event_log, limit } => {
             if !event_log.exists() {

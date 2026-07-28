@@ -106,11 +106,11 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
 | DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|yara [pull]\|quarantine\|patterns\|watch` |
-| EDR | `cyberedr processes\|ps [--rich]\|listen\|baseline\|drift\|alerts\|watch` |
+| EDR | `cyberedr processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
-| SIEM | `cybersiem stats\|correlate\|events\|collect\|follow` |
+| SIEM | `cybersiem stats\|alerts\|top\|correlate\|collect\|follow` |
 | Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |

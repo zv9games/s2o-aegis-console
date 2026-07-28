@@ -82,7 +82,24 @@ enum Commands {
         #[arg(long)]
         rich: bool,
     },
-    /// Placeholder for true ETW/eBPF (use `watch --rich` for richer poll)
+    /// Poll TCP table for new ESTABLISHED connections (userspace; not ETW)
+    NetWatch {
+        #[arg(long, default_value_t = 2000)]
+        interval_ms: u64,
+        /// Only remote IPs not in this list (comma-separated; default includes loopback)
+        #[arg(long, default_value = "127.0.0.1,0.0.0.0,::1")]
+        ignore_remote: String,
+        /// Exit after this many new-connection events (0 = forever)
+        #[arg(long, default_value_t = 0)]
+        max_events: u32,
+        /// Also report connections that disappear
+        #[arg(long)]
+        closes: bool,
+        /// Emit events to JSONL
+        #[arg(long, default_value_t = true)]
+        emit_event: bool,
+    },
+    /// Placeholder for true ETW/eBPF (use `watch --rich` / `net-watch` for userspace poll)
     Trace,
 }
 
@@ -393,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "TCP table, listen ports, process inventory (+rich), baseline/drift, alerts, watch"
+                "TCP table, listen, net-watch, process inventory (+rich), baseline/drift, alerts, watch"
                     .green()
             );
             println!(
@@ -788,6 +805,127 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        Commands::NetWatch {
+            interval_ms,
+            ignore_remote,
+            max_events,
+            closes,
+            emit_event,
+        } => {
+            let ignore: BTreeSet<String> = ignore_remote
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            println!(
+                "[cyberedr] net-watch interval={}ms closes={} (poll TCP table, not ETW)",
+                interval_ms, closes
+            );
+            let seed = tokio::task::spawn_blocking(|| {
+                s2o_net_lib::telemetry::get_active_tcp_connections()
+            })
+            .await?;
+            let conn_key = |c: &s2o_net_lib::telemetry::ActiveConnection| {
+                format!(
+                    "{}:{}-{}:{}-{}-{}",
+                    c.local_addr, c.local_port, c.remote_addr, c.remote_port, c.state, c.pid
+                )
+            };
+            let mut known: BTreeSet<String> = seed
+                .iter()
+                .filter(|c| c.state.eq_ignore_ascii_case("ESTABLISHED"))
+                .filter(|c| !ignore.contains(&c.remote_addr))
+                .map(conn_key)
+                .collect();
+            println!(
+                "[cyberedr] seed {} established (ignoring remotes: {})",
+                known.len(),
+                ignore_remote
+            );
+            if emit_event {
+                emit(
+                    &cli.event_log,
+                    EventKind::NetFlow,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("edr net-watch start seed={}", known.len()),
+                    &[
+                        ("interval_ms", serde_json::json!(interval_ms)),
+                        ("seed", serde_json::json!(known.len())),
+                        ("engine", serde_json::json!("tcp_poll_v0")),
+                    ],
+                );
+            }
+            let mut new_events = 0u32;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(500))).await;
+                let live = tokio::task::spawn_blocking(|| {
+                    s2o_net_lib::telemetry::get_active_tcp_connections()
+                })
+                .await?;
+                let mut live_keys: BTreeSet<String> = BTreeSet::new();
+                for c in &live {
+                    if !c.state.eq_ignore_ascii_case("ESTABLISHED") {
+                        continue;
+                    }
+                    if ignore.contains(&c.remote_addr) {
+                        continue;
+                    }
+                    let k = conn_key(c);
+                    live_keys.insert(k.clone());
+                    if !known.contains(&k) {
+                        println!(
+                            "{} pid={} {}:{} → {}:{}",
+                            " NEW ".cyan().bold(),
+                            c.pid,
+                            c.local_addr,
+                            c.local_port,
+                            c.remote_addr,
+                            c.remote_port
+                        );
+                        if emit_event {
+                            emit(
+                                &cli.event_log,
+                                EventKind::NetFlow,
+                                EventAction::Observed,
+                                Severity::Medium,
+                                format!(
+                                    "new established {}:{} -> {}:{} pid={}",
+                                    c.local_addr, c.local_port, c.remote_addr, c.remote_port, c.pid
+                                ),
+                                &[
+                                    ("local", serde_json::json!(format!("{}:{}", c.local_addr, c.local_port))),
+                                    ("remote", serde_json::json!(format!("{}:{}", c.remote_addr, c.remote_port))),
+                                    ("pid", serde_json::json!(c.pid)),
+                                    ("engine", serde_json::json!("tcp_poll_v0")),
+                                ],
+                            );
+                        }
+                        new_events += 1;
+                        if max_events > 0 && new_events >= max_events {
+                            println!("[cyberedr] net-watch max_events={max_events} reached");
+                            return Ok(());
+                        }
+                    }
+                }
+                if closes {
+                    for k in known.difference(&live_keys) {
+                        println!("{} {}", " CLOSE ".yellow().bold(), k);
+                        if emit_event {
+                            emit(
+                                &cli.event_log,
+                                EventKind::NetFlow,
+                                EventAction::Observed,
+                                Severity::Low,
+                                format!("connection closed {k}"),
+                                &[("key", serde_json::json!(k)), ("engine", serde_json::json!("tcp_poll_v0"))],
+                            );
+                        }
+                    }
+                }
+                known = live_keys;
+            }
+        }
         Commands::Watch {
             interval_ms,
             limit,
@@ -891,8 +1029,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Trace => {
             eprintln!("[cyberedr] kernel ETW/eBPF live trace not implemented.");
-            eprintln!("Use: cyberedr watch --rich  (WMI/ps process poll with cmdline)");
-            eprintln!("     cyberedr ps --rich | processes | alerts | drift");
+            eprintln!("Use: cyberedr watch --rich | net-watch | listen | alerts");
             std::process::exit(2);
         }
     }
