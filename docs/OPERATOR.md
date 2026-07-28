@@ -97,7 +97,14 @@ cargo run -p cyberedr -- status --json
 cargo run -p cyberedr -- export --state established --format csv --out .aegis/tcp.csv
 cargo run -p cyberedr -- export --state listen --limit 50
 cargo run -p cyberdefender -- status --json
+cargo run -p cyberdefender -- scan .aegis --json --max-files 20
+cargo run -p cyberdefender -- patterns test --text "EICAR-STANDARD-ANTIVIRUS-TEST-FILE" --json
+cargo run -p cyberdefender -- yara test --text "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR" --json
 cargo run -p cyberdefender -- quarantine list --json
+cargo run -p aegis-cli -- emit "ops smoke" --json
+cargo run -p aegis-cli -- selftest --json
+cargo run -p aegis-cli -- cleanup --json
+cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-run --json
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
 cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall

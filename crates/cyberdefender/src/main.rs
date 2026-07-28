@@ -74,6 +74,8 @@ enum Commands {
         /// Only run YARA-X (skip name/hash/yara-lite)
         #[arg(long)]
         yara_only: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Write / refresh local rules + yara-lite + YARA-X seed
     UpdateDefs,
@@ -215,6 +217,8 @@ enum PatternsCmd {
         path: Option<PathBuf>,
         #[arg(long)]
         text: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -235,6 +239,8 @@ enum YaraCmd {
         path: Option<PathBuf>,
         #[arg(long)]
         text: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Scan path with YARA-X only
     Scan {
@@ -522,19 +528,32 @@ struct ScanCtx<'a> {
     max_bytes: usize,
     quarantine: bool,
     quarantine_dir: &'a Path,
+    /// Suppress per-file text output (JSON scan mode)
+    quiet: bool,
 }
 
 struct ScanStats {
     hashed: u32,
     blocked: u32,
     quarantined: u32,
+    path: String,
+    verdict: String,
+    rule: Option<String>,
+    sha256: Option<String>,
+    quarantined_path: Option<String>,
 }
 
 fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
+    let quiet = ctx.quiet || quiet_clean;
     let mut st = ScanStats {
         hashed: 0,
         blocked: 0,
         quarantined: 0,
+        path: t.display().to_string(),
+        verdict: "clean".into(),
+        rule: None,
+        sha256: None,
+        quarantined_path: None,
     };
     let maybe_q = |t: &Path| -> Option<PathBuf> {
         if !ctx.quarantine {
@@ -542,14 +561,18 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
         }
         match quarantine_file(t, ctx.quarantine_dir) {
             Ok(dest) => {
-                println!(
-                    " Quarantine   : {}",
-                    dest.display().to_string().yellow().bold()
-                );
+                if !ctx.quiet {
+                    println!(
+                        " Quarantine   : {}",
+                        dest.display().to_string().yellow().bold()
+                    );
+                }
                 Some(dest)
             }
             Err(e) => {
-                eprintln!("{}", format!(" quarantine failed: {e}").red());
+                if !ctx.quiet {
+                    eprintln!("{}", format!(" quarantine failed: {e}").red());
+                }
                 None
             }
         }
@@ -558,18 +581,23 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
     if !ctx.yara_only {
         if let Some(sub) = ctx.rules.name_hit(t) {
             st.blocked += 1;
-            println!(
-                "{}",
-                "---------------------------------------------------------".cyan()
-            );
-            println!(" Target File  : {}", t.display().to_string().bold());
-            println!(
-                " Verdict      : {}",
-                format!("BLOCKED (name rule: {sub})").red().bold()
-            );
+            st.verdict = "blocked_name".into();
+            st.rule = Some(sub.clone());
+            if !ctx.quiet {
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Target File  : {}", t.display().to_string().bold());
+                println!(
+                    " Verdict      : {}",
+                    format!("BLOCKED (name rule: {sub})").red().bold()
+                );
+            }
             let qpath = maybe_q(t);
-            if qpath.is_some() {
+            if let Some(ref qp) = qpath {
                 st.quarantined += 1;
+                st.quarantined_path = Some(qp.display().to_string());
             }
             emit(
                 ctx.event_log,
@@ -582,7 +610,7 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
                     ("verdict", serde_json::json!("blocked_name")),
                     (
                         "quarantined",
-                        serde_json::json!(qpath.map(|p| p.display().to_string())),
+                        serde_json::json!(st.quarantined_path.clone()),
                     ),
                 ],
                 None,
@@ -592,18 +620,23 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
 
         if let Some((rule, sev)) = content_pattern_hit(t, ctx.patterns, ctx.max_bytes) {
             st.blocked += 1;
-            println!(
-                "{}",
-                "---------------------------------------------------------".cyan()
-            );
-            println!(" Target File  : {}", t.display().to_string().bold());
-            println!(
-                " Verdict      : {}",
-                format!("BLOCKED (yara-lite: {rule})").red().bold()
-            );
+            st.verdict = "blocked_pattern".into();
+            st.rule = Some(rule.clone());
+            if !ctx.quiet {
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Target File  : {}", t.display().to_string().bold());
+                println!(
+                    " Verdict      : {}",
+                    format!("BLOCKED (yara-lite: {rule})").red().bold()
+                );
+            }
             let qpath = maybe_q(t);
-            if qpath.is_some() {
+            if let Some(ref qp) = qpath {
                 st.quarantined += 1;
+                st.quarantined_path = Some(qp.display().to_string());
             }
             emit(
                 ctx.event_log,
@@ -616,7 +649,7 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
                     ("verdict", serde_json::json!("blocked_pattern")),
                     (
                         "quarantined",
-                        serde_json::json!(qpath.map(|p| p.display().to_string())),
+                        serde_json::json!(st.quarantined_path.clone()),
                     ),
                 ],
                 None,
@@ -630,18 +663,23 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
             Ok(hits) if !hits.is_empty() => {
                 st.blocked += 1;
                 let rule = hits.join(",");
-                println!(
-                    "{}",
-                    "---------------------------------------------------------".cyan()
-                );
-                println!(" Target File  : {}", t.display().to_string().bold());
-                println!(
-                    " Verdict      : {}",
-                    format!("BLOCKED (yara-x: {rule})").red().bold()
-                );
+                st.verdict = "blocked_yara_x".into();
+                st.rule = Some(rule.clone());
+                if !ctx.quiet {
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                    println!(" Target File  : {}", t.display().to_string().bold());
+                    println!(
+                        " Verdict      : {}",
+                        format!("BLOCKED (yara-x: {rule})").red().bold()
+                    );
+                }
                 let qpath = maybe_q(t);
-                if qpath.is_some() {
+                if let Some(ref qp) = qpath {
                     st.quarantined += 1;
+                    st.quarantined_path = Some(qp.display().to_string());
                 }
                 emit(
                     ctx.event_log,
@@ -655,7 +693,7 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
                         ("verdict", serde_json::json!("blocked_yara_x")),
                         (
                             "quarantined",
-                            serde_json::json!(qpath.map(|p| p.display().to_string())),
+                            serde_json::json!(st.quarantined_path.clone()),
                         ),
                     ],
                     None,
@@ -664,11 +702,13 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
             }
             Ok(_) => {}
             Err(e) => {
-                eprintln!("{}", format!("  yara-x skip {}: {e}", t.display()).yellow());
+                if !ctx.quiet {
+                    eprintln!("{}", format!("  yara-x skip {}: {e}", t.display()).yellow());
+                }
             }
         }
         if ctx.yara_only {
-            if !quiet_clean {
+            if !quiet {
                 println!(
                     "{}",
                     "---------------------------------------------------------".cyan()
@@ -679,18 +719,23 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
             return st;
         }
     } else if ctx.yara_only {
-        eprintln!("[cyberdefender] --yara-only requires compiled YARA-X rules");
+        if !ctx.quiet {
+            eprintln!("[cyberdefender] --yara-only requires compiled YARA-X rules");
+        }
+        st.verdict = "error".into();
         return st;
     }
 
     match calculate_file_hash(t) {
         Ok(hash) => {
             st.hashed += 1;
+            st.sha256 = Some(hash.clone());
             let hit = ctx.hash_set.contains(&hash);
             if hit {
                 st.blocked += 1;
+                st.verdict = "blocked_hash".into();
             }
-            if hit || !quiet_clean {
+            if (hit || !quiet) && !ctx.quiet {
                 println!(
                     "{}",
                     "---------------------------------------------------------".cyan()
@@ -699,13 +744,16 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
                 println!(" SHA-256 Hash : {}", hash.yellow());
             }
             if hit {
-                println!(
-                    " Verdict      : {}",
-                    "BLOCKED (hash rule / ThreatGrid)".red().bold()
-                );
+                if !ctx.quiet {
+                    println!(
+                        " Verdict      : {}",
+                        "BLOCKED (hash rule / ThreatGrid)".red().bold()
+                    );
+                }
                 let qpath = maybe_q(t);
-                if qpath.is_some() {
+                if let Some(ref qp) = qpath {
                     st.quarantined += 1;
+                    st.quarantined_path = Some(qp.display().to_string());
                 }
                 emit(
                     ctx.event_log,
@@ -718,12 +766,12 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
                         ("verdict", serde_json::json!("blocked_hash")),
                         (
                             "quarantined",
-                            serde_json::json!(qpath.map(|p| p.display().to_string())),
+                            serde_json::json!(st.quarantined_path.clone()),
                         ),
                     ],
                     Some(Ioc::Hash(hash)),
                 );
-            } else if !quiet_clean {
+            } else if !quiet {
                 println!(
                     " Verdict      : {}",
                     "clean (no local rule match)".green()
@@ -743,7 +791,11 @@ fn scan_one(t: &Path, ctx: &ScanCtx, quiet_clean: bool) -> ScanStats {
             }
         }
         Err(e) => {
-            eprintln!("{}", format!("  skip {}: {e}", t.display()).red());
+            st.verdict = "error".into();
+            st.rule = Some(e.to_string());
+            if !ctx.quiet {
+                eprintln!("{}", format!("  skip {}: {e}", t.display()).red());
+            }
         }
     }
     st
@@ -1436,13 +1488,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            PatternsCmd::Test { path, text } => {
+            PatternsCmd::Test { path, text, json } => {
                 let (patterns, errs) = load_patterns(&cli.patterns);
-                for e in &errs {
-                    eprintln!("! {e}");
+                if !json {
+                    for e in &errs {
+                        eprintln!("! {e}");
+                    }
                 }
                 if patterns.is_empty() {
-                    eprintln!("[cyberdefender] no patterns loaded");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "hit": false,
+                                "error": "no patterns loaded",
+                                "hits": [],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] no patterns loaded");
+                    }
                     std::process::exit(2);
                 }
                 let buf = if let Some(t) = text {
@@ -1450,23 +1515,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Some(p) = path {
                     fs::read(&p)?
                 } else {
-                    eprintln!("[cyberdefender] pass a path or --text");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "hit": false,
+                                "error": "pass a path or --text",
+                                "hits": [],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] pass a path or --text");
+                    }
                     std::process::exit(2);
                 };
                 let hits = match_buffer(&patterns, &buf);
-                if hits.is_empty() {
+                if json {
+                    let rows: Vec<_> = hits
+                        .iter()
+                        .map(|h| {
+                            serde_json::json!({
+                                "name": h.name,
+                                "kind": h.kind_label(),
+                                "severity": format!("{:?}", h.severity).to_ascii_lowercase(),
+                            })
+                        })
+                        .collect();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "hit": !rows.is_empty(),
+                            "hit_count": rows.len(),
+                            "hits": rows,
+                            "errors": errs,
+                        }))?
+                    );
+                } else if hits.is_empty() {
                     println!("{}", "no matches".green());
                     std::process::exit(0);
+                } else {
+                    for h in &hits {
+                        println!(
+                            "{} {} ({})",
+                            "HIT".red().bold(),
+                            h.name,
+                            h.kind_label()
+                        );
+                    }
                 }
-                for h in &hits {
-                    println!(
-                        "{} {} ({})",
-                        "HIT".red().bold(),
-                        h.name,
-                        h.kind_label()
-                    );
+                if !hits.is_empty() {
+                    std::process::exit(3);
                 }
-                std::process::exit(3);
             }
         },
         Commands::Yara { command } => match command {
@@ -1547,11 +1646,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            YaraCmd::Test { path, text } => {
+            YaraCmd::Test { path, text, json } => {
                 let eng = match YaraEngine::compile_dir(&cli.yara_dir) {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("[cyberdefender] {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "hit": false,
+                                    "error": e.to_string(),
+                                    "hits": [],
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[cyberdefender] {e}");
+                        }
                         std::process::exit(2);
                     }
                 };
@@ -1560,17 +1670,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Some(p) = path {
                     eng.scan_file(&p, 2 * 1024 * 1024)?
                 } else {
-                    eprintln!("[cyberdefender] pass a path or --text");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "hit": false,
+                                "error": "pass a path or --text",
+                                "hits": [],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdefender] pass a path or --text");
+                    }
                     std::process::exit(2);
                 };
-                if hits.is_empty() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "hit": !hits.is_empty(),
+                            "hit_count": hits.len(),
+                            "hits": hits,
+                            "engine": yara_x_engine::engine_version(),
+                        }))?
+                    );
+                } else if hits.is_empty() {
                     println!("{}", "no matches".green());
                     std::process::exit(0);
+                } else {
+                    for h in &hits {
+                        println!("{} {}", "HIT".red().bold(), h);
+                    }
                 }
-                for h in &hits {
-                    println!("{} {}", "HIT".red().bold(), h);
+                if !hits.is_empty() {
+                    std::process::exit(3);
                 }
-                std::process::exit(3);
             }
             YaraCmd::Pull {
                 url,
@@ -1695,6 +1829,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     max_bytes,
                     quarantine,
                     quarantine_dir: &quarantine_dir,
+                    quiet: false,
                 };
                 let mut blocked = 0u32;
                 let mut quarantined = 0u32;
@@ -1721,6 +1856,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_bytes,
             yara,
             yara_only,
+            json,
         } => {
             let root = PathBuf::from(&path);
             let rules = load_rules(&cli.rules);
@@ -1733,43 +1869,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let (patterns, perrs) = load_patterns(&cli.patterns);
-            for e in &perrs {
-                eprintln!("[cyberdefender] pattern: {e}");
+            if !json {
+                for e in &perrs {
+                    eprintln!("[cyberdefender] pattern: {e}");
+                }
             }
             let want_yara = yara || yara_only;
             let yara_eng = if want_yara {
-                try_load_yara(&cli.yara_dir, true)
+                try_load_yara(&cli.yara_dir, !json)
             } else {
                 None
             };
             if want_yara && yara_eng.is_none() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": "yara-x rules failed to load",
+                            "path": root.display().to_string(),
+                        }))?
+                    );
+                }
                 std::process::exit(2);
             }
-            println!(
-                "{}",
-                format!(
-                    "[cyberdefender] scanning '{}' recursive={} max_files={} ({} hashes, {} patterns, yara-x={})...",
-                    root.display(),
-                    recursive,
-                    max_files,
-                    hash_set.len(),
-                    patterns.len(),
-                    yara_eng
-                        .as_ref()
-                        .map(|e| e.rule_count.to_string())
-                        .unwrap_or_else(|| "off".into())
-                )
-                .cyan()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdefender] scanning '{}' recursive={} max_files={} ({} hashes, {} patterns, yara-x={})...",
+                        root.display(),
+                        recursive,
+                        max_files,
+                        hash_set.len(),
+                        patterns.len(),
+                        yara_eng
+                            .as_ref()
+                            .map(|e| e.rule_count.to_string())
+                            .unwrap_or_else(|| "off".into())
+                    )
+                    .cyan()
+                );
+            }
 
             let targets = match collect_targets(&root, recursive, max_files) {
                 Ok(t) if !t.is_empty() => t,
                 Ok(_) => {
-                    eprintln!("{}", "[cyberdefender] no files to scan".yellow());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "path": root.display().to_string(),
+                                "files": 0,
+                                "hashed": 0,
+                                "blocked": 0,
+                                "quarantined": 0,
+                                "results": [],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("{}", "[cyberdefender] no files to scan".yellow());
+                    }
                     std::process::exit(1);
                 }
                 Err(e) => {
-                    eprintln!("{}", format!("Scan Error: {e}").red());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": e.to_string(),
+                                "path": root.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        eprintln!("{}", format!("Scan Error: {e}").red());
+                    }
                     std::process::exit(1);
                 }
             };
@@ -1784,24 +1960,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_bytes,
                 quarantine,
                 quarantine_dir: &quarantine_dir,
+                quiet: json,
             };
             let mut hashed = 0u32;
             let mut blocked = 0u32;
             let mut quarantined = 0u32;
+            let mut results = Vec::new();
             for t in &targets {
-                let st = scan_one(t, &ctx, false);
+                let st = scan_one(t, &ctx, json);
                 hashed += st.hashed;
                 blocked += st.blocked;
                 quarantined += st.quarantined;
+                results.push(serde_json::json!({
+                    "path": st.path,
+                    "verdict": st.verdict,
+                    "rule": st.rule,
+                    "sha256": st.sha256,
+                    "quarantined": st.quarantined_path,
+                    "blocked": st.blocked > 0,
+                }));
             }
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " Files: {}  hashed: {hashed}  blocked: {blocked}  quarantined: {quarantined}",
-                targets.len()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": blocked == 0,
+                        "path": root.display().to_string(),
+                        "recursive": recursive,
+                        "files": targets.len(),
+                        "hashed": hashed,
+                        "blocked": blocked,
+                        "quarantined": quarantined,
+                        "yara": want_yara,
+                        "results": results,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Files: {}  hashed: {hashed}  blocked: {blocked}  quarantined: {quarantined}",
+                    targets.len()
+                );
+            }
             if blocked > 0 {
                 std::process::exit(3);
             }
@@ -1887,6 +2090,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     max_bytes: 2 * 1024 * 1024,
                     quarantine,
                     quarantine_dir: &quarantine_dir,
+                    quiet: false,
                 };
                 let mut live = BTreeMap::new();
                 for t in targets {

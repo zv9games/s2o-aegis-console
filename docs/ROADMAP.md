@@ -206,6 +206,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ EDR/Defender/Intel status JSON + gate check/SIEM events/lookup JSON + playbook remove  
 - ✅ DNS resolve + ID auth/verify JSON + policy apply/config show + patterns/yara list JSON  
 - ✅ EDR processes + gate audit/JWT JSON + mesh peers show/set + system-dns JSON + fleet tags  
+- ✅ Defender scan/test JSON + emit/selftest/cleanup JSON + wall apply JSON  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

@@ -61,6 +61,8 @@ enum Commands {
         /// Print planned netsh actions only (no system change)
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -516,38 +518,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Apply { path, dry_run } => {
+        Commands::Apply {
+            path,
+            dry_run,
+            json,
+        } => {
             let text = fs::read_to_string(&path)?;
             let policy: cyberwall_core::FirewallPolicy = serde_json::from_str(&text)?;
             let policy = policy.ensure_managed_names();
-            println!(
-                "[cyberwall] apply policy name={} version={} rules={} dry_run={}",
-                policy.name,
-                policy.version,
-                policy.rules.len(),
-                dry_run
-            );
+            if !json {
+                println!(
+                    "[cyberwall] apply policy name={} version={} rules={} dry_run={}",
+                    policy.name,
+                    policy.version,
+                    policy.rules.len(),
+                    dry_run
+                );
+            }
             if dry_run {
-                for r in &policy.rules {
+                if json {
                     println!(
-                        "  would: name={} action={:?} dir={:?} port={:?} proto={:?} app={:?}",
-                        r.name, r.action, r.direction, r.local_port, r.protocol, r.application
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "dry_run": true,
+                            "path": path.display().to_string(),
+                            "name": policy.name,
+                            "version": policy.version,
+                            "rule_count": policy.rules.len(),
+                            "rules": policy.rules,
+                            "managed_prefix": cyberwall_core::MANAGED_RULE_PREFIX,
+                        }))?
                     );
+                } else {
+                    for r in &policy.rules {
+                        println!(
+                            "  would: name={} action={:?} dir={:?} port={:?} proto={:?} app={:?}",
+                            r.name, r.action, r.direction, r.local_port, r.protocol, r.application
+                        );
+                    }
+                    println!("{}", "[cyberwall] dry-run complete (no changes)".yellow());
                 }
-                println!("{}", "[cyberwall] dry-run complete (no changes)".yellow());
                 return Ok(());
             }
             cyberwall_core::FirewallEngine::apply_policy(engine.as_ref(), &policy).await?;
-            println!(
-                "{}",
-                format!(
-                    "[cyberwall] OK: applied {} managed rule(s) (prefix {})",
-                    policy.rules.len(),
-                    cyberwall_core::MANAGED_RULE_PREFIX
-                )
-                .green()
-                .bold()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "dry_run": false,
+                        "path": path.display().to_string(),
+                        "name": policy.name,
+                        "version": policy.version,
+                        "rule_count": policy.rules.len(),
+                        "managed_prefix": cyberwall_core::MANAGED_RULE_PREFIX,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberwall] OK: applied {} managed rule(s) (prefix {})",
+                        policy.rules.len(),
+                        cyberwall_core::MANAGED_RULE_PREFIX
+                    )
+                    .green()
+                    .bold()
+                );
+            }
             if let Some(store) = store_ref {
                 // wall path already used for enable/lock; emit here for CLI-only apply
                 let _ = store; // events optional via kernel wall_apply_rules; CLI apply is direct

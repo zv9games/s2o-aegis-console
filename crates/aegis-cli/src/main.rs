@@ -110,6 +110,8 @@ enum Commands {
         /// Skip local JSONL append
         #[arg(long)]
         no_local: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Rotate the local event log now (archives to events.jsonl.1 …)
     Rotate {
@@ -154,6 +156,8 @@ enum Commands {
     Selftest {
         #[arg(long, default_value_t = 40)]
         min_posture: u32,
+        #[arg(long)]
+        json: bool,
     },
     /// Housekeeping: session GC, fleet prune, event rotate, optional IOC/DNS hygiene
     Cleanup {
@@ -182,6 +186,8 @@ enum Commands {
         /// Actually mutate stores (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// First-time bootstrap of .aegis data + starter policy/playbooks/gate
     Setup {
@@ -2440,6 +2446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             http,
             udp,
             no_local,
+            json,
         } => {
             use s2o_schema::{
                 EventAction, EventKind, ProductId, Severity,
@@ -2457,22 +2464,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 message,
             )
             .with_attr("source", serde_json::json!("aegis_emit"));
+            let mut local_ok = false;
             if !no_local {
                 if let Some(p) = event_log.parent() {
                     let _ = std::fs::create_dir_all(p);
                 }
                 let store = EventStore::open(&event_log)?;
                 store.append(&ev)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[aegis] local append id={} → {}",
-                        ev.id,
-                        event_log.display()
-                    )
-                    .green()
-                );
+                local_ok = true;
+                if !json {
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] local append id={} → {}",
+                            ev.id,
+                            event_log.display()
+                        )
+                        .green()
+                    );
+                }
             }
+            let mut http_status: Option<String> = None;
             if let Some(url) = http {
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(10))
@@ -2480,21 +2492,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = client.post(&url).json(&ev).send().await?;
                 let status = res.status();
                 let text = res.text().await.unwrap_or_default();
+                http_status = Some(status.to_string());
                 if status.is_success() {
-                    println!(
-                        "{}",
-                        format!("[aegis] HTTP POST {url} → {status}").green().bold()
-                    );
+                    if !json {
+                        println!(
+                            "{}",
+                            format!("[aegis] HTTP POST {url} → {status}").green().bold()
+                        );
+                    }
                 } else {
-                    eprintln!("[aegis] HTTP POST failed {status}: {text}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "id": ev.id,
+                                "error": format!("HTTP POST failed {status}: {text}"),
+                                "event": ev,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[aegis] HTTP POST failed {status}: {text}");
+                    }
                     std::process::exit(1);
                 }
             }
+            let mut udp_sent = false;
             if let Some(addr) = udp {
                 s2o_bus::udp_send(&addr, &ev)?;
+                udp_sent = true;
+                if !json {
+                    println!(
+                        "{}",
+                        format!("[aegis] UDP send → {addr}").green()
+                    );
+                }
+            }
+            if json {
                 println!(
                     "{}",
-                    format!("[aegis] UDP send → {addr}").green()
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "id": ev.id,
+                        "local": local_ok,
+                        "http_status": http_status,
+                        "udp": udp_sent,
+                        "event": ev,
+                    }))?
                 );
             }
         }
@@ -3399,9 +3443,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .bold()
             );
         }
-        Commands::Selftest { min_posture } => {
+        Commands::Selftest { min_posture, json } => {
             let mut failed = 0u32;
             let mut checks = Vec::new();
+            let mut posture_score: Option<u32> = None;
             checks.push(("kernel_version", !KERNEL_VERSION.is_empty()));
             checks.push(("schema_version", !SCHEMA_VERSION.is_empty()));
             let status = collect_platform_status(&fw).await;
@@ -3415,21 +3460,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(p) => {
                     checks.push(("posture_compute", true));
                     checks.push(("posture_min", p.score >= min_posture));
-                    println!(
-                        " posture_score={} min={} {}",
-                        p.score,
-                        min_posture,
-                        if p.score >= min_posture {
-                            "PASS".green().bold()
-                        } else {
-                            "FAIL".red().bold()
-                        }
-                    );
+                    posture_score = Some(p.score);
+                    if !json {
+                        println!(
+                            " posture_score={} min={} {}",
+                            p.score,
+                            min_posture,
+                            if p.score >= min_posture {
+                                "PASS".green().bold()
+                            } else {
+                                "FAIL".red().bold()
+                            }
+                        );
+                    }
                 }
                 Err(e) => {
                     checks.push(("posture_compute", false));
                     checks.push(("posture_min", false));
-                    eprintln!(" posture error: {e}");
+                    if !json {
+                        eprintln!(" posture error: {e}");
+                    }
                 }
             }
             let el = PathBuf::from(".aegis/events.jsonl");
@@ -3560,23 +3610,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && known_playbook_actions().contains(&"session_revoke_attr"),
             ));
 
-            println!("{}", "Aegis selftest".bold().green());
-            for (name, ok) in &checks {
-                if *ok {
-                    println!("  [PASS] {name}");
-                } else {
-                    println!("  [FAIL] {}", name.red());
+            for (_name, ok) in &checks {
+                if !*ok {
                     failed += 1;
                 }
             }
-            if failed > 0 {
+            if json {
+                let rows: Vec<_> = checks
+                    .iter()
+                    .map(|(name, ok)| {
+                        serde_json::json!({
+                            "name": name,
+                            "ok": ok,
+                        })
+                    })
+                    .collect();
                 println!(
                     "{}",
-                    format!("SELFTEST FAIL ({failed} checks)").red().bold()
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": failed == 0,
+                        "failed": failed,
+                        "min_posture": min_posture,
+                        "posture_score": posture_score,
+                        "checks": rows,
+                    }))?
                 );
+            } else {
+                println!("{}", "Aegis selftest".bold().green());
+                for (name, ok) in &checks {
+                    if *ok {
+                        println!("  [PASS] {name}");
+                    } else {
+                        println!("  [FAIL] {}", name.red());
+                    }
+                }
+                if failed > 0 {
+                    println!(
+                        "{}",
+                        format!("SELFTEST FAIL ({failed} checks)").red().bold()
+                    );
+                } else {
+                    println!("{}", "SELFTEST PASS".green().bold());
+                }
+            }
+            if failed > 0 {
                 std::process::exit(1);
             }
-            println!("{}", "SELFTEST PASS".green().bold());
         }
         Commands::Cleanup {
             sessions,
@@ -3589,17 +3668,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ioc_older_days,
             dns_dedupe,
             apply,
+            json,
         } => {
             use s2o_session::SessionStore;
-            println!(
-                "{}",
-                format!(
-                    "Aegis cleanup ({})",
-                    if apply { "APPLY" } else { "dry-run" }
-                )
-                .bold()
-                .green()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    format!(
+                        "Aegis cleanup ({})",
+                        if apply { "APPLY" } else { "dry-run" }
+                    )
+                    .bold()
+                    .green()
+                );
+            }
 
             // Sessions GC
             let mut sess = SessionStore::load(&sessions);
@@ -3615,16 +3697,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let active = sess.active().count();
                 before_s.saturating_sub(active)
             };
-            println!(
-                "  sessions : would/did remove {removed_s} of {before_s} → {}",
-                sessions.display()
-            );
+            if !json {
+                println!(
+                    "  sessions : would/did remove {removed_s} of {before_s} → {}",
+                    sessions.display()
+                );
+            }
 
             // Fleet prune
+            let mut fleet_removed = 0usize;
+            let mut fleet_before = 0usize;
+            let mut fleet_skipped = false;
             if fleet_stale_minutes > 0 {
                 let mut fl = FleetStore::load(&fleet);
-                let before_f = fl.hosts.len();
-                let removed = if apply {
+                fleet_before = fl.hosts.len();
+                fleet_removed = if apply {
                     let r = fl.prune_stale(fleet_stale_minutes);
                     fl.save(&fleet)?;
                     r.len()
@@ -3632,77 +3719,103 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut probe = fl.clone();
                     probe.prune_stale(fleet_stale_minutes).len()
                 };
-                println!(
-                    "  fleet    : would/did remove {removed} of {before_f} (stale>{fleet_stale_minutes}m) → {}",
-                    fleet.display()
-                );
+                if !json {
+                    println!(
+                        "  fleet    : would/did remove {fleet_removed} of {fleet_before} (stale>{fleet_stale_minutes}m) → {}",
+                        fleet.display()
+                    );
+                }
             } else {
-                println!("  fleet    : skipped (--fleet-stale-minutes 0)");
+                fleet_skipped = true;
+                if !json {
+                    println!("  fleet    : skipped (--fleet-stale-minutes 0)");
+                }
             }
 
             // Event log size / rotate
+            let mut events_size: Option<u64> = None;
+            let mut events_would_rotate = false;
+            let mut events_rotated = false;
             if event_log.exists() {
                 let meta = std::fs::metadata(&event_log)?;
                 let len = meta.len();
+                events_size = Some(len);
                 if rotate_max_bytes > 0 && len >= rotate_max_bytes {
+                    events_would_rotate = true;
                     if apply {
                         let store = EventStore::open_with_rotation(
                             &event_log,
                             rotate_max_bytes,
                             5,
                         )?;
-                        let rotated = store.rotate_if_needed()?;
-                        println!(
-                            "  events   : size={len} max={rotate_max_bytes} rotated={rotated} → {}",
-                            event_log.display()
-                        );
-                    } else {
+                        events_rotated = store.rotate_if_needed()?;
+                        if !json {
+                            println!(
+                                "  events   : size={len} max={rotate_max_bytes} rotated={events_rotated} → {}",
+                                event_log.display()
+                            );
+                        }
+                    } else if !json {
                         println!(
                             "  events   : size={len} >= max={rotate_max_bytes} (would rotate) → {}",
                             event_log.display()
                         );
                     }
-                } else {
+                } else if !json {
                     println!(
                         "  events   : size={len} (under max={rotate_max_bytes}) → {}",
                         event_log.display()
                     );
                 }
-            } else {
+            } else if !json {
                 println!("  events   : missing {}", event_log.display());
             }
 
             // IOC age prune
+            let mut ioc_removed = 0usize;
+            let mut ioc_before = 0usize;
+            let mut ioc_skipped = false;
             if ioc_older_days > 0 {
                 if ioc_store.exists() {
                     match s2o_ioc::IocStore::load(&ioc_store) {
                         Ok(mut store) => {
-                            let before = store.entries.len();
-                            let n = store.prune_older_than(ioc_older_days);
-                            if apply && n > 0 {
+                            ioc_before = store.entries.len();
+                            ioc_removed = store.prune_older_than(ioc_older_days);
+                            if apply && ioc_removed > 0 {
                                 store.save(&ioc_store)?;
                             }
-                            println!(
-                                "  ioc      : would/did remove {n} of {before} (older>{ioc_older_days}d) → {}",
-                                ioc_store.display()
-                            );
+                            if !json {
+                                println!(
+                                    "  ioc      : would/did remove {ioc_removed} of {ioc_before} (older>{ioc_older_days}d) → {}",
+                                    ioc_store.display()
+                                );
+                            }
                         }
-                        Err(e) => println!("  ioc      : load error {e}"),
+                        Err(e) => {
+                            if !json {
+                                println!("  ioc      : load error {e}");
+                            }
+                        }
                     }
-                } else {
+                } else if !json {
                     println!("  ioc      : missing {}", ioc_store.display());
                 }
             } else {
-                println!("  ioc      : skipped (--ioc-older-days 0)");
+                ioc_skipped = true;
+                if !json {
+                    println!("  ioc      : skipped (--ioc-older-days 0)");
+                }
             }
 
             // DNS blocklist dedupe
+            let mut dns_raw = 0usize;
+            let mut dns_unique = 0usize;
+            let mut dns_dups = 0usize;
+            let mut dns_skipped = false;
             if dns_dedupe {
                 if dns_blocklist.exists() {
                     let text = std::fs::read_to_string(&dns_blocklist).unwrap_or_default();
                     let mut seen = std::collections::BTreeSet::new();
-                    let mut raw = 0usize;
-                    let mut dups = 0usize;
                     let mut unique_lines: Vec<String> = Vec::new();
                     let mut header: Vec<String> = Vec::new();
                     for line in text.lines() {
@@ -3713,7 +3826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             continue;
                         }
-                        raw += 1;
+                        dns_raw += 1;
                         let domain = trimmed
                             .split('#')
                             .next()
@@ -3725,12 +3838,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                         if !seen.insert(domain.clone()) {
-                            dups += 1;
+                            dns_dups += 1;
                         } else {
                             unique_lines.push(domain);
                         }
                     }
-                    if apply && dups > 0 {
+                    dns_unique = unique_lines.len();
+                    if apply && dns_dups > 0 {
                         let mut out = String::new();
                         if header.is_empty() {
                             out.push_str("# S2O CyberDNS local blocklist\n");
@@ -3746,19 +3860,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         std::fs::write(&dns_blocklist, out)?;
                     }
-                    println!(
-                        "  dns      : raw={raw} unique={} dups={dups} → {}",
-                        unique_lines.len(),
-                        dns_blocklist.display()
-                    );
-                } else {
+                    if !json {
+                        println!(
+                            "  dns      : raw={dns_raw} unique={dns_unique} dups={dns_dups} → {}",
+                            dns_blocklist.display()
+                        );
+                    }
+                } else if !json {
                     println!("  dns      : missing {}", dns_blocklist.display());
                 }
             } else {
-                println!("  dns      : skipped (--no-dns-dedupe)");
+                dns_skipped = true;
+                if !json {
+                    println!("  dns      : skipped (--no-dns-dedupe)");
+                }
             }
 
-            if apply {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "apply": apply,
+                        "sessions": {
+                            "before": before_s,
+                            "removed": removed_s,
+                            "path": sessions.display().to_string(),
+                        },
+                        "fleet": {
+                            "skipped": fleet_skipped,
+                            "before": fleet_before,
+                            "removed": fleet_removed,
+                            "stale_minutes": fleet_stale_minutes,
+                        },
+                        "events": {
+                            "size": events_size,
+                            "would_rotate": events_would_rotate,
+                            "rotated": events_rotated,
+                            "max_bytes": rotate_max_bytes,
+                        },
+                        "ioc": {
+                            "skipped": ioc_skipped,
+                            "before": ioc_before,
+                            "removed": ioc_removed,
+                            "older_days": ioc_older_days,
+                        },
+                        "dns": {
+                            "skipped": dns_skipped,
+                            "raw": dns_raw,
+                            "unique": dns_unique,
+                            "dups": dns_dups,
+                        },
+                    }))?
+                );
+            } else if apply {
                 println!("{}", "[aegis] cleanup applied".green().bold());
             } else {
                 println!("[aegis] cleanup dry-run complete (use --apply)");

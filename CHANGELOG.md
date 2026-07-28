@@ -156,6 +156,9 @@
 - CyberEDR `processes --json`; Gate `audit --json` + `jwt mint|verify --json`
 - Mesh `peers show` / `peers set` (endpoint/allowed-ips/keepalive); DNS `system-dns show --json`
 - `aegis fleet tag-add|tag-remove` host tag mutators
+- Defender `scan --json` + `patterns test --json` + `yara test --json`
+- `aegis emit --json` + `selftest --json` + `cleanup --json`
+- Cyberwall `apply --json` (incl. dry-run plan)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
