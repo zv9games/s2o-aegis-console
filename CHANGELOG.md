@@ -114,6 +114,9 @@
 - ThreatGrid `doctor` + `remove` (dry-run/`--apply`); `s2o-ioc` remove-by-value
 - CyberLog `doctor` (JSONL size/parse sample/product mix)
 - `aegis health` probe for aegisd `/health` (+ optional `/status` `/metrics`)
+- `aegis policy validate` (pack shape + soft path checks; no apply)
+- CyberDNS `export` (json/csv/text) + `dedupe` for block/allow lists
+- Cyberwall `rules --managed` / `--json` / `--limit`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

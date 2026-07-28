@@ -407,6 +407,12 @@ enum PolicyCmd {
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
     },
+    /// Validate a policy pack JSON without applying (shape + soft path checks)
+    Validate {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     Example {
         /// wall | edge
         #[arg(long, default_value = "edge")]
@@ -1857,6 +1863,156 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PolicyDocument::example_edge_pack()
                 };
                 println!("{}", serde_json::to_string_pretty(&doc)?);
+            }
+            PolicyCmd::Validate { path, json } => {
+                use s2o_schema::POLICY_SCHEMA_VERSION;
+                let mut issues: Vec<String> = Vec::new();
+                let mut warns: Vec<String> = Vec::new();
+                if !path.exists() {
+                    eprintln!("[aegis] missing policy file {}", path.display());
+                    std::process::exit(2);
+                }
+                let text = std::fs::read_to_string(&path)?;
+                let doc: PolicyDocument = match serde_json::from_str(&text) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("[aegis] policy JSON invalid: {e}");
+                        std::process::exit(2);
+                    }
+                };
+                if doc.name.trim().is_empty() {
+                    issues.push("name is empty".into());
+                }
+                if doc.schema_version.is_empty() {
+                    issues.push("schema_version is empty".into());
+                } else if !doc.schema_version.starts_with('0')
+                    && doc.schema_version != POLICY_SCHEMA_VERSION
+                {
+                    warns.push(format!(
+                        "schema_version '{}' (suite expects {})",
+                        doc.schema_version, POLICY_SCHEMA_VERSION
+                    ));
+                }
+                let mut fragments = 0u32;
+                if let Some(ref fw) = doc.firewall {
+                    fragments += 1;
+                    if fw.enabled.is_none()
+                        && fw.outbound_block.is_none()
+                        && fw.rules.is_empty()
+                    {
+                        warns.push("firewall: empty intent (no enabled/outbound/rules)".into());
+                    }
+                    for (i, r) in fw.rules.iter().enumerate() {
+                        if r.name.trim().is_empty() {
+                            issues.push(format!("firewall.rules[{i}]: empty name"));
+                        }
+                        let act = r.action.to_ascii_lowercase();
+                        if act != "allow" && act != "block" {
+                            issues.push(format!(
+                                "firewall.rules[{i}]: action must be allow|block (got {})",
+                                r.action
+                            ));
+                        }
+                    }
+                }
+                if let Some(ref dns) = doc.dns {
+                    fragments += 1;
+                    let bl = dns
+                        .blocklist_path
+                        .as_deref()
+                        .unwrap_or(".aegis/dns-blocklist.txt");
+                    if !Path::new(bl).exists()
+                        && dns.block_domains.is_empty()
+                        && dns.allow_domains.is_empty()
+                    {
+                        warns.push(format!(
+                            "dns: blocklist path '{bl}' missing and no domains listed"
+                        ));
+                    }
+                    for d in dns
+                        .block_domains
+                        .iter()
+                        .chain(dns.allow_domains.iter())
+                    {
+                        if d.trim().is_empty() {
+                            issues.push("dns: empty domain entry".into());
+                        }
+                    }
+                }
+                if let Some(ref intel) = doc.intel {
+                    fragments += 1;
+                    if intel.sync_blocklist {
+                        let bl = intel
+                            .blocklist_path
+                            .as_deref()
+                            .unwrap_or(".aegis/dns-blocklist.txt");
+                        if !Path::new(bl).exists() {
+                            warns.push(format!(
+                                "intel: sync_blocklist true but '{bl}' missing"
+                            ));
+                        }
+                    }
+                }
+                if let Some(ref p) = doc.posture {
+                    fragments += 1;
+                    if let Some(ms) = p.min_score {
+                        if ms > 100 {
+                            issues.push(format!("posture.min_score {ms} > 100"));
+                        }
+                    }
+                }
+                if let Some(ref g) = doc.gate {
+                    fragments += 1;
+                    if let Some(ms) = g.min_score {
+                        if ms > 100 {
+                            issues.push(format!("gate.min_score {ms} > 100"));
+                        }
+                    }
+                    if let Some(ref cp) = g.config_path {
+                        if !Path::new(cp).exists() {
+                            warns.push(format!(
+                                "gate.config_path '{cp}' missing (created on gate init/serve)"
+                            ));
+                        }
+                    }
+                }
+                if fragments == 0 {
+                    issues.push("no policy fragments (firewall/dns/intel/posture/gate)".into());
+                }
+                let ok = issues.is_empty();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "ok": ok,
+                            "name": doc.name,
+                            "schema_version": doc.schema_version,
+                            "fragments": fragments,
+                            "issues": issues,
+                            "warnings": warns,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[aegis] policy validate {} name={} fragments={fragments}",
+                        path.display(),
+                        doc.name
+                    );
+                    for w in &warns {
+                        println!("  {} {w}", "WARN".yellow().bold());
+                    }
+                    if ok {
+                        println!("{}", "  OK — no blocking issues".green().bold());
+                    } else {
+                        for i in &issues {
+                            println!("  {} {i}", "ISSUE".red().bold());
+                        }
+                    }
+                }
+                if !ok {
+                    std::process::exit(3);
+                }
             }
             PolicyCmd::Apply { path, event_log } => {
                 let doc = load_policy_file(&path)?;

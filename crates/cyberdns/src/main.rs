@@ -121,6 +121,26 @@ enum Commands {
         #[arg(long)]
         allow: bool,
     },
+    /// Export blocklist or allowlist as json/csv/text
+    Export {
+        /// block | allow
+        #[arg(long, default_value = "block")]
+        list: String,
+        /// json | csv | text
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Rewrite list file without duplicate domains (dry-run by default)
+    Dedupe {
+        /// block | allow
+        #[arg(long, default_value = "block")]
+        list: String,
+        /// Actually rewrite the file
+        #[arg(long)]
+        apply: bool,
+    },
     /// Validate lists, overlap, IOC, optional DoH probe
     Doctor {
         /// Resolve example.com via DoH chain
@@ -277,6 +297,118 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("{d}");
                     }
                 }
+            }
+        }
+        Commands::Export { list, format, out } => {
+            let allow = list.eq_ignore_ascii_case("allow")
+                || list.eq_ignore_ascii_case("allowlist");
+            let path = if allow {
+                &cli.allowlist
+            } else {
+                &cli.blocklist
+            };
+            let set = if allow {
+                load_allowlist(path)?
+            } else {
+                load_blocklist(path)?
+            };
+            let kind = if allow { "allow" } else { "block" };
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from("list,domain\n");
+                for d in &set {
+                    s.push_str(&format!("{kind},{d}\n"));
+                }
+                s
+            } else if format.eq_ignore_ascii_case("text") {
+                let mut s = String::new();
+                for d in &set {
+                    s.push_str(d);
+                    s.push('\n');
+                }
+                s
+            } else {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "list": kind,
+                    "path": path.display().to_string(),
+                    "count": set.len(),
+                    "domains": set.iter().cloned().collect::<Vec<_>>(),
+                }))?
+            };
+            if let Some(p) = out {
+                if let Some(parent) = p.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&p, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] exported {} {} domain(s) → {}",
+                        set.len(),
+                        kind,
+                        p.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Commands::Dedupe { list, apply } => {
+            let allow = list.eq_ignore_ascii_case("allow")
+                || list.eq_ignore_ascii_case("allowlist");
+            let path = if allow {
+                cli.allowlist.clone()
+            } else {
+                cli.blocklist.clone()
+            };
+            if !path.exists() {
+                eprintln!("[cyberdns] missing {}", path.display());
+                std::process::exit(2);
+            }
+            let (raw_lines, dups, _) = list_line_stats(&path);
+            let set = if allow {
+                load_allowlist(&path)?
+            } else {
+                load_blocklist(&path)?
+            };
+            let unique = set.len();
+            if dups == 0 && raw_lines == unique {
+                println!(
+                    "[cyberdns] {} already unique ({} domains)",
+                    path.display(),
+                    unique
+                );
+            } else if !apply {
+                println!(
+                    "[cyberdns] dedupe dry-run {}: raw_lines={raw_lines} unique={unique} dups={dups} (use --apply)",
+                    path.display()
+                );
+            } else if allow {
+                save_allowlist(&path, &set)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] dedupe APPLIED {} → {unique} domains (removed {dups} dups)",
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                save_blocklist(&path, &set)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] dedupe APPLIED {} → {unique} domains (removed {dups} dups)",
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
             }
         }
         Commands::Doctor { probe_doh, json } => {

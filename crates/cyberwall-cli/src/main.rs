@@ -40,7 +40,15 @@ enum Commands {
     /// Disengage outbound isolation
     Unlock,
     /// List active OS firewall filtering rules
-    Rules,
+    Rules {
+        /// Only managed S2O-Aegis-* rules
+        #[arg(long)]
+        managed: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
     /// Validate OS firewall status + managed S2O-Aegis rules (read-only)
     Doctor {
         #[arg(long)]
@@ -423,44 +431,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Commands::Rules => {
+        Commands::Rules {
+            managed,
+            json,
+            limit,
+        } => {
             let rules = cyberwall_core::FirewallEngine::list_rules(engine.as_ref()).await?;
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "            S2O Cyberwall — OS firewall rules            "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(" Count: {}", rules.len());
-            let managed: Vec<_> = rules
+            let filtered: Vec<_> = if managed {
+                rules
+                    .iter()
+                    .filter(|r| r.name.starts_with(cyberwall_core::MANAGED_RULE_PREFIX))
+                    .cloned()
+                    .collect()
+            } else {
+                rules.clone()
+            };
+            let managed_n = rules
                 .iter()
                 .filter(|r| r.name.starts_with(cyberwall_core::MANAGED_RULE_PREFIX))
-                .collect();
-            if !managed.is_empty() {
+                .count();
+            let show: Vec<_> = filtered.into_iter().take(limit.max(1)).collect();
+            if json {
                 println!(
-                    " Managed ({}*): {}",
-                    cyberwall_core::MANAGED_RULE_PREFIX,
-                    managed.len()
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "total": rules.len(),
+                        "managed_total": managed_n,
+                        "filter_managed": managed,
+                        "shown": show.len(),
+                        "rules": show,
+                    }))?
                 );
-            }
-            for (idx, rule) in rules.iter().enumerate() {
-                println!("{}. {}", idx + 1, rule.name.bold());
+            } else {
                 println!(
-                    "   enabled={} action={:?} direction={:?}",
-                    rule.enabled, rule.action, rule.direction
+                    "{}",
+                    "=========================================================".cyan()
                 );
                 println!(
                     "{}",
-                    "---------------------------------------------------------".cyan()
+                    if managed {
+                        "     S2O Cyberwall — managed S2O-Aegis rules         "
+                    } else {
+                        "            S2O Cyberwall — OS firewall rules            "
+                    }
+                    .bold()
+                    .green()
                 );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Total OS rules : {}  |  Managed : {}  |  Shown : {}",
+                    rules.len(),
+                    managed_n,
+                    show.len()
+                );
+                for (idx, rule) in show.iter().enumerate() {
+                    let tag = if rule.name.starts_with(cyberwall_core::MANAGED_RULE_PREFIX) {
+                        " [managed]".green().to_string()
+                    } else {
+                        String::new()
+                    };
+                    println!("{}. {}{}", idx + 1, rule.name.bold(), tag);
+                    println!(
+                        "   enabled={} action={:?} direction={:?} port={:?} proto={:?}",
+                        rule.enabled,
+                        rule.action,
+                        rule.direction,
+                        rule.local_port,
+                        rule.protocol
+                    );
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                }
+                let filtered_n = if managed { managed_n } else { rules.len() };
+                if filtered_n > limit {
+                    println!(
+                        " {}",
+                        "(truncated; use --limit or --json for more)".dimmed()
+                    );
+                }
             }
         }
         Commands::Apply { path, dry_run } => {
