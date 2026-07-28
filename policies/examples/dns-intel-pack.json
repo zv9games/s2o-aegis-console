@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-dns-intel-pack",
+  "description": "Seed DNS blocklist + allowlist hygiene + ThreatGrid blocklist sync (no firewall/gate changes)",
+  "dns": {
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "allowlist_path": ".aegis/dns-allowlist.txt",
+    "block_domains": [
+      "malware.test.s2o",
+      "phishing.test.s2o",
+      "c2.lab.s2o"
+    ],
+    "unblock_domains": [],
+    "allow_domains": [
+      "updates.microsoft.com",
+      "cdn.example.com"
+    ],
+    "unallow_domains": []
+  },
+  "intel": {
+    "sync_blocklist": true,
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "ioc_store_path": ".aegis/ioc-store.json"
+  },
+  "posture": {
+    "min_score": 40
+  }
+}

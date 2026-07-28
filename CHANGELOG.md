@@ -136,6 +136,9 @@
 - CyberDefender `rules add-name|add-hash|remove-name|remove-hash`
 - CyberEDR `ps --json`, `drift --json`, `baseline-export` (json/csv)
 - ThreatGrid `import-file` offline IOC load (text/hosts/JSON)
+- `aegis playbook enable|disable <name>` toggle rules in playbooks.json
+- CyberLog `stats --json` + `top --json` for automation
+- Example policy pack `policies/examples/dns-intel-pack.json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

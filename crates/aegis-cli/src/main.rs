@@ -486,6 +486,18 @@ enum PlaybookCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Enable a rule by name
+    Enable {
+        name: String,
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+    },
+    /// Disable a rule by name
+    Disable {
+        name: String,
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+    },
     /// Evaluate playbooks against recent events
     Run {
         #[arg(long, default_value = ".aegis/playbooks.json")]
@@ -2753,6 +2765,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if !ok {
                     std::process::exit(3);
+                }
+            }
+            PlaybookCmd::Enable { name, path } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let mut pb: PlaybookFile =
+                    serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                let Some(rule) = pb
+                    .rules
+                    .iter_mut()
+                    .find(|r| r.name.eq_ignore_ascii_case(&name))
+                else {
+                    eprintln!("[aegis] playbook rule not found: {name}");
+                    std::process::exit(1);
+                };
+                if rule.enabled {
+                    println!("[aegis] rule '{name}' already enabled");
+                } else {
+                    rule.enabled = true;
+                    std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                    println!(
+                        "{}",
+                        format!("[aegis] enabled rule '{name}' → {}", path.display())
+                            .green()
+                            .bold()
+                    );
+                }
+            }
+            PlaybookCmd::Disable { name, path } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let mut pb: PlaybookFile =
+                    serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                let Some(rule) = pb
+                    .rules
+                    .iter_mut()
+                    .find(|r| r.name.eq_ignore_ascii_case(&name))
+                else {
+                    eprintln!("[aegis] playbook rule not found: {name}");
+                    std::process::exit(1);
+                };
+                if !rule.enabled {
+                    println!("[aegis] rule '{name}' already disabled");
+                } else {
+                    rule.enabled = false;
+                    std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                    println!(
+                        "{}",
+                        format!("[aegis] disabled rule '{name}' → {}", path.display())
+                            .yellow()
+                            .bold()
+                    );
                 }
             }
             PlaybookCmd::Run {

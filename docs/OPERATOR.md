@@ -75,8 +75,14 @@ cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
 cargo run -p aegis-cli -- playbook list
 cargo run -p aegis-cli -- playbook validate
+cargo run -p aegis-cli -- playbook disable webhook-on-high-block
+cargo run -p aegis-cli -- playbook enable emit-on-high-block
 cargo run -p aegis-cli -- playbook run              # dry-run (log/dns/emit/ioc_add_attr/…)
 cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist / IOC store etc.
+cargo run -p cybersiem -- stats --since 24h --json
+cargo run -p cybersiem -- top --attr domain --n 5 --json
+cargo run -p aegis-cli -- policy plan policies/examples/dns-intel-pack.json
+cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json
 cargo run -p cyberdns -- doctor
 cargo run -p cyberdns -- doctor --probe-doh
 cargo run -p cyberdns -- check evil.example --json
@@ -184,7 +190,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
-| SIEM | `cybersiem doctor\|search\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
+| SIEM | `cybersiem doctor\|search\|stats --json\|top --json\|alerts\|correlate\|collect\|follow` |
 | Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 | Intel | `cyberintel doctor\|import-file\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|sessions-export\|revoke\|verify` |

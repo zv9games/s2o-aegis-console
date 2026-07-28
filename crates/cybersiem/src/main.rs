@@ -89,6 +89,8 @@ enum Commands {
         /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
         #[arg(long)]
         since: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Recent high/critical (and optional blocked) events
     Alerts {
@@ -122,6 +124,8 @@ enum Commands {
         /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
         #[arg(long)]
         since: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Simple multi-product trail for a domain/hash/string
     Correlate {
@@ -884,6 +888,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             n,
             attr,
             since,
+            json,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
@@ -912,36 +917,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            let print_top = |title: &str, map: BTreeMap<String, usize>| {
+            let top_vec = |map: BTreeMap<String, usize>| {
                 let mut v: Vec<_> = map.into_iter().collect();
                 v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-                println!("-- {title} --");
-                for (k, c) in v.into_iter().take(n) {
-                    println!("  {c:<6} {k}");
-                }
+                v.into_iter()
+                    .take(n)
+                    .map(|(k, c)| serde_json::json!({"key": k, "count": c}))
+                    .collect::<Vec<_>>()
             };
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                format!("  CyberLog top (window={}, n={})", events.len(), n)
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            print_top("products", by_product);
-            print_top("severities", by_sev);
-            print_top(&format!("attr:{attr}"), by_attr);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "window": events.len(),
+                        "n": n,
+                        "attr": attr,
+                        "since": since,
+                        "products": top_vec(by_product),
+                        "severities": top_vec(by_sev),
+                        "attr_top": top_vec(by_attr),
+                    }))?
+                );
+            } else {
+                let print_top = |title: &str, map: BTreeMap<String, usize>| {
+                    let mut v: Vec<_> = map.into_iter().collect();
+                    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    println!("-- {title} --");
+                    for (k, c) in v.into_iter().take(n) {
+                        println!("  {c:<6} {k}");
+                    }
+                };
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!("  CyberLog top (window={}, n={})", events.len(), n)
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                print_top("products", by_product);
+                print_top("severities", by_sev);
+                print_top(&format!("attr:{attr}"), by_attr);
+            }
         }
         Commands::Stats {
             event_log,
             limit,
             since,
+            json,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
@@ -969,39 +998,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .entry(format!("{:?}", e.action).to_ascii_lowercase())
                     .or_default() += 1;
             }
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "          CyberLog — stats                               "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            if let Some(ref s) = since {
-                println!(" Since         : {s}");
-            }
-            println!(" Window events : {}", events.len());
-            println!("-- by product --");
-            for (k, v) in &by_product {
-                println!("  {k:<16} {v}");
-            }
-            println!("-- by severity --");
-            for (k, v) in &by_sev {
-                println!("  {k:<16} {v}");
-            }
-            println!("-- by kind --");
-            for (k, v) in &by_kind {
-                println!("  {k:<16} {v}");
-            }
-            println!("-- by action --");
-            for (k, v) in &by_action {
-                println!("  {k:<16} {v}");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "window": events.len(),
+                        "since": since,
+                        "by_product": by_product,
+                        "by_severity": by_sev,
+                        "by_kind": by_kind,
+                        "by_action": by_action,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "          CyberLog — stats                               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                if let Some(ref s) = since {
+                    println!(" Since         : {s}");
+                }
+                println!(" Window events : {}", events.len());
+                println!("-- by product --");
+                for (k, v) in &by_product {
+                    println!("  {k:<16} {v}");
+                }
+                println!("-- by severity --");
+                for (k, v) in &by_sev {
+                    println!("  {k:<16} {v}");
+                }
+                println!("-- by kind --");
+                for (k, v) in &by_kind {
+                    println!("  {k:<16} {v}");
+                }
+                println!("-- by action --");
+                for (k, v) in &by_action {
+                    println!("  {k:<16} {v}");
+                }
             }
         }
         Commands::Correlate {
