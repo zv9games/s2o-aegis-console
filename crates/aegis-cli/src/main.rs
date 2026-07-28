@@ -41,6 +41,22 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Probe aegisd HTTP health endpoint (default 127.0.0.1:9090)
+    Health {
+        /// Base URL (no path)
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        url: String,
+        /// Also GET /status
+        #[arg(long)]
+        status: bool,
+        /// Also GET /metrics (print first lines)
+        #[arg(long)]
+        metrics: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 3)]
+        timeout_secs: u64,
+    },
     /// Full audit report (status + posture + data files)
     Report {
         #[arg(long)]
@@ -1278,6 +1294,154 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!(" {:<16} {}", m.id.bold(), state_col);
                     println!("                  {}", m.detail);
                 }
+            }
+        }
+        Commands::Health {
+            url,
+            status,
+            metrics,
+            json,
+            timeout_secs,
+        } => {
+            let base = url.trim_end_matches('/');
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
+                .build()?;
+            let health_url = format!("{base}/health");
+            let started = std::time::Instant::now();
+            let health_res = client.get(&health_url).send().await;
+            let ms = started.elapsed().as_millis() as u64;
+
+            let (health_ok, health_code, health_body) = match health_res {
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    let body = r.text().await.unwrap_or_default();
+                    (code == 200, code, body)
+                }
+                Err(e) => (false, 0, e.to_string()),
+            };
+
+            let mut status_body = None;
+            let mut status_code = 0u16;
+            if status {
+                let u = format!("{base}/status");
+                match client.get(&u).send().await {
+                    Ok(r) => {
+                        status_code = r.status().as_u16();
+                        status_body = Some(r.text().await.unwrap_or_default());
+                    }
+                    Err(e) => {
+                        status_body = Some(e.to_string());
+                    }
+                }
+            }
+
+            let mut metrics_body = None;
+            let mut metrics_code = 0u16;
+            if metrics {
+                let u = format!("{base}/metrics");
+                match client.get(&u).send().await {
+                    Ok(r) => {
+                        metrics_code = r.status().as_u16();
+                        metrics_body = Some(r.text().await.unwrap_or_default());
+                    }
+                    Err(e) => {
+                        metrics_body = Some(e.to_string());
+                    }
+                }
+            }
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "base": base,
+                        "health": {
+                            "url": health_url,
+                            "ok": health_ok,
+                            "status": health_code,
+                            "latency_ms": ms,
+                            "body": health_body,
+                        },
+                        "status": status_body.as_ref().map(|b| serde_json::json!({
+                            "status": status_code,
+                            "body": b,
+                        })),
+                        "metrics": metrics_body.as_ref().map(|b| serde_json::json!({
+                            "status": metrics_code,
+                            "body_preview": b.lines().take(20).collect::<Vec<_>>().join("\n"),
+                        })),
+                    }))?
+                );
+            } else {
+                println!("{}", "Aegis health probe".bold().green());
+                println!(" Base   : {base}");
+                if health_ok {
+                    println!(
+                        " {} /health — HTTP {health_code} ({}ms) {}",
+                        "OK".green().bold(),
+                        ms,
+                        health_body.trim().chars().take(80).collect::<String>()
+                    );
+                } else {
+                    println!(
+                        " {} /health — {} ({}ms) {}",
+                        "FAIL".red().bold(),
+                        if health_code == 0 {
+                            "unreachable".into()
+                        } else {
+                            format!("HTTP {health_code}")
+                        },
+                        ms,
+                        health_body.chars().take(120).collect::<String>()
+                    );
+                    println!(
+                        " {}",
+                        "Hint: cargo run -p aegisd -- start".dimmed()
+                    );
+                }
+                if let Some(body) = &status_body {
+                    if status_code == 200 {
+                        println!(
+                            " {} /status — HTTP {status_code}",
+                            "OK".green().bold()
+                        );
+                        // show compact host/phase if JSON
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+                            if let Some(h) = v.get("host_id").and_then(|x| x.as_str()) {
+                                println!("   host_id : {h}");
+                            }
+                            if let Some(p) = v.get("phase").and_then(|x| x.as_str()) {
+                                println!("   phase   : {p}");
+                            }
+                        }
+                    } else {
+                        println!(
+                            " {} /status — HTTP {status_code} {}",
+                            "FAIL".red().bold(),
+                            body.chars().take(80).collect::<String>()
+                        );
+                    }
+                }
+                if let Some(body) = &metrics_body {
+                    if metrics_code == 200 {
+                        println!(
+                            " {} /metrics — HTTP {metrics_code}",
+                            "OK".green().bold()
+                        );
+                        for line in body.lines().take(8) {
+                            println!("   {line}");
+                        }
+                    } else {
+                        println!(
+                            " {} /metrics — HTTP {metrics_code}",
+                            "FAIL".red().bold()
+                        );
+                    }
+                }
+            }
+            if !health_ok {
+                std::process::exit(1);
             }
         }
         Commands::Doctor { json } => {

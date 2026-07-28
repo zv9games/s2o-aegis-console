@@ -191,6 +191,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ DNS doctor/check + EDR doctor + playbook list/validate  
 - ✅ Wall/Defender doctors + filtered `aegis events`  
 - ✅ Gate doctor + fleet doctor + deeper suite doctor  
+- ✅ ThreatGrid doctor/remove + CyberLog doctor + `aegis health` probe  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

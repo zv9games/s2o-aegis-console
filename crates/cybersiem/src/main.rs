@@ -24,6 +24,16 @@ enum Commands {
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
     },
+    /// Validate JSONL event store health (parse/size/window)
+    Doctor {
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Sample last N lines for parse health
+        #[arg(long, default_value_t = 500)]
+        sample: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Live collector: UDP syslog → Aegis JSONL event store
     Collect {
         #[arg(long, default_value = ".aegis/events.jsonl")]
@@ -314,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "JSONL read/export, stats, alerts, top, correlate, --since window, UDP collect"
+                "JSONL read/export, stats, alerts, top, correlate, doctor, --since, UDP collect"
                     .green()
             );
             println!(
@@ -339,6 +349,233 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+        }
+        Commands::Doctor {
+            event_log,
+            sample,
+            json,
+        } => {
+            use std::fs;
+            use std::io::{BufRead, BufReader};
+
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberLog doctor                                "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+
+            if !event_log.exists() {
+                check(
+                    "event log",
+                    false,
+                    true,
+                    &format!("{} missing", event_log.display()),
+                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "ok_count": ok,
+                            "warn_count": warn,
+                            "fail_count": fail,
+                            "checks": notes,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        " Summary: {} ok, {} warn, {} fail",
+                        ok, warn, fail
+                    );
+                }
+                return Ok(());
+            }
+
+            let meta = fs::metadata(&event_log)?;
+            let bytes = meta.len();
+            check(
+                "event log",
+                true,
+                false,
+                &format!("{} ({} bytes)", event_log.display(), bytes),
+            );
+
+            // Line/parse sample: scan all for totals, track bad lines
+            let file = fs::File::open(&event_log)?;
+            let reader = BufReader::new(file);
+            let mut by_product: BTreeMap<String, usize> = BTreeMap::new();
+            let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
+            let mut oldest: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut newest: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut ring: std::collections::VecDeque<String> =
+                std::collections::VecDeque::with_capacity(sample.max(1));
+            for line in reader.lines().flatten() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if ring.len() == sample.max(1) {
+                    ring.pop_front();
+                }
+                ring.push_back(line);
+            }
+            // full line count via store; parse health from trailing sample ring
+            let store = EventStore::open(&event_log)?;
+            let count = store.count().unwrap_or(0);
+            let mut parsed = 0u64;
+            let mut bad = 0u64;
+            for line in &ring {
+                match serde_json::from_str::<AegisEvent>(line) {
+                    Ok(ev) => {
+                        parsed += 1;
+                        *by_product.entry(ev.product.as_str().into()).or_default() += 1;
+                        *by_sev
+                            .entry(format!("{:?}", ev.severity).to_ascii_lowercase())
+                            .or_default() += 1;
+                        oldest = Some(oldest.map_or(ev.ts, |o| o.min(ev.ts)));
+                        newest = Some(newest.map_or(ev.ts, |n| n.max(ev.ts)));
+                    }
+                    Err(_) => bad += 1,
+                }
+            }
+
+            check(
+                "line count",
+                count > 0,
+                true,
+                &format!("{count} non-empty lines"),
+            );
+            check(
+                "sample parse",
+                bad == 0 && parsed > 0,
+                bad > 0,
+                &format!(
+                    "last {} lines: ok={parsed} bad={bad}",
+                    ring.len()
+                ),
+            );
+            if let (Some(o), Some(n)) = (oldest, newest) {
+                check(
+                    "time span (sample)",
+                    true,
+                    false,
+                    &format!("{} → {}", o.to_rfc3339(), n.to_rfc3339()),
+                );
+            }
+
+            // size guidance
+            let mb = bytes as f64 / (1024.0 * 1024.0);
+            check(
+                "size",
+                mb < 50.0,
+                true,
+                &if mb >= 50.0 {
+                    format!("{mb:.1} MiB — consider: aegis rotate")
+                } else {
+                    format!("{mb:.2} MiB")
+                },
+            );
+
+            let top_products: Vec<_> = {
+                let mut v: Vec<_> = by_product.into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1));
+                v.into_iter().take(5).collect()
+            };
+            check(
+                "top products (sample)",
+                true,
+                false,
+                &if top_products.is_empty() {
+                    "(none)".into()
+                } else {
+                    top_products
+                        .iter()
+                        .map(|(k, n)| format!("{k}={n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+            );
+            check(
+                "severities (sample)",
+                true,
+                false,
+                &by_sev
+                    .iter()
+                    .map(|(k, n)| format!("{k}={n}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "path": event_log.display().to_string(),
+                        "bytes": bytes,
+                        "lines": count,
+                        "sample_ok": parsed,
+                        "sample_bad": bad,
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
         }
         Commands::Collect {
             event_log,

@@ -133,6 +133,35 @@ impl IocStore {
         true
     }
 
+    /// Remove entries matching value (and optional kind). Returns count removed.
+    pub fn remove(&mut self, value: &str, kind: Option<IocKind>) -> usize {
+        let v = value.trim();
+        if v.is_empty() {
+            return 0;
+        }
+        let before = self.entries.len();
+        self.entries.retain(|e| {
+            if let Some(k) = kind {
+                if e.kind != k {
+                    return true;
+                }
+                let norm = Self::normalize_value(k, v);
+                e.value != norm && e.value != v
+            } else {
+                // Match any kind where normalized or raw equals
+                let matches = match e.kind {
+                    IocKind::Domain | IocKind::Hash => {
+                        let norm = Self::normalize_value(e.kind, v);
+                        e.value == norm || e.value.eq_ignore_ascii_case(v)
+                    }
+                    IocKind::Ip | IocKind::Url => e.value == v || e.value.eq_ignore_ascii_case(v),
+                };
+                !matches
+            }
+        });
+        before.saturating_sub(self.entries.len())
+    }
+
     pub fn lookup(&self, query: &str) -> Vec<&IocEntry> {
         let q = query.trim().trim_end_matches('.').to_ascii_lowercase();
         let q_raw = query.trim();
@@ -258,6 +287,31 @@ mod tests {
         });
         assert_eq!(s.prune_by_source("openphish"), 1);
         assert_eq!(s.entries.len(), 1);
+    }
+
+    #[test]
+    fn remove_by_value_and_kind() {
+        let mut s = IocStore::default();
+        s.upsert(IocEntry {
+            kind: IocKind::Domain,
+            value: "drop.me".into(),
+            source: "manual".into(),
+            severity: IocSeverity::High,
+            note: None,
+            added_at: Utc::now(),
+        });
+        s.upsert(IocEntry {
+            kind: IocKind::Ip,
+            value: "1.2.3.4".into(),
+            source: "manual".into(),
+            severity: IocSeverity::Medium,
+            note: None,
+            added_at: Utc::now(),
+        });
+        assert_eq!(s.remove("drop.me", Some(IocKind::Domain)), 1);
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.remove("1.2.3.4", None), 1);
+        assert!(s.entries.is_empty());
     }
 
     #[test]

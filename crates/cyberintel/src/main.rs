@@ -94,6 +94,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Validate local IOC store health
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove IOC(s) by value (optional kind filter)
+    Remove {
+        value: String,
+        /// domain|ip|hash|url — omit to match any kind
+        #[arg(long)]
+        kind: Option<String>,
+        /// Actually delete (default dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 fn host_id() -> String {
@@ -219,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "local IOC store, lookup/add/sync, prune, export, stats (capped multi-feed)"
+                "local IOC store, lookup/add/remove/sync, prune, export, stats, doctor"
                     .green()
             );
             println!(
@@ -592,6 +607,284 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{}",
                     "=========================================================".cyan()
+                );
+            }
+        }
+        Commands::Doctor { json } => {
+            use std::collections::BTreeMap;
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      ThreatGrid doctor                                  "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+
+            let store = match IocStore::load(&cli.store) {
+                Ok(s) => {
+                    check(
+                        "store file",
+                        cli.store.exists(),
+                        true,
+                        &format!("{} (schema {})", cli.store.display(), s.version),
+                    );
+                    s
+                }
+                Err(e) => {
+                    check("store file", false, false, &format!("load error: {e}"));
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "fail_count": 1,
+                                "checks": notes,
+                            }))?
+                        );
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            check(
+                "entries",
+                !store.entries.is_empty(),
+                true,
+                &if store.entries.is_empty() {
+                    "empty (run: cyberintel sync --online)".into()
+                } else {
+                    format!("{} total", store.entries.len())
+                },
+            );
+            check(
+                "domains",
+                true,
+                false,
+                &format!("{}", store.count_by_kind(IocKind::Domain)),
+            );
+            check(
+                "ips",
+                true,
+                false,
+                &format!("{}", store.count_by_kind(IocKind::Ip)),
+            );
+            check(
+                "hashes",
+                true,
+                false,
+                &format!("{}", store.count_by_kind(IocKind::Hash)),
+            );
+            check(
+                "urls",
+                true,
+                false,
+                &format!("{}", store.count_by_kind(IocKind::Url)),
+            );
+
+            // Empty values / dups
+            let mut empty = 0u32;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut dups = 0u32;
+            for e in &store.entries {
+                if e.value.trim().is_empty() {
+                    empty += 1;
+                }
+                let key = format!("{:?}:{}", e.kind, e.value);
+                if !seen.insert(key) {
+                    dups += 1;
+                }
+            }
+            check(
+                "data quality",
+                empty == 0 && dups == 0,
+                true,
+                &format!("empty_values={empty} duplicate_keys={dups}"),
+            );
+
+            let mut by_source: BTreeMap<String, usize> = BTreeMap::new();
+            for e in &store.entries {
+                let src = if e.source.is_empty() {
+                    "(empty)".into()
+                } else {
+                    e.source.clone()
+                };
+                *by_source.entry(src).or_default() += 1;
+            }
+            let top_src: Vec<_> = {
+                let mut v: Vec<_> = by_source.into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1));
+                v.into_iter().take(5).collect::<Vec<_>>()
+            };
+            check(
+                "sources",
+                true,
+                false,
+                &top_src
+                    .iter()
+                    .map(|(k, n)| format!("{k}={n}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+
+            // Age: oldest / newest
+            if let (Some(oldest), Some(newest)) = (
+                store.entries.iter().map(|e| e.added_at).min(),
+                store.entries.iter().map(|e| e.added_at).max(),
+            ) {
+                let age_days = (chrono::Utc::now() - oldest).num_days();
+                check(
+                    "age span",
+                    true,
+                    false,
+                    &format!(
+                        "oldest={}d ago newest={}",
+                        age_days,
+                        newest.to_rfc3339()
+                    ),
+                );
+                if age_days > 90 {
+                    check(
+                        "stale IOCs",
+                        false,
+                        true,
+                        "entries older than 90d present (cyberintel prune --older-days 90)",
+                    );
+                }
+            }
+
+            check(
+                "event log",
+                cli.event_log.exists(),
+                true,
+                &format!("{}", cli.event_log.display()),
+            );
+            check(
+                "updated_at",
+                true,
+                false,
+                &store.updated_at.to_rfc3339(),
+            );
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "total": store.entries.len(),
+                        "by_kind": {
+                            "domain": store.count_by_kind(IocKind::Domain),
+                            "ip": store.count_by_kind(IocKind::Ip),
+                            "hash": store.count_by_kind(IocKind::Hash),
+                            "url": store.count_by_kind(IocKind::Url),
+                        },
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
+        }
+        Commands::Remove {
+            value,
+            kind,
+            apply,
+        } => {
+            let filter = kind.as_ref().and_then(|k| parse_kind(k));
+            if kind.is_some() && filter.is_none() {
+                eprintln!("[threatgrid] bad --kind (use domain|ip|hash|url)");
+                std::process::exit(2);
+            }
+            let mut store = IocStore::load(&cli.store)?;
+            let hits = store.lookup(&value);
+            let preview: Vec<_> = hits
+                .iter()
+                .filter(|e| filter.map(|k| e.kind == k).unwrap_or(true))
+                .map(|e| format!("{:?} {} src={}", e.kind, e.value, e.source))
+                .collect();
+            if preview.is_empty() {
+                println!("[threatgrid] no match for '{value}'");
+                std::process::exit(1);
+            }
+            if !apply {
+                println!(
+                    "[threatgrid] remove dry-run: would drop {} entr(y/ies) (use --apply)",
+                    preview.len()
+                );
+                for p in &preview {
+                    println!("  - {p}");
+                }
+            } else {
+                let n = store.remove(&value, filter);
+                store.save(&cli.store)?;
+                println!(
+                    "{}",
+                    format!("[threatgrid] removed {n} entr(y/ies) for '{value}'")
+                        .green()
+                        .bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("ioc remove value={value} n={n}"),
+                    &[
+                        ("value", serde_json::json!(value)),
+                        ("removed", serde_json::json!(n)),
+                    ],
+                    None,
                 );
             }
         }

@@ -111,6 +111,9 @@
 - Gate `doctor` (routes/listen/certs/access log/sessions/posture vs min_score)
 - `aegis fleet doctor` (roster, stale window, desired policy sync, host_id uniqueness)
 - Expanded `aegis doctor` suite matrix + data-file checks (`--json`)
+- ThreatGrid `doctor` + `remove` (dry-run/`--apply`); `s2o-ioc` remove-by-value
+- CyberLog `doctor` (JSONL size/parse sample/product mix)
+- `aegis health` probe for aegisd `/health` (+ optional `/status` `/metrics`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
