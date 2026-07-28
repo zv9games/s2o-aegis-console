@@ -181,6 +181,8 @@
 - `aegisd policy apply|example|reload --json`; `aegis events|watch --json`
 - CyberLog `collect|follow --json` (+ `--max-events` seed/live envelopes)
 - EDR `trace|watch|net-watch --json`; Defender `realtime --json` (honest not-implemented)
+- Defender `watch --json` (seed snapshot / max-blocks); DNS `serve --json --ready-only|--max-queries`
+- Playbook `watch --json` (ready envelope / max-hits)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

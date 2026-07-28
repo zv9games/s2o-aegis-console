@@ -116,6 +116,8 @@ enum Commands {
         /// Include YARA-X in watch scans
         #[arg(long)]
         yara: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// List / restore / purge quarantined files
     Quarantine {
@@ -2331,10 +2333,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             quarantine,
             quarantine_dir,
             yara,
+            json,
         } => {
             let root = PathBuf::from(&path);
             if !root.exists() {
-                eprintln!("[cyberdefender] path not found: {}", root.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "action": "watch",
+                            "error": format!("path not found: {}", root.display()),
+                            "path": root.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cyberdefender] path not found: {}", root.display());
+                }
                 std::process::exit(2);
             }
             let rules = load_rules(&cli.rules);
@@ -2348,23 +2363,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let (patterns, _) = load_patterns(&cli.patterns);
             let yara_eng = if yara {
-                try_load_yara(&cli.yara_dir, true)
+                try_load_yara(&cli.yara_dir, !json)
             } else {
                 None
             };
             if yara && yara_eng.is_none() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "action": "watch",
+                            "error": "yara-x rules failed to load",
+                            "path": root.display().to_string(),
+                        }))?
+                    );
+                }
                 std::process::exit(2);
             }
-            println!(
-                "[cyberdefender] watch {} interval={}ms recursive={} yara-x={} (Ctrl+C to stop)",
-                root.display(),
-                interval_ms,
-                recursive,
-                yara_eng
-                    .as_ref()
-                    .map(|e| e.rule_count.to_string())
-                    .unwrap_or_else(|| "off".into())
-            );
+            if !json {
+                println!(
+                    "[cyberdefender] watch {} interval={}ms recursive={} yara-x={} (Ctrl+C to stop)",
+                    root.display(),
+                    interval_ms,
+                    recursive,
+                    yara_eng
+                        .as_ref()
+                        .map(|e| e.rule_count.to_string())
+                        .unwrap_or_else(|| "off".into())
+                );
+            }
             let mut seen: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
             // seed without scanning
             if let Ok(targets) = collect_targets(&root, recursive, max_files) {
@@ -2374,7 +2402,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            println!("[cyberdefender] seed {} files", seen.len());
+            if !json {
+                println!("[cyberdefender] seed {} files", seen.len());
+            }
+            // JSON seed snapshot (no poll hang) when max_blocks=0
+            if json && max_blocks == 0 {
+                let files: Vec<_> = seen
+                    .keys()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "watch",
+                        "mode": "seed_snapshot",
+                        "path": root.display().to_string(),
+                        "interval_ms": interval_ms,
+                        "recursive": recursive,
+                        "yara": yara,
+                        "seed": seen.len(),
+                        "files": files,
+                        "note": "pass --max-blocks N to poll until N blocks",
+                    }))?
+                );
+                return Ok(());
+            }
             emit(
                 &cli.event_log,
                 EventAction::Observed,
@@ -2388,6 +2441,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
             );
             let mut blocks = 0u32;
+            let mut block_hits = Vec::new();
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(500))).await;
                 let Ok(targets) = collect_targets(&root, recursive, max_files) else {
@@ -2403,7 +2457,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     max_bytes: 2 * 1024 * 1024,
                     quarantine,
                     quarantine_dir: &quarantine_dir,
-                    quiet: false,
+                    quiet: json,
                 };
                 let mut live = BTreeMap::new();
                 for t in targets {
@@ -2415,16 +2469,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Some(old) => *old != sig,
                     };
                     if changed {
-                        println!(
-                            "{} {}",
-                            " SCAN ".cyan().bold(),
-                            t.display()
-                        );
+                        if !json {
+                            println!(
+                                "{} {}",
+                                " SCAN ".cyan().bold(),
+                                t.display()
+                            );
+                        }
                         let st = scan_one(&t, &ctx, true);
                         if st.blocked > 0 {
                             blocks += st.blocked;
+                            if json {
+                                block_hits.push(serde_json::json!({
+                                    "path": st.path,
+                                    "verdict": st.verdict,
+                                    "rule": st.rule,
+                                    "sha256": st.sha256,
+                                    "quarantined": st.quarantined_path,
+                                }));
+                            }
                             if max_blocks > 0 && blocks >= max_blocks {
-                                println!("[cyberdefender] watch max_blocks={max_blocks} reached");
+                                if json {
+                                    println!(
+                                        "{}",
+                                        serde_json::to_string_pretty(&serde_json::json!({
+                                            "ok": true,
+                                            "action": "watch",
+                                            "mode": "max_blocks",
+                                            "path": root.display().to_string(),
+                                            "seed": seen.len(),
+                                            "max_blocks": max_blocks,
+                                            "blocks": blocks,
+                                            "hits": block_hits,
+                                        }))?
+                                    );
+                                } else {
+                                    println!("[cyberdefender] watch max_blocks={max_blocks} reached");
+                                }
                                 return Ok(());
                             }
                         }

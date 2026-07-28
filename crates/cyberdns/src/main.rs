@@ -209,6 +209,14 @@ enum Commands {
         /// Print query counters every N seconds (0 = off)
         #[arg(long, default_value_t = 30)]
         stats_secs: u64,
+        /// Exit after N queries (0 = forever)
+        #[arg(long, default_value_t = 0)]
+        max_queries: u64,
+        /// Bind, report ready, and exit (automation bind check; no serve loop)
+        #[arg(long)]
+        ready_only: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Point OS resolver at local proxy / restore (hijack-lite T0)
     SystemDns {
@@ -1206,7 +1214,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Serve { listen, stats_secs } => {
+        Commands::Serve {
+            listen,
+            stats_secs,
+            max_queries,
+            ready_only,
+            json,
+        } => {
             serve::run_proxy(
                 &listen,
                 &cli.blocklist,
@@ -1215,6 +1229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &cli.event_log,
                 stats_secs,
                 doh_eps,
+                max_queries,
+                ready_only,
+                json,
             )
             .await?;
         }

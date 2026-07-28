@@ -632,6 +632,12 @@ enum PlaybookCmd {
         /// Actually perform actions (default is dry-run)
         #[arg(long)]
         apply: bool,
+        /// Exit after N rule hits (0 = forever)
+        #[arg(long, default_value_t = 0)]
+        max_hits: u32,
+        /// With --json and max_hits=0: print ready/seed envelope and exit
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -3464,25 +3470,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 event_log,
                 interval_ms,
                 apply,
+                max_hits,
+                json,
             } => {
                 if !path.exists() {
-                    eprintln!(
-                        "[aegis] missing {} — run: aegis playbook init",
-                        path.display()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "playbook-watch",
+                                "error": format!("missing {} — run: aegis playbook init", path.display()),
+                                "path": path.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        eprintln!(
+                            "[aegis] missing {} — run: aegis playbook init",
+                            path.display()
+                        );
+                    }
                     std::process::exit(1);
                 }
                 let pb: PlaybookFile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
                 let mode = if apply { "APPLY" } else { "DRY-RUN" };
-                println!(
-                    "[aegis] playbook watch {} on {} (Ctrl+C to stop)",
-                    mode,
-                    event_log.display()
-                );
+                let enabled = pb.rules.iter().filter(|r| r.enabled).count();
+                if json && max_hits == 0 {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "playbook-watch",
+                            "mode": "ready",
+                            "path": path.display().to_string(),
+                            "event_log": event_log.display().to_string(),
+                            "apply": apply,
+                            "run_mode": mode,
+                            "interval_ms": interval_ms,
+                            "rules_total": pb.rules.len(),
+                            "rules_enabled": enabled,
+                            "rules": pb.rules.iter().map(|r| serde_json::json!({
+                                "name": r.name,
+                                "enabled": r.enabled,
+                            })).collect::<Vec<_>>(),
+                            "note": "pass --max-hits N to poll until N rule matches",
+                        }))?
+                    );
+                    return Ok(());
+                }
+                if !json {
+                    println!(
+                        "[aegis] playbook watch {} on {} (Ctrl+C to stop)",
+                        mode,
+                        event_log.display()
+                    );
+                }
                 let store = EventStore::open(&event_log)?;
                 let mut offset = store.byte_len().unwrap_or(0);
                 // de-dupe rule+event pairs within process lifetime
                 let mut seen: HashSet<String> = HashSet::new();
+                let mut hits = 0u32;
+                let mut hit_rows = Vec::new();
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
                     // reload playbooks each tick so edits apply live
@@ -3502,13 +3550,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !seen.insert(key) {
                                 continue;
                             }
-                            println!(
-                                "  rule={} event={} | {}",
-                                rule.name.yellow(),
-                                ev.id,
-                                ev.message
-                            );
+                            if json {
+                                hit_rows.push(serde_json::json!({
+                                    "rule": rule.name,
+                                    "event_id": ev.id,
+                                    "message": ev.message,
+                                    "product": format!("{:?}", ev.product),
+                                    "severity": format!("{:?}", ev.severity),
+                                    "apply": apply,
+                                }));
+                            } else {
+                                println!(
+                                    "  rule={} event={} | {}",
+                                    rule.name.yellow(),
+                                    ev.id,
+                                    ev.message
+                                );
+                            }
                             run_playbook_actions(rule, &ev, apply).await?;
+                            hits += 1;
+                            if max_hits > 0 && hits >= max_hits {
+                                if json {
+                                    println!(
+                                        "{}",
+                                        serde_json::to_string_pretty(&serde_json::json!({
+                                            "ok": true,
+                                            "action": "playbook-watch",
+                                            "mode": "max_hits",
+                                            "path": path.display().to_string(),
+                                            "event_log": event_log.display().to_string(),
+                                            "apply": apply,
+                                            "max_hits": max_hits,
+                                            "hits": hits,
+                                            "matches": hit_rows,
+                                        }))?
+                                    );
+                                } else {
+                                    println!("[aegis] playbook watch max_hits={max_hits} reached");
+                                }
+                                return Ok(());
+                            }
                         }
                     }
                 }

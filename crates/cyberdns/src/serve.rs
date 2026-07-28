@@ -45,6 +45,20 @@ impl ProxyStats {
             self.encode_err.load(Ordering::Relaxed),
         )
     }
+
+    pub fn snapshot_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "queries": self.queries.load(Ordering::Relaxed),
+            "blocked": self.blocked.load(Ordering::Relaxed),
+            "allowlisted": self.allowlisted.load(Ordering::Relaxed),
+            "allowed": self.allowed.load(Ordering::Relaxed),
+            "doh_ok": self.doh_ok.load(Ordering::Relaxed),
+            "doh_fail": self.doh_fail.load(Ordering::Relaxed),
+            "doh_fallback": self.doh_fallback.load(Ordering::Relaxed),
+            "other_qtype": self.other_qtype.load(Ordering::Relaxed),
+            "encode_err": self.encode_err.load(Ordering::Relaxed),
+        })
+    }
 }
 
 fn load_deny_set(blocklist_path: &Path, ioc_path: &Path) -> BTreeSet<String> {
@@ -147,6 +161,9 @@ pub async fn run_proxy(
     event_log: &Path,
     stats_interval_secs: u64,
     doh_endpoints: Vec<String>,
+    max_queries: u64,
+    ready_only: bool,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let set = Arc::new(RwLock::new(load_deny_set(blocklist_path, ioc_path)));
     let allow = Arc::new(RwLock::new(load_allow_set(allowlist_path)));
@@ -156,7 +173,24 @@ pub async fn run_proxy(
     let ioc_path = ioc_path.to_path_buf();
     let event_log = event_log.to_path_buf();
 
-    let sock = UdpSocket::bind(listen).await?;
+    let sock = match UdpSocket::bind(listen).await {
+        Ok(s) => s,
+        Err(e) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "serve",
+                        "listen": listen,
+                        "error": format!("bind failed: {e}"),
+                    }))?
+                );
+            }
+            return Err(e.into());
+        }
+    };
+    let local = sock.local_addr().ok();
     let doh_eps = if doh_endpoints.is_empty() {
         doh::DEFAULT_DOH_ENDPOINTS
             .iter()
@@ -165,15 +199,48 @@ pub async fn run_proxy(
     } else {
         doh_endpoints
     };
-    println!(
-        "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH multi-resolver)"
-    );
-    println!("[cyberdns] DoH chain: {}", doh_eps.join(" → "));
-    println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
-    if stats_interval_secs > 0 {
-        println!("[cyberdns] stats every {stats_interval_secs}s");
+    let deny_count = set.read().await.len();
+    let allow_count = allow.read().await.len();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "action": "serve",
+                "ready": true,
+                "listen": listen,
+                "local_addr": local.map(|a| a.to_string()),
+                "doh": doh_eps,
+                "blocklist": blocklist_path.display().to_string(),
+                "allowlist": allowlist_path.display().to_string(),
+                "deny_entries": deny_count,
+                "allow_entries": allow_count,
+                "max_queries": max_queries,
+                "ready_only": ready_only,
+                "stats_secs": stats_interval_secs,
+            }))?
+        );
+    } else {
+        println!(
+            "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH multi-resolver)"
+        );
+        println!("[cyberdns] DoH chain: {}", doh_eps.join(" → "));
+        println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
+        if stats_interval_secs > 0 {
+            println!("[cyberdns] stats every {stats_interval_secs}s");
+        }
+        if max_queries > 0 {
+            println!("[cyberdns] max_queries={max_queries}");
+        }
+        if ready_only {
+            println!("[cyberdns] ready-only: bound OK, exiting");
+            return Ok(());
+        }
+        println!("[cyberdns] Ctrl+C to stop");
     }
-    println!("[cyberdns] Ctrl+C to stop");
+    if ready_only {
+        return Ok(());
+    }
 
     let set_reload = set.clone();
     let allow_reload = allow.clone();
@@ -189,7 +256,7 @@ pub async fn run_proxy(
         }
     });
 
-    if stats_interval_secs > 0 {
+    if stats_interval_secs > 0 && !json {
         let st = stats.clone();
         let secs = stats_interval_secs;
         tokio::spawn(async move {
@@ -303,7 +370,31 @@ pub async fn run_proxy(
         };
 
         if let Err(e) = sock.send_to(&reply_bytes, peer).await {
-            eprintln!("[cyberdns] send_to {peer}: {e}");
+            if !json {
+                eprintln!("[cyberdns] send_to {peer}: {e}");
+            }
+        }
+        let qn = stats.queries.load(Ordering::Relaxed);
+        if max_queries > 0 && qn >= max_queries {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "serve",
+                        "mode": "max_queries",
+                        "listen": listen,
+                        "max_queries": max_queries,
+                        "stats": stats.snapshot_json(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "[cyberdns] max_queries={max_queries} reached ({})",
+                    stats.snapshot_line()
+                );
+            }
+            return Ok(());
         }
     }
 }

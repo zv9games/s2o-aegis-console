@@ -186,6 +186,10 @@ cargo run -p cyberedr -- trace --json
 cargo run -p cyberedr -- watch --json
 cargo run -p cyberedr -- net-watch --json
 cargo run -p cyberdefender -- realtime status --json
+cargo run -p cyberdefender -- watch . --json
+cargo run -p cyberdns -- serve --ready-only --json
+cargo run -p cyberdns -- serve --max-queries 1 --json
+cargo run -p aegis-cli -- playbook watch --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json
