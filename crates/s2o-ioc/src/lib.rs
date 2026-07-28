@@ -192,6 +192,30 @@ impl IocStore {
         }
         Ok(n)
     }
+
+    /// Remove entries older than `older_days` by `added_at`. Returns removed count.
+    /// `older_days == 0` removes nothing (safety; use filter_source for wipe by source).
+    pub fn prune_older_than(&mut self, older_days: i64) -> usize {
+        if older_days <= 0 {
+            return 0;
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(older_days);
+        let before = self.entries.len();
+        self.entries.retain(|e| e.added_at >= cutoff);
+        before.saturating_sub(self.entries.len())
+    }
+
+    /// Remove entries whose source matches (case-insensitive). Returns removed count.
+    pub fn prune_by_source(&mut self, source: &str) -> usize {
+        let src = source.trim().to_ascii_lowercase();
+        if src.is_empty() {
+            return 0;
+        }
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| e.source.to_ascii_lowercase() != src);
+        before.saturating_sub(self.entries.len())
+    }
 }
 
 pub fn default_store_path() -> PathBuf {
@@ -201,6 +225,40 @@ pub fn default_store_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prune_older_and_by_source() {
+        let mut s = IocStore::default();
+        s.upsert(IocEntry {
+            kind: IocKind::Domain,
+            value: "old.evil".into(),
+            source: "urlhaus".into(),
+            severity: IocSeverity::High,
+            note: None,
+            added_at: Utc::now() - chrono::Duration::days(90),
+        });
+        s.upsert(IocEntry {
+            kind: IocKind::Domain,
+            value: "new.evil".into(),
+            source: "manual".into(),
+            severity: IocSeverity::High,
+            note: None,
+            added_at: Utc::now(),
+        });
+        assert_eq!(s.prune_older_than(30), 1);
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].value, "new.evil");
+        s.upsert(IocEntry {
+            kind: IocKind::Domain,
+            value: "feed.evil".into(),
+            source: "openphish".into(),
+            severity: IocSeverity::High,
+            note: None,
+            added_at: Utc::now(),
+        });
+        assert_eq!(s.prune_by_source("openphish"), 1);
+        assert_eq!(s.entries.len(), 1);
+    }
 
     #[test]
     fn domain_suffix_match() {

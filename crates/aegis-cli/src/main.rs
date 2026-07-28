@@ -126,6 +126,24 @@ enum Commands {
         #[arg(long, default_value_t = 40)]
         min_posture: u32,
     },
+    /// Housekeeping: session GC, optional fleet prune, event log rotate check
+    Cleanup {
+        #[arg(long, default_value = ".aegis/sessions.json")]
+        sessions: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        /// Fleet stale window minutes (0 = skip fleet prune)
+        #[arg(long, default_value_t = 10080)]
+        fleet_stale_minutes: i64,
+        /// Rotate event log if over this many bytes (0 = skip)
+        #[arg(long, default_value_t = 10 * 1024 * 1024)]
+        rotate_max_bytes: u64,
+        /// Actually mutate stores (default dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
     /// First-time bootstrap of .aegis data + starter policy/playbooks/gate
     Setup {
         #[arg(long, default_value = ".aegis")]
@@ -1694,6 +1712,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
             println!("{}", "SELFTEST PASS".green().bold());
+        }
+        Commands::Cleanup {
+            sessions,
+            fleet,
+            event_log,
+            fleet_stale_minutes,
+            rotate_max_bytes,
+            apply,
+        } => {
+            use s2o_session::SessionStore;
+            println!(
+                "{}",
+                format!(
+                    "Aegis cleanup ({})",
+                    if apply { "APPLY" } else { "dry-run" }
+                )
+                .bold()
+                .green()
+            );
+
+            // Sessions GC
+            let mut sess = SessionStore::load(&sessions);
+            let before_s = sess.sessions.len();
+            let removed_s = if apply {
+                let n = sess.gc();
+                if n > 0 || sessions.exists() {
+                    sess.save(&sessions)?;
+                }
+                n
+            } else {
+                // dry-run: count non-active
+                let active = sess.active().count();
+                before_s.saturating_sub(active)
+            };
+            println!(
+                "  sessions : would/did remove {removed_s} of {before_s} → {}",
+                sessions.display()
+            );
+
+            // Fleet prune
+            if fleet_stale_minutes > 0 {
+                let mut fl = FleetStore::load(&fleet);
+                let before_f = fl.hosts.len();
+                let removed = if apply {
+                    let r = fl.prune_stale(fleet_stale_minutes);
+                    fl.save(&fleet)?;
+                    r.len()
+                } else {
+                    let mut probe = fl.clone();
+                    probe.prune_stale(fleet_stale_minutes).len()
+                };
+                println!(
+                    "  fleet    : would/did remove {removed} of {before_f} (stale>{fleet_stale_minutes}m) → {}",
+                    fleet.display()
+                );
+            } else {
+                println!("  fleet    : skipped (--fleet-stale-minutes 0)");
+            }
+
+            // Event log size / rotate
+            if event_log.exists() {
+                let meta = std::fs::metadata(&event_log)?;
+                let len = meta.len();
+                if rotate_max_bytes > 0 && len >= rotate_max_bytes {
+                    if apply {
+                        let store = EventStore::open_with_rotation(
+                            &event_log,
+                            rotate_max_bytes,
+                            5,
+                        )?;
+                        let rotated = store.rotate_if_needed()?;
+                        println!(
+                            "  events   : size={len} max={rotate_max_bytes} rotated={rotated} → {}",
+                            event_log.display()
+                        );
+                    } else {
+                        println!(
+                            "  events   : size={len} >= max={rotate_max_bytes} (would rotate) → {}",
+                            event_log.display()
+                        );
+                    }
+                } else {
+                    println!(
+                        "  events   : size={len} (under max={rotate_max_bytes}) → {}",
+                        event_log.display()
+                    );
+                }
+            } else {
+                println!("  events   : missing {}", event_log.display());
+            }
+
+            if apply {
+                println!("{}", "[aegis] cleanup applied".green().bold());
+            } else {
+                println!("[aegis] cleanup dry-run complete (use --apply)");
+            }
         }
         Commands::Fleet { command } => match command {
             FleetCmd::Enroll {

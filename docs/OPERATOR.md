@@ -25,6 +25,11 @@ cargo run -p aegis-cli -- playbook init
 cargo run -p aegis-cli -- playbook run              # dry-run
 cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist etc.
 cargo run -p aegis-cli -- selftest
+cargo run -p aegis-cli -- cleanup              # dry-run sessions/fleet/events hygiene
+cargo run -p aegis-cli -- cleanup --apply
+cargo run -p cyberintel -- export --format csv --out .aegis/ioc.csv --limit 1000
+cargo run -p cyberintel -- prune --older-days 90 --source openphish   # dry-run
+cargo run -p cyberintel -- prune --older-days 90 --apply
 cargo run -p aegis-cli -- backup
 cargo run -p aegis-cli -- restore .aegis-backup-XXXX.zip --force
 ```
@@ -111,7 +116,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem stats\|alerts\|top\|correlate\|collect\|follow` |
-| Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
+| Intel | `cyberintel sync\|prune\|export\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna serve\|access-stats\|oauth\|jwt` |

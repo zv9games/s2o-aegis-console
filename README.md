@@ -45,7 +45,7 @@ Docs: [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PHASE1.md](docs/PHASE1.md) · 
 | 3 | CyberDefender | `cyberdefender` | **partial** — hash/yara + quarantine list/restore + IOC |
 | 4 | CyberEDR | `cyberedr` | **partial** — TCP + listen + net-watch + process/baseline + heuristics |
 | 5 | CyberLog | `cybersiem` | **partial** — JSONL stats/alerts/top + UDP syslog collect |
-| 6 | ThreatGrid | `cyberintel` | **partial** — local IOC + capped multi-feed online sync |
+| 6 | ThreatGrid | `cyberintel` | **partial** — local IOC + multi-feed sync + prune/export |
 | 7 | CyberID | `cyberid` | **partial** — weighted posture score + gate |
 | 8 | CyberMesh | `cybermesh` | **partial** — X25519 keys + conf/peers + doctor; optional system wg |
 | 9 | Gate | `cyberztna` | **partial** — posture proxy + mTLS/JWT/OIDC + OAuth device/auth-code lab |

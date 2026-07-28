@@ -62,6 +62,30 @@ enum Commands {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// Drop IOCs older than N days and/or by source
+    Prune {
+        /// Remove entries older than this many days (0 = skip age prune)
+        #[arg(long, default_value_t = 90)]
+        older_days: i64,
+        /// Also remove all entries with this source (e.g. openphish)
+        #[arg(long)]
+        source: Option<String>,
+        /// Actually delete (default dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Export IOC store to JSON or CSV
+    Export {
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 50_000)]
+        limit: usize,
+    },
 }
 
 fn host_id() -> String {
@@ -187,7 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "local JSON IOC store, lookup, add, multi-feed online sync (capped)".green()
+                "local IOC store, lookup/add/sync, prune, export (capped multi-feed)".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -398,6 +422,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if n == 0 {
                 println!("[threatgrid] no entries (run: cyberintel sync)");
+            }
+        }
+        Commands::Prune {
+            older_days,
+            source,
+            apply,
+        } => {
+            let mut store = IocStore::load(&cli.store)?;
+            let before = store.entries.len();
+            let age_n = if older_days > 0 {
+                store.prune_older_than(older_days)
+            } else {
+                0
+            };
+            let src_n = if let Some(ref src) = source {
+                store.prune_by_source(src)
+            } else {
+                0
+            };
+            if apply {
+                store.save(&cli.store)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[threatgrid] prune APPLIED age={age_n} source={src_n} remaining={} (was {before})",
+                        store.entries.len()
+                    )
+                    .green()
+                    .bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("ioc prune age={age_n} source={src_n}"),
+                    &[
+                        ("age_removed", serde_json::json!(age_n)),
+                        ("source_removed", serde_json::json!(src_n)),
+                        ("remaining", serde_json::json!(store.entries.len())),
+                    ],
+                    None,
+                );
+            } else {
+                println!(
+                    "[threatgrid] prune dry-run: would remove age={age_n} source={src_n} of {before} (use --apply)"
+                );
+            }
+        }
+        Commands::Export {
+            format,
+            out,
+            kind,
+            limit,
+        } => {
+            let store = IocStore::load(&cli.store)?;
+            let filter = kind.as_ref().and_then(|k| parse_kind(k));
+            let entries: Vec<_> = store
+                .entries
+                .iter()
+                .filter(|e| filter.map(|k| e.kind == k).unwrap_or(true))
+                .take(limit)
+                .collect();
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from("kind,value,source,severity,added_at\n");
+                for e in &entries {
+                    s.push_str(&format!(
+                        "{:?},{},{},{:?},{}\n",
+                        e.kind,
+                        e.value.replace(',', " "),
+                        e.source.replace(',', " "),
+                        e.severity,
+                        e.added_at.to_rfc3339()
+                    ));
+                }
+                s
+            } else {
+                serde_json::to_string_pretty(&entries)?
+            };
+            if let Some(path) = out {
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
+                std::fs::write(&path, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[threatgrid] exported {} entries → {}",
+                        entries.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
             }
         }
     }

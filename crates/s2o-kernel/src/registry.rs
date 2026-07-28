@@ -77,7 +77,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: local IOC + capped multi-feed online sync (URLHaus/OpenPhish); no commercial TIP/ML",
+            "partial: local IOC + multi-feed sync + prune/export; no commercial TIP/ML",
         ),
         ProductId::CyberId => ModuleStatus::new(
             product,

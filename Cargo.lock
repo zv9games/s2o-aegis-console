@@ -46,6 +46,7 @@ dependencies = [
  "s2o-fleet",
  "s2o-kernel",
  "s2o-schema",
+ "s2o-session",
  "s2o-store",
  "serde",
  "serde_json",
