@@ -298,6 +298,8 @@ enum FleetCmd {
         policy: PathBuf,
         #[arg(long, default_value_t = 60)]
         stale_minutes: i64,
+        #[arg(long)]
+        json: bool,
     },
     /// Validate fleet roster + desired policy health
     Doctor {
@@ -3912,22 +3914,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fleet,
                 policy,
                 stale_minutes,
+                json,
             } => {
                 let store = FleetStore::load(&fleet);
                 let pv = local_policy_version(&policy);
                 let s = store.summary_with_policy(stale_minutes, pv);
-                println!("{}", "Aegis fleet status".bold().green());
-                println!(" Store   : {}", fleet.display());
-                println!(" Total   : {}", s.total);
-                println!(" Online  : {}", s.online.to_string().green());
-                println!(" Stale   : {}", s.stale.to_string().yellow());
-                println!(" Avg posture : {:.0}", s.avg_posture);
-                println!(" Policy v: {pv}");
-                if pv > 0 {
+                if json {
                     println!(
-                        " On policy: {}  behind: {}",
-                        s.hosts_on_policy, s.hosts_behind_policy
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "fleet": fleet.display().to_string(),
+                            "policy": policy.display().to_string(),
+                            "stale_minutes": stale_minutes,
+                            "summary": s,
+                            "policy_version": pv,
+                        }))?
                     );
+                } else {
+                    println!("{}", "Aegis fleet status".bold().green());
+                    println!(" Store   : {}", fleet.display());
+                    println!(" Total   : {}", s.total);
+                    println!(" Online  : {}", s.online.to_string().green());
+                    println!(" Stale   : {}", s.stale.to_string().yellow());
+                    println!(" Avg posture : {:.0}", s.avg_posture);
+                    println!(" Policy v: {pv}");
+                    if pv > 0 {
+                        println!(
+                            " On policy: {}  behind: {}",
+                            s.hosts_on_policy, s.hosts_behind_policy
+                        );
+                    }
                 }
             }
             FleetCmd::Doctor {

@@ -43,6 +43,7 @@ cargo run -p aegis-cli -- events --severity high --limit 10 --text
 cargo run -p cyberwall -- doctor
 cargo run -p cyberdefender -- doctor
 cargo run -p cyberztna -- doctor
+cargo run -p cyberztna -- status --json
 cargo run -p cyberztna -- routes --json
 cargo run -p cyberztna -- route-add lab-api --path-prefix /api --upstream http://127.0.0.1:8080
 cargo run -p cyberztna -- route-remove lab-api
@@ -59,14 +60,17 @@ cargo run -p aegis-cli -- health                 # probe aegisd /health
 cargo run -p aegis-cli -- health --status --metrics
 cargo run -p aegis-cli -- selftest
 cargo run -p cybersiem -- doctor
+cargo run -p cybersiem -- status --json
 cargo run -p cybersiem -- search "blocklist" --since 24h --max 20
 cargo run -p cybersiem -- search gate --product cyberztna --json
 cargo run -p cybersiem -- correlate evil.example --json
 cargo run -p aegis-cli -- fleet export --format csv --out .aegis/fleet.csv
+cargo run -p aegis-cli -- fleet status --json
 cargo run -p aegis-cli -- playbook run --json
 cargo run -p aegis-cli -- playbook show echo-dns-blocks
 cargo run -p aegis-cli -- playbook show echo-dns-blocks --json
 cargo run -p cyberintel -- doctor
+cargo run -p cyberintel -- list --limit 20 --json
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o --apply
 cargo run -p cyberid -- status --json
@@ -78,6 +82,7 @@ cargo run -p cyberid -- sessions --all --user operator
 cargo run -p cyberid -- revoke --user labuser
 cargo run -p cyberedr -- export --state established --format csv --out .aegis/tcp.csv
 cargo run -p cyberedr -- export --state listen --limit 50
+cargo run -p cyberdefender -- quarantine list --json
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
 cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall
@@ -96,6 +101,9 @@ cargo run -p cybersiem -- stats --since 24h --json
 cargo run -p cybersiem -- top --attr domain --n 5 --json
 cargo run -p aegis-cli -- policy plan policies/examples/dns-intel-pack.json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json
+cargo run -p cyberdns -- status --json
+cargo run -p cyberdns -- list --json --limit 50
+cargo run -p cyberdns -- list --allow --json
 cargo run -p cyberdns -- doctor
 cargo run -p cyberdns -- doctor --probe-doh
 cargo run -p cyberdns -- check evil.example --json

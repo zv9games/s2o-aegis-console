@@ -76,6 +76,8 @@ enum Commands {
         kind: Option<String>,
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Drop IOCs older than N days and/or by source
     Prune {
@@ -583,27 +585,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
             );
         }
-        Commands::List { kind, limit } => {
+        Commands::List { kind, limit, json } => {
             let store = IocStore::load(&cli.store)?;
             let filter = kind.as_ref().and_then(|k| parse_kind(k));
-            let mut n = 0;
+            let mut rows: Vec<&IocEntry> = Vec::new();
             for e in &store.entries {
                 if let Some(k) = filter {
                     if e.kind != k {
                         continue;
                     }
                 }
-                println!(
-                    "{:?}\t{}\t{}\t{:?}",
-                    e.kind, e.value, e.source, e.severity
-                );
-                n += 1;
-                if n >= limit {
+                rows.push(e);
+                if rows.len() >= limit {
                     break;
                 }
             }
-            if n == 0 {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "store": cli.store.display().to_string(),
+                        "kind": kind,
+                        "limit": limit,
+                        "shown": rows.len(),
+                        "store_total": store.entries.len(),
+                        "entries": rows,
+                    }))?
+                );
+            } else if rows.is_empty() {
                 println!("[threatgrid] no entries (run: cyberintel sync)");
+            } else {
+                for e in &rows {
+                    println!(
+                        "{:?}\t{}\t{}\t{:?}",
+                        e.kind, e.value, e.source, e.severity
+                    );
+                }
             }
         }
         Commands::Prune {

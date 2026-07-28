@@ -165,6 +165,8 @@ enum QuarantineCmd {
     List {
         #[arg(long, default_value = ".aegis/quarantine")]
         dir: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Restore a quarantined file by name or path (uses sidecar .meta.json)
     Restore {
@@ -1834,27 +1836,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Quarantine { command } => match command {
-            QuarantineCmd::List { dir } => {
+            QuarantineCmd::List { dir, json } => {
                 if !dir.is_dir() {
-                    println!("[cyberdefender] quarantine empty/missing: {}", dir.display());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "dir": dir.display().to_string(),
+                                "present": false,
+                                "count": 0,
+                                "entries": [],
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "[cyberdefender] quarantine empty/missing: {}",
+                            dir.display()
+                        );
+                    }
                     return Ok(());
                 }
                 let entries = list_quarantine_entries(&dir);
-                println!(
-                    "[cyberdefender] quarantine {} ({} file(s))",
-                    dir.display(),
-                    entries.len()
-                );
-                for (p, meta) in entries {
-                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
-                    match meta {
-                        Some(m) => println!(
-                            "  {}  ← {}  ({})",
-                            name.bold(),
-                            m.original,
-                            if m.at.is_empty() { "-" } else { &m.at }
-                        ),
-                        None => println!("  {}  (no meta)", name.yellow()),
+                if json {
+                    let rows: Vec<_> = entries
+                        .iter()
+                        .map(|(p, meta)| {
+                            let name = p
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            serde_json::json!({
+                                "name": name,
+                                "path": p.display().to_string(),
+                                "original": meta.as_ref().map(|m| m.original.clone()),
+                                "at": meta.as_ref().map(|m| m.at.clone()),
+                                "has_meta": meta.is_some(),
+                            })
+                        })
+                        .collect();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "dir": dir.display().to_string(),
+                            "present": true,
+                            "count": rows.len(),
+                            "entries": rows,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[cyberdefender] quarantine {} ({} file(s))",
+                        dir.display(),
+                        entries.len()
+                    );
+                    for (p, meta) in entries {
+                        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+                        match meta {
+                            Some(m) => println!(
+                                "  {}  ← {}  ({})",
+                                name.bold(),
+                                m.original,
+                                if m.at.is_empty() { "-" } else { &m.at }
+                            ),
+                            None => println!("  {}  (no meta)", name.yellow()),
+                        }
                     }
                 }
             }

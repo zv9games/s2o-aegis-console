@@ -31,7 +31,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Write a starter route config
     Init,
     /// List configured routes
@@ -467,48 +470,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             let fw = create_firewall_engine();
             let posture = compute_posture_score(&fw).await?;
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "     S2O Gate / ZeroTrust Gateway (MVP)                  "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " Implemented       : {}",
-                "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, doctor, access-stats"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "production browser IdP UI, multi-POP SASE".red()
-            );
-            println!(" Config            : {}", cli.config.display());
-            println!(" Routes            : {}", cfg.routes.len());
-            println!(" Default min_score : {}", cfg.min_score);
-            println!(
-                " Live posture      : {} / {}",
-                posture.score, posture.max_score
-            );
-            println!(
-                " Serve             : {}",
-                "cyberztna serve  (or --upstream http://127.0.0.1:8080)".yellow()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+            if json {
+                let routes: Vec<_> = cfg
+                    .routes
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "name": r.name,
+                            "path_prefix": r.path_prefix,
+                            "upstream": r.upstream,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberztna",
+                        "config": cli.config.display().to_string(),
+                        "config_present": cli.config.exists(),
+                        "route_count": cfg.routes.len(),
+                        "routes": routes,
+                        "min_score": cfg.min_score,
+                        "posture_score": posture.score,
+                        "posture_max": posture.max_score,
+                        "posture_pass": posture.score >= cfg.min_score,
+                        "implemented": "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, doctor, access-stats",
+                        "not_implemented": "production browser IdP UI, multi-POP SASE",
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "     S2O Gate / ZeroTrust Gateway (MVP)                  "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, doctor, access-stats"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "production browser IdP UI, multi-POP SASE".red()
+                );
+                println!(" Config            : {}", cli.config.display());
+                println!(" Routes            : {}", cfg.routes.len());
+                println!(" Default min_score : {}", cfg.min_score);
+                println!(
+                    " Live posture      : {} / {}",
+                    posture.score, posture.max_score
+                );
+                println!(
+                    " Serve             : {}",
+                    "cyberztna serve  (or --upstream http://127.0.0.1:8080)".yellow()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
         }
         Commands::Doctor {
             access_log,

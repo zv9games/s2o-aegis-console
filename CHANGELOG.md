@@ -146,6 +146,8 @@
 - CyberMesh `status --json` + `doctor --json` (keys/conf/peers/tools)
 - CyberLog `correlate --json` trail + product histogram
 - `aegis playbook show <name>` full rule dump (`--json`)
+- Gate / CyberDNS / CyberLog `status --json`; DNS `list --json` (+ optional `--limit`)
+- ThreatGrid `list --json`; `aegis fleet status --json`; Defender `quarantine list --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

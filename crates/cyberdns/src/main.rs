@@ -108,7 +108,10 @@ fn doh_endpoints(cli: &Cli) -> Vec<String> {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     Resolve { domain: String },
     Block { domain: String },
     Unblock { domain: String },
@@ -120,6 +123,11 @@ enum Commands {
     List {
         #[arg(long)]
         allow: bool,
+        /// Max domains to print (0 = all)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Export blocklist or allowlist as json/csv/text
     Export {
@@ -245,71 +253,111 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let doh_eps = doh_endpoints(&cli);
 
     match cli.command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let set = load_blocklist(&cli.blocklist)?;
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "        S2O CyberDNS Guard (Phase 2 shell)               "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
             let ioc_n = IocStore::load(&cli.ioc_store)
                 .map(|s| s.entries.len())
                 .unwrap_or(0);
             let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
-            println!(
-                " Implemented       : {}",
-                "DoH multi-resolver + allowlist/blocklist + IOC + UDP stats + system-dns".green()
-            );
-            println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
-            println!(
-                " Not implemented   : {}",
-                "DoT, full recursive, transparent redirector".red()
-            );
-            println!(
-                " DoH chain         : {}",
-                doh_eps.join(" → ").yellow()
-            );
-            println!(" Blocklist path    : {}", cli.blocklist.display());
-            println!(" Blocked domains   : {}", set.len());
-            println!(" Allowlist path    : {}", cli.allowlist.display());
-            println!(" Allowed domains   : {}", allow.len().to_string().green());
-            println!(" Event log         : {}", cli.event_log.display());
-            println!(
-                " Proxy             : {}",
-                "cyberdns serve --listen 127.0.0.1:53553".yellow()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-        }
-        Commands::List { allow } => {
-            if allow {
-                let set = load_allowlist(&cli.allowlist)?;
-                if set.is_empty() {
-                    println!("[cyberdns] allowlist empty ({})", cli.allowlist.display());
-                } else {
-                    for d in &set {
-                        println!("{d}");
-                    }
-                }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberdns",
+                        "blocklist": cli.blocklist.display().to_string(),
+                        "blocklist_count": set.len(),
+                        "allowlist": cli.allowlist.display().to_string(),
+                        "allowlist_count": allow.len(),
+                        "ioc_store": cli.ioc_store.display().to_string(),
+                        "ioc_count": ioc_n,
+                        "doh_chain": doh_eps,
+                        "event_log": cli.event_log.display().to_string(),
+                        "implemented": "DoH multi-resolver + allowlist/blocklist + IOC + UDP stats + system-dns",
+                        "not_implemented": "DoT, full recursive, transparent redirector",
+                    }))?
+                );
             } else {
-                let set = load_blocklist(&cli.blocklist)?;
-                if set.is_empty() {
-                    println!("[cyberdns] blocklist empty ({})", cli.blocklist.display());
-                } else {
-                    for d in &set {
-                        println!("{d}");
-                    }
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "        S2O CyberDNS Guard (Phase 2 shell)               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "DoH multi-resolver + allowlist/blocklist + IOC + UDP stats + system-dns".green()
+                );
+                println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
+                println!(
+                    " Not implemented   : {}",
+                    "DoT, full recursive, transparent redirector".red()
+                );
+                println!(
+                    " DoH chain         : {}",
+                    doh_eps.join(" → ").yellow()
+                );
+                println!(" Blocklist path    : {}", cli.blocklist.display());
+                println!(" Blocked domains   : {}", set.len());
+                println!(" Allowlist path    : {}", cli.allowlist.display());
+                println!(" Allowed domains   : {}", allow.len().to_string().green());
+                println!(" Event log         : {}", cli.event_log.display());
+                println!(
+                    " Proxy             : {}",
+                    "cyberdns serve --listen 127.0.0.1:53553".yellow()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+        }
+        Commands::List { allow, limit, json } => {
+            let (kind, path, set) = if allow {
+                (
+                    "allow",
+                    cli.allowlist.display().to_string(),
+                    load_allowlist(&cli.allowlist)?,
+                )
+            } else {
+                (
+                    "block",
+                    cli.blocklist.display().to_string(),
+                    load_blocklist(&cli.blocklist)?,
+                )
+            };
+            let total = set.len();
+            let domains: Vec<String> = if limit == 0 {
+                set.into_iter().collect()
+            } else {
+                set.into_iter().take(limit).collect()
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "list": kind,
+                        "path": path,
+                        "total": total,
+                        "shown": domains.len(),
+                        "domains": domains,
+                    }))?
+                );
+            } else if domains.is_empty() {
+                println!("[cyberdns] {kind}list empty ({path})");
+            } else {
+                for d in &domains {
+                    println!("{d}");
+                }
+                if limit > 0 && total > domains.len() {
+                    println!("[cyberdns] … {total} total; showing {} (--limit)", domains.len());
                 }
             }
         }

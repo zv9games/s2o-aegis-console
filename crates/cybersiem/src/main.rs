@@ -23,6 +23,8 @@ enum Commands {
     Status {
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Validate JSONL event store health (parse/size/window)
     Doctor {
@@ -334,48 +336,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status { event_log } => {
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "       S2O CyberLog (Phase 2/3 shell)                    "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " Implemented       : {}",
-                "JSONL read/export, stats, alerts, top, search, correlate, doctor, --since, UDP collect"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "remote EPS, multi-tenant, full RFC5424 parser".red()
-            );
-            if event_log.exists() {
+        Commands::Status { event_log, json } => {
+            let (present, count, bytes) = if event_log.exists() {
                 let store = EventStore::open(&event_log)?;
-                println!(" Event log         : {}", event_log.display());
-                println!(" Stored events     : {}", store.count()?);
+                let meta = std::fs::metadata(&event_log).ok();
+                (
+                    true,
+                    Some(store.count()?),
+                    meta.map(|m| m.len()),
+                )
+            } else {
+                (false, None, None)
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cybersiem",
+                        "event_log": event_log.display().to_string(),
+                        "event_log_present": present,
+                        "event_count": count,
+                        "event_log_bytes": bytes,
+                        "collect_default": "127.0.0.1:5514",
+                        "implemented": "JSONL read/export, stats, alerts, top, search, correlate, doctor, --since, UDP collect",
+                        "not_implemented": "remote EPS, multi-tenant, full RFC5424 parser",
+                    }))?
+                );
             } else {
                 println!(
-                    " Event log         : {} (missing — run suite tools)",
-                    event_log.display()
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "       S2O CyberLog (Phase 2/3 shell)                    "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "JSONL read/export, stats, alerts, top, search, correlate, doctor, --since, UDP collect"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "remote EPS, multi-tenant, full RFC5424 parser".red()
+                );
+                if present {
+                    println!(" Event log         : {}", event_log.display());
+                    if let Some(c) = count {
+                        println!(" Stored events     : {c}");
+                    }
+                } else {
+                    println!(
+                        " Event log         : {} (missing — run suite tools)",
+                        event_log.display()
+                    );
+                }
+                println!(
+                    " Collect default   : {}",
+                    "cybersiem collect --listen 127.0.0.1:5514".yellow()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
                 );
             }
-            println!(
-                " Collect default   : {}",
-                "cybersiem collect --listen 127.0.0.1:5514".yellow()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
         }
         Commands::Doctor {
             event_log,
