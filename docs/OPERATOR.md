@@ -156,20 +156,17 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Job | Command |
 |-----|---------|
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
-| DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
+| DNS | `cyberdns doctor\|check\|export\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender doctor\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
 | EDR | `cyberedr doctor\|export\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
-| DNS | `cyberdns doctor\|check\|export\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem doctor\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
-| Mesh | `cybermesh doctor\|probe\|peers\|config\|genkey` |
+| Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 | Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|revoke\|verify` |
-| Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna doctor\|serve\|access-stats\|access-export\|routes\|oauth\|jwt` |
-| Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 
 ## Gate HTTPS + session
 
