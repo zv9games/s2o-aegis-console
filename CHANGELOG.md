@@ -159,6 +159,9 @@
 - Defender `scan --json` + `patterns test --json` + `yara test --json`
 - `aegis emit --json` + `selftest --json` + `cleanup --json`
 - Cyberwall `apply --json` (incl. dry-run plan)
+- CyberDNS `block|unblock|allow|unallow --json`; ThreatGrid `add --json`
+- `aegis version --json` + `backup --json`; fleet `enroll|heartbeat --json`
+- Gate `mtls status --json`; mesh `config --json`; example `policies/examples/posture-pack.json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

@@ -113,6 +113,8 @@ enum Commands {
         /// Skip peers registry (only CLI single peer flags)
         #[arg(long)]
         no_peers_file: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1127,7 +1129,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             keepalive,
             peers_file,
             no_peers_file,
+            json,
         } => {
+            let mut generated_key_paths: Option<(String, String)> = None;
             let private_key = if let Some(pkf) = private_key_file {
                 fs::read_to_string(&pkf)?.trim().to_string()
             } else {
@@ -1137,9 +1141,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fs::write(&key_path, format!("{sk}\n"))?;
                 let pub_path = output.with_extension("pub");
                 fs::write(&pub_path, format!("{pk}\n"))?;
-                println!("[cybermesh] generated keys:");
-                println!("  private → {}", key_path.display());
-                println!("  public  → {}", pub_path.display());
+                generated_key_paths =
+                    Some((key_path.display().to_string(), pub_path.display().to_string()));
+                if !json {
+                    println!("[cybermesh] generated keys:");
+                    println!("  private → {}", key_path.display());
+                    println!("  public  → {}", pub_path.display());
+                }
                 sk
             };
             // validate
@@ -1147,11 +1155,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[cybermesh] invalid private key: {e}");
                 std::process::exit(1);
             }
+            let peer_count = if no_peers_file {
+                0
+            } else {
+                PeerRegistry::load(&peers_file).peers.len()
+            };
             let registry = if no_peers_file {
                 None
             } else {
                 let r = PeerRegistry::load(&peers_file);
-                if !r.peers.is_empty() {
+                if !r.peers.is_empty() && !json {
                     println!(
                         "[cybermesh] including {} peer(s) from {}",
                         r.peers.len(),
@@ -1179,15 +1192,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(&output, fs::Permissions::from_mode(0o600));
             }
-            println!(
-                "{}",
-                format!("[cybermesh] wrote {}", output.display())
-                    .green()
-                    .bold()
-            );
-            println!("Review the conf, then:");
-            println!("  cybermesh up --conf {}", output.display());
-            println!("  # or import into WireGuard for Windows");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "output": output.display().to_string(),
+                        "address": address,
+                        "listen_port": listen_port,
+                        "dns": dns,
+                        "peer_count": peer_count,
+                        "peers_file": if no_peers_file { None } else { Some(peers_file.display().to_string()) },
+                        "bytes": conf.len(),
+                        "generated_keys": generated_key_paths.map(|(priv_p, pub_p)| serde_json::json!({
+                            "private": priv_p,
+                            "public": pub_p,
+                        })),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("[cybermesh] wrote {}", output.display())
+                        .green()
+                        .bold()
+                );
+                println!("Review the conf, then:");
+                println!("  cybermesh up --conf {}", output.display());
+                println!("  # or import into WireGuard for Windows");
+            }
         }
     }
 

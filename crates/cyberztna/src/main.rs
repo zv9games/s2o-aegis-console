@@ -210,6 +210,8 @@ enum MtlsCmd {
     Status {
         #[arg(long, default_value = ".aegis/mtls")]
         dir: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// HTTPS request with lab client cert (mTLS smoke; rustls, not Windows schannel)
     Probe {
@@ -1252,25 +1254,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 tls::generate_mtls_pki(&dir, &client_cn, force)?;
             }
-            MtlsCmd::Status { dir } => {
+            MtlsCmd::Status { dir, json } => {
                 let p = tls::MtlsPaths::in_dir(&dir);
-                println!("[gate] mTLS dir {}", dir.display());
-                for (label, path) in [
-                    ("ca", &p.ca_cert),
-                    ("server", &p.server_cert),
-                    ("server-key", &p.server_key),
-                    ("client", &p.client_cert),
-                    ("client-key", &p.client_key),
-                ] {
+                let files = [
+                    ("ca", p.ca_cert.clone()),
+                    ("server", p.server_cert.clone()),
+                    ("server_key", p.server_key.clone()),
+                    ("client", p.client_cert.clone()),
+                    ("client_key", p.client_key.clone()),
+                ];
+                let rows: Vec<_> = files
+                    .iter()
+                    .map(|(label, path)| {
+                        serde_json::json!({
+                            "label": label,
+                            "path": path.display().to_string(),
+                            "present": path.exists(),
+                        })
+                    })
+                    .collect();
+                let ready = rows.iter().all(|r| r.get("present").and_then(|v| v.as_bool()).unwrap_or(false));
+                if json {
                     println!(
-                        "  {label:<10} {} {}",
-                        if path.exists() {
-                            "OK".green()
-                        } else {
-                            "missing".red()
-                        },
-                        path.display()
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "dir": dir.display().to_string(),
+                            "ready": ready,
+                            "files": rows,
+                        }))?
                     );
+                } else {
+                    println!("[gate] mTLS dir {}", dir.display());
+                    for (label, path) in &files {
+                        println!(
+                            "  {label:<10} {} {}",
+                            if path.exists() {
+                                "OK".green()
+                            } else {
+                                "missing".red()
+                            },
+                            path.display()
+                        );
+                    }
                 }
             }
             MtlsCmd::Probe {

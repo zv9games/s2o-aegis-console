@@ -44,6 +44,8 @@ enum Commands {
         value: String,
         #[arg(long, default_value = "manual")]
         source: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Import IOCs from a local file (domains one-per-line, or json array/export)
     ImportFile {
@@ -366,19 +368,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             std::process::exit(3);
         }
-        Commands::Add { kind, value, source } => {
+        Commands::Add {
+            kind,
+            value,
+            source,
+            json,
+        } => {
             let k = parse_kind(&kind).ok_or_else(|| format!("unknown kind '{kind}'"))?;
             let mut store = IocStore::load(&cli.store)?;
             let added = store.upsert(IocEntry {
                 kind: k,
                 value: value.clone(),
-                source,
+                source: source.clone(),
                 severity: IocSeverity::High,
                 note: None,
                 added_at: Utc::now(),
             });
             store.save(&cli.store)?;
-            if added {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "added": added,
+                        "updated": !added,
+                        "kind": format!("{:?}", k).to_ascii_lowercase(),
+                        "value": value,
+                        "source": source,
+                        "store": cli.store.display().to_string(),
+                        "total": store.entries.len(),
+                    }))?
+                );
+            } else if added {
                 println!(
                     "{}",
                     format!("[threatgrid] added {:?} {value}", k).red().bold()

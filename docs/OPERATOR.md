@@ -128,6 +128,8 @@ cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json
 cargo run -p cyberdns -- status --json
 cargo run -p cyberdns -- list --json --limit 50
 cargo run -p cyberdns -- list --allow --json
+cargo run -p cyberdns -- block evil.lab.s2o --json
+cargo run -p cyberdns -- allow updates.example.com --json
 cargo run -p cyberdns -- resolve example.com --json
 cargo run -p cyberdns -- doctor
 cargo run -p cyberdns -- doctor --probe-doh
@@ -137,9 +139,17 @@ cargo run -p cyberid -- verify <token> --json
 cargo run -p cyberdefender -- patterns list --json
 cargo run -p cyberdefender -- yara list --json
 cargo run -p cyberedr -- doctor
+cargo run -p aegis-cli -- version --json
 cargo run -p aegis-cli -- selftest
 cargo run -p aegis-cli -- config show --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
+cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
+cargo run -p aegis-cli -- fleet enroll --json
+cargo run -p aegis-cli -- fleet heartbeat --json
+cargo run -p aegis-cli -- backup --json
+cargo run -p cyberztna -- mtls status --json
+cargo run -p cybermesh -- config --private-key-file .aegis/wg-private.key --json
+cargo run -p cyberintel -- add domain ioc-lab.s2o --json
 cargo run -p aegis-cli -- cleanup              # dry-run sessions/fleet/events hygiene
 cargo run -p aegis-cli -- cleanup --apply
 cargo run -p cyberintel -- export --format csv --out .aegis/ioc.csv --limit 1000

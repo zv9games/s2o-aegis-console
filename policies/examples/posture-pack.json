@@ -1,0 +1,8 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-posture-pack",
+  "description": "Posture gate floor only (no firewall/DNS/gate mutation). Use for CI/lab policy plan/apply smoke.",
+  "posture": {
+    "min_score": 40
+  }
+}

@@ -30,7 +30,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Print suite / kernel versions
-    Version,
+    Version {
+        #[arg(long)]
+        json: bool,
+    },
     /// Honest platform matrix (same as aegisd status)
     Status {
         #[arg(long)]
@@ -141,6 +144,8 @@ enum Commands {
         /// Output zip path (default .aegis-backup-<timestamp>.zip)
         #[arg(long)]
         out: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
     },
     /// Restore a backup zip into the data directory (merge)
     Restore {
@@ -238,6 +243,8 @@ enum FleetCmd {
         name: Option<String>,
         #[arg(long)]
         tag: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Refresh last_seen + posture/modules for this host
     Heartbeat {
@@ -248,6 +255,8 @@ enum FleetCmd {
         /// POST heartbeat to aegisd (e.g. http://127.0.0.1:9090/fleet/heartbeat)
         #[arg(long)]
         push: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// List enrolled hosts
     List {
@@ -1488,12 +1497,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fw = create_firewall_engine();
 
     match cli.command {
-        Commands::Version => {
-            println!("aegis-cli          0.1.0");
-            println!("s2o-kernel         {KERNEL_VERSION}");
-            println!("s2o-schema         {SCHEMA_VERSION}");
-            println!("phase              {PHASE_LABEL}");
-            println!("tier_ceiling       {}", TIER_CEILING.as_str());
+        Commands::Version { json } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "aegis_cli": "0.1.0",
+                        "kernel": KERNEL_VERSION,
+                        "schema": SCHEMA_VERSION,
+                        "phase": PHASE_LABEL,
+                        "tier_ceiling": TIER_CEILING.as_str(),
+                    }))?
+                );
+            } else {
+                println!("aegis-cli          0.1.0");
+                println!("s2o-kernel         {KERNEL_VERSION}");
+                println!("s2o-schema         {SCHEMA_VERSION}");
+                println!("phase              {PHASE_LABEL}");
+                println!("tier_ceiling       {}", TIER_CEILING.as_str());
+            }
         }
         Commands::Status { json } => {
             let status = collect_platform_status(&fw).await;
@@ -3405,9 +3427,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  aegis status");
             println!("  cyberztna serve --tls");
         }
-        Commands::Backup { data_dir, out } => {
+        Commands::Backup {
+            data_dir,
+            out,
+            json,
+        } => {
             if !data_dir.exists() {
-                eprintln!("[aegis] data dir missing: {}", data_dir.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("data dir missing: {}", data_dir.display()),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[aegis] data dir missing: {}", data_dir.display());
+                }
                 std::process::exit(1);
             }
             let out = out.unwrap_or_else(|| {
@@ -3415,12 +3451,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PathBuf::from(format!(".aegis-backup-{ts}.zip"))
             });
             zip_dir(&data_dir, &out)?;
-            println!(
-                "{}",
-                format!("[aegis] backup wrote {}", out.display())
-                    .green()
-                    .bold()
-            );
+            let bytes = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "data_dir": data_dir.display().to_string(),
+                        "out": out.display().to_string(),
+                        "bytes": bytes,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("[aegis] backup wrote {}", out.display())
+                        .green()
+                        .bold()
+                );
+            }
         }
         Commands::Restore {
             zip,
@@ -3924,32 +3973,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 host_id: hid,
                 name,
                 tag,
+                json,
             } => {
                 let pv = local_policy_version(Path::new(".aegis/fleet-policy.json"));
                 let hb = build_local_heartbeat(&fw, hid, name, tag, Some(pv)).await?;
                 let mut store = FleetStore::load(&fleet);
                 let h = store.upsert_heartbeat(hb);
                 store.save(&fleet)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[aegis] fleet enrolled host={} posture={} modules={}/{}/{} policy_v={}",
-                        h.host_id,
-                        h.posture_score,
-                        h.modules_implemented,
-                        h.modules_partial,
-                        h.modules_other,
-                        h.policy_version
-                    )
-                    .green()
-                    .bold()
-                );
-                println!("  store : {}", fleet.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "enroll",
+                            "fleet": fleet.display().to_string(),
+                            "host": h,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] fleet enrolled host={} posture={} modules={}/{}/{} policy_v={}",
+                            h.host_id,
+                            h.posture_score,
+                            h.modules_implemented,
+                            h.modules_partial,
+                            h.modules_other,
+                            h.policy_version
+                        )
+                        .green()
+                        .bold()
+                    );
+                    println!("  store : {}", fleet.display());
+                }
             }
             FleetCmd::Heartbeat {
                 fleet,
                 host_id: hid,
                 push,
+                json,
             } => {
                 let pv = local_policy_version(Path::new(".aegis/fleet-policy.json"));
                 let hb = build_local_heartbeat(&fw, hid, None, vec![], Some(pv)).await?;
@@ -3960,7 +4023,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let res = client.post(&url).json(&hb).send().await?;
                     let status = res.status();
                     let text = res.text().await.unwrap_or_default();
-                    println!("[aegis] fleet push {url} -> {status} {text}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": status.is_success(),
+                                "action": "heartbeat_push",
+                                "url": url,
+                                "status": status.as_u16(),
+                                "body": text,
+                                "payload": hb,
+                            }))?
+                        );
+                    } else {
+                        println!("[aegis] fleet push {url} -> {status} {text}");
+                    }
                     if !status.is_success() {
                         std::process::exit(1);
                     }
@@ -3968,10 +4045,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut store = FleetStore::load(&fleet);
                     let h = store.upsert_heartbeat(hb);
                     store.save(&fleet)?;
-                    println!(
-                        "[aegis] fleet heartbeat host={} posture={} last_seen={} policy_v={}",
-                        h.host_id, h.posture_score, h.last_seen, h.policy_version
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "heartbeat",
+                                "fleet": fleet.display().to_string(),
+                                "host": h,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "[aegis] fleet heartbeat host={} posture={} last_seen={} policy_v={}",
+                            h.host_id, h.posture_score, h.last_seen, h.policy_version
+                        );
+                    }
                 }
             }
             FleetCmd::List {

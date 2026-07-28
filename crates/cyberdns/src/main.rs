@@ -117,12 +117,28 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    Block { domain: String },
-    Unblock { domain: String },
+    Block {
+        domain: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Unblock {
+        domain: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add domain to allowlist (overrides block/IOC)
-    Allow { domain: String },
+    Allow {
+        domain: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove domain from allowlist
-    Unallow { domain: String },
+    Unallow {
+        domain: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// List blocklist (default) or --allow
     List {
         #[arg(long)]
@@ -872,21 +888,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
         }
-        Commands::Block { domain } => {
+        Commands::Block { domain, json } => {
             let d = normalize_domain(&domain);
             if d.is_empty() {
                 eprintln!("[cyberdns] empty domain");
                 std::process::exit(2);
             }
             let mut set = load_blocklist(&cli.blocklist)?;
-            if set.insert(d.clone()) {
+            let added = set.insert(d.clone());
+            if added {
                 save_blocklist(&cli.blocklist, &set)?;
-                println!(
-                    "{}",
-                    format!("[cyberdns] blocked {d} ({} total)", set.len())
-                        .red()
-                        .bold()
-                );
                 emit(
                     &cli.event_log,
                     EventAction::Blocked,
@@ -894,19 +905,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("domain added to blocklist: {d}"),
                     &d,
                 );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "action": "block",
+                        "domain": d,
+                        "changed": added,
+                        "total": set.len(),
+                        "path": cli.blocklist.display().to_string(),
+                    }))?
+                );
+            } else if added {
+                println!(
+                    "{}",
+                    format!("[cyberdns] blocked {d} ({} total)", set.len())
+                        .red()
+                        .bold()
+                );
             } else {
                 println!("[cyberdns] already blocked: {d}");
             }
         }
-        Commands::Unblock { domain } => {
+        Commands::Unblock { domain, json } => {
             let d = normalize_domain(&domain);
             let mut set = load_blocklist(&cli.blocklist)?;
-            if set.remove(&d) {
+            let removed = set.remove(&d);
+            if removed {
                 save_blocklist(&cli.blocklist, &set)?;
-                println!(
-                    "{}",
-                    format!("[cyberdns] unblocked {d}").green().bold()
-                );
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
@@ -914,25 +941,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("domain removed from blocklist: {d}"),
                     &d,
                 );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "action": "unblock",
+                        "domain": d,
+                        "changed": removed,
+                        "total": set.len(),
+                        "path": cli.blocklist.display().to_string(),
+                    }))?
+                );
+            } else if removed {
+                println!(
+                    "{}",
+                    format!("[cyberdns] unblocked {d}").green().bold()
+                );
             } else {
                 println!("[cyberdns] not in blocklist: {d}");
             }
         }
-        Commands::Allow { domain } => {
+        Commands::Allow { domain, json } => {
             let d = normalize_domain(&domain);
             if d.is_empty() {
                 eprintln!("[cyberdns] empty domain");
                 std::process::exit(2);
             }
             let mut set = load_allowlist(&cli.allowlist)?;
-            if set.insert(d.clone()) {
+            let added = set.insert(d.clone());
+            if added {
                 save_allowlist(&cli.allowlist, &set)?;
-                println!(
-                    "{}",
-                    format!("[cyberdns] allowed {d} ({} total)", set.len())
-                        .green()
-                        .bold()
-                );
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
@@ -940,25 +979,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("domain added to allowlist: {d}"),
                     &d,
                 );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "action": "allow",
+                        "domain": d,
+                        "changed": added,
+                        "total": set.len(),
+                        "path": cli.allowlist.display().to_string(),
+                    }))?
+                );
+            } else if added {
+                println!(
+                    "{}",
+                    format!("[cyberdns] allowed {d} ({} total)", set.len())
+                        .green()
+                        .bold()
+                );
             } else {
                 println!("[cyberdns] already allowed: {d}");
             }
         }
-        Commands::Unallow { domain } => {
+        Commands::Unallow { domain, json } => {
             let d = normalize_domain(&domain);
             let mut set = load_allowlist(&cli.allowlist)?;
-            if set.remove(&d) {
+            let removed = set.remove(&d);
+            if removed {
                 save_allowlist(&cli.allowlist, &set)?;
-                println!(
-                    "{}",
-                    format!("[cyberdns] unallowed {d}").yellow().bold()
-                );
                 emit(
                     &cli.event_log,
                     EventAction::Observed,
                     Severity::Info,
                     format!("domain removed from allowlist: {d}"),
                     &d,
+                );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "action": "unallow",
+                        "domain": d,
+                        "changed": removed,
+                        "total": set.len(),
+                        "path": cli.allowlist.display().to_string(),
+                    }))?
+                );
+            } else if removed {
+                println!(
+                    "{}",
+                    format!("[cyberdns] unallowed {d}").yellow().bold()
                 );
             } else {
                 println!("[cyberdns] not in allowlist: {d}");
