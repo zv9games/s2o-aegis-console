@@ -36,6 +36,10 @@ cargo run -p aegis-cli -- health                 # probe aegisd /health
 cargo run -p aegis-cli -- health --status --metrics
 cargo run -p aegis-cli -- selftest
 cargo run -p cybersiem -- doctor
+cargo run -p cybersiem -- search "blocklist" --since 24h --max 20
+cargo run -p cybersiem -- search gate --product cyberztna --json
+cargo run -p aegis-cli -- fleet export --format csv --out .aegis/fleet.csv
+cargo run -p aegis-cli -- playbook run --json
 cargo run -p cyberintel -- doctor
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o --apply
@@ -162,7 +166,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
-| SIEM | `cybersiem doctor\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
+| SIEM | `cybersiem doctor\|search\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
 | Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
 | Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|revoke\|verify` |

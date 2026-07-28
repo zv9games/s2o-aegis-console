@@ -134,6 +134,27 @@ enum Commands {
         #[arg(long)]
         since: Option<String>,
     },
+    /// Free-text search across message/attrs/iocs (optional product/severity/since)
+    Search {
+        /// Substring match (case-insensitive) against message, attrs, iocs
+        query: String,
+        #[arg(long, default_value = ".aegis/events.jsonl")]
+        event_log: PathBuf,
+        #[arg(long, default_value_t = 10_000)]
+        limit: usize,
+        /// Max hits to print (default 50)
+        #[arg(long, default_value_t = 50)]
+        max: usize,
+        #[arg(long)]
+        product: Option<String>,
+        #[arg(long)]
+        severity: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Follow the event log (poll for new JSONL lines)
     Follow {
         #[arg(long, default_value = ".aegis/events.jsonl")]
@@ -324,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "JSONL read/export, stats, alerts, top, correlate, doctor, --since, UDP collect"
+                "JSONL read/export, stats, alerts, top, search, correlate, doctor, --since, UDP collect"
                     .green()
             );
             println!(
@@ -1046,6 +1067,107 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if hits.is_empty() {
                 println!("(no correlated events)");
+            }
+        }
+        Commands::Search {
+            query,
+            event_log,
+            limit,
+            max,
+            product,
+            severity,
+            since,
+            json,
+        } => {
+            if !event_log.exists() {
+                eprintln!("[cyberlog] no event log");
+                std::process::exit(1);
+            }
+            let q = query.to_ascii_lowercase();
+            let store = EventStore::open(&event_log)?;
+            let mut events = store.recent(limit)?;
+            if let Err(e) = apply_since_filter(&mut events, &since) {
+                eprintln!("[cyberlog] {e}");
+                std::process::exit(2);
+            }
+            if let Some(ref p) = product {
+                events.retain(|e| product_matches(e.product, p));
+            }
+            if let Some(ref s) = severity {
+                events.retain(|e| severity_matches(e.severity, s));
+            }
+            let mut hits = Vec::new();
+            for e in events {
+                let msg = e.message.to_ascii_lowercase();
+                let attrs =
+                    serde_json::to_string(&e.attrs).unwrap_or_default().to_ascii_lowercase();
+                let iocs =
+                    serde_json::to_string(&e.iocs).unwrap_or_default().to_ascii_lowercase();
+                let product_s = e.product.as_str().to_ascii_lowercase();
+                if msg.contains(&q)
+                    || attrs.contains(&q)
+                    || iocs.contains(&q)
+                    || product_s.contains(&q)
+                {
+                    hits.push(e);
+                }
+            }
+            // newest first for search UX
+            hits.reverse();
+            let total = hits.len();
+            if hits.len() > max {
+                hits.truncate(max);
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "query": query,
+                        "since": since,
+                        "product": product,
+                        "severity": severity,
+                        "total_hits": total,
+                        "shown": hits.len(),
+                        "events": hits,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!(
+                        "  CyberLog search: '{query}' ({total} hits, showing {})",
+                        hits.len()
+                    )
+                    .bold()
+                    .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                if hits.is_empty() {
+                    println!("(no matches)");
+                }
+                for e in &hits {
+                    println!(
+                        "[{}] {:?} {:?} / {:?} | {}",
+                        e.ts.to_rfc3339().cyan(),
+                        e.severity,
+                        e.product,
+                        e.action,
+                        e.message
+                    );
+                }
+                if total > hits.len() {
+                    println!(
+                        " … truncated; use --max {} or raise --limit",
+                        total
+                    );
+                }
             }
         }
         Commands::Follow {

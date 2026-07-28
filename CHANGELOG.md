@@ -123,6 +123,10 @@
 - Gate `access-export` (json/csv/text + `--since`/`--filter`) + `routes --json`
 - CyberMesh `peers list --json` + `peers export` (json/csv)
 - Expanded `aegis selftest` (policy load, parse_since, session revoke_user, ioc remove, playbook actions)
+- CyberLog `search` free-text (product/severity/since/json/max)
+- `aegis fleet export` roster (json/csv + stale annotation)
+- `aegis playbook run --json` hit summary for automation
+- Windows: raise default stack to 8 MiB (`.cargo/config.toml`) for large clap CLIs
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

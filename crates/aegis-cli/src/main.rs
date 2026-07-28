@@ -266,6 +266,20 @@ enum FleetCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Export fleet roster (json/csv)
+    #[command(name = "export")]
+    Export {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        /// Minutes without heartbeat = stale (annotation only)
+        #[arg(long, default_value_t = 60)]
+        stale_minutes: i64,
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Summary counts
     Status {
         #[arg(long, default_value = ".aegis/fleet.json")]
@@ -452,6 +466,9 @@ enum PlaybookCmd {
         /// Actually perform actions (default is dry-run)
         #[arg(long)]
         apply: bool,
+        /// Machine-readable hit summary (dry-run skips action side effects)
+        #[arg(long)]
+        json: bool,
     },
     /// Continuously follow events and run matching playbooks
     Watch {
@@ -2564,6 +2581,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 event_log,
                 limit,
                 apply,
+                json,
             } => {
                 if !path.exists() {
                     eprintln!(
@@ -2580,29 +2598,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let store = EventStore::open(&event_log)?;
                 let events = store.recent(limit)?;
                 let mode = if apply { "APPLY" } else { "DRY-RUN" };
-                println!(
-                    "[aegis] playbook {} ({} rules, {} events window)",
-                    mode,
-                    pb.rules.len(),
-                    events.len()
-                );
+                if !json {
+                    println!(
+                        "[aegis] playbook {} ({} rules, {} events window)",
+                        mode,
+                        pb.rules.len(),
+                        events.len()
+                    );
+                }
                 let mut fired = 0u32;
+                let mut hits: Vec<serde_json::Value> = Vec::new();
+                let mut by_rule: std::collections::BTreeMap<String, u32> =
+                    std::collections::BTreeMap::new();
                 for rule in pb.rules.iter().filter(|r| r.enabled) {
                     for ev in &events {
                         if !event_matches(ev, &rule.when) {
                             continue;
                         }
                         fired += 1;
-                        println!(
-                            "  rule={} event={} | {}",
-                            rule.name.yellow(),
-                            ev.id,
-                            ev.message
-                        );
-                        run_playbook_actions(rule, ev, apply).await?;
+                        *by_rule.entry(rule.name.clone()).or_default() += 1;
+                        hits.push(serde_json::json!({
+                            "rule": rule.name,
+                            "event_id": ev.id.to_string(),
+                            "ts": ev.ts.to_rfc3339(),
+                            "product": ev.product.as_str(),
+                            "severity": format!("{:?}", ev.severity),
+                            "action": format!("{:?}", ev.action),
+                            "message": ev.message,
+                            "actions": rule.then.iter().map(|a| &a.action_type).collect::<Vec<_>>(),
+                        }));
+                        if !json {
+                            println!(
+                                "  rule={} event={} | {}",
+                                rule.name.yellow(),
+                                ev.id,
+                                ev.message
+                            );
+                        }
+                        if apply || !json {
+                            run_playbook_actions(rule, ev, apply).await?;
+                        }
                     }
                 }
-                println!("[aegis] playbook complete: {fired} rule hits");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "mode": mode,
+                            "path": path.display().to_string(),
+                            "rules_enabled": pb.rules.iter().filter(|r| r.enabled).count(),
+                            "events_window": events.len(),
+                            "hits": fired,
+                            "by_rule": by_rule,
+                            "matches": hits,
+                        }))?
+                    );
+                } else {
+                    println!("[aegis] playbook complete: {fired} rule hits");
+                }
             }
             PlaybookCmd::Watch {
                 path,
@@ -3284,6 +3337,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     eprintln!("[aegis] host not found: {id}");
                     std::process::exit(1);
+                }
+            }
+            FleetCmd::Export {
+                fleet,
+                stale_minutes,
+                format,
+                out,
+            } => {
+                let store = FleetStore::load(&fleet);
+                let text = if format.eq_ignore_ascii_case("csv") {
+                    let mut s = String::from(
+                        "host_id,display_name,os,phase,posture_score,last_seen,stale,policy_version,tags\n",
+                    );
+                    for h in &store.hosts {
+                        let stale = FleetStore::is_stale(h, stale_minutes);
+                        s.push_str(&format!(
+                            "{},{},{},{},{},{},{},{},{}\n",
+                            h.host_id,
+                            h.display_name.replace(',', " "),
+                            h.os.replace(',', " "),
+                            h.phase.replace(',', " "),
+                            h.posture_score,
+                            h.last_seen,
+                            stale,
+                            h.policy_version,
+                            h.tags.join("|").replace(',', " "),
+                        ));
+                    }
+                    s
+                } else {
+                    let rows: Vec<_> = store
+                        .hosts
+                        .iter()
+                        .map(|h| {
+                            serde_json::json!({
+                                "host_id": h.host_id,
+                                "display_name": h.display_name,
+                                "os": h.os,
+                                "phase": h.phase,
+                                "kernel": h.kernel,
+                                "posture_score": h.posture_score,
+                                "last_seen": h.last_seen,
+                                "enrolled_at": h.enrolled_at,
+                                "stale": FleetStore::is_stale(h, stale_minutes),
+                                "policy_version": h.policy_version,
+                                "tags": h.tags,
+                                "last_ip": h.last_ip,
+                            })
+                        })
+                        .collect();
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "path": fleet.display().to_string(),
+                        "stale_minutes": stale_minutes,
+                        "count": rows.len(),
+                        "hosts": rows,
+                    }))?
+                };
+                if let Some(path) = out {
+                    if let Some(p) = path.parent() {
+                        std::fs::create_dir_all(p)?;
+                    }
+                    std::fs::write(&path, &text)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] fleet exported {} host(s) → {}",
+                            store.hosts.len(),
+                            path.display()
+                        )
+                        .green()
+                        .bold()
+                    );
+                } else {
+                    print!("{text}");
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
                 }
             }
             FleetCmd::Status {
