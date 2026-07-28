@@ -28,7 +28,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Active TCP connections (IP Helper on Windows)
     Processes {
         #[arg(long, default_value_t = 64)]
@@ -433,47 +436,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "        S2O CyberEDR (Phase 2 shell)                     "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " Implemented       : {}",
-                "TCP table, export, listen, net-watch, process/baseline/drift, alerts, watch, doctor"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "kernel ETW/eBPF hooks, behavioral ML".red()
-            );
-            println!(
-                " Baseline file     : {} ({})",
-                cli.baseline.display(),
-                if cli.baseline.exists() {
-                    "present".green().to_string()
-                } else {
-                    "missing".yellow().to_string()
-                }
-            );
-            println!(
-                " Kernel hooks      : {}",
-                "NONE ATTACHED (userspace only)".yellow().bold()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+        Commands::Status { json } => {
+            let baseline_present = cli.baseline.exists();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberedr",
+                        "baseline": cli.baseline.display().to_string(),
+                        "baseline_present": baseline_present,
+                        "kernel_hooks": "none",
+                        "implemented": "TCP table, export, listen, net-watch, process/baseline/drift, alerts, watch, doctor",
+                        "not_implemented": "kernel ETW/eBPF hooks, behavioral ML",
+                        "event_log": cli.event_log.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "        S2O CyberEDR (Phase 2 shell)                     "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "TCP table, export, listen, net-watch, process/baseline/drift, alerts, watch, doctor"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "kernel ETW/eBPF hooks, behavioral ML".red()
+                );
+                println!(
+                    " Baseline file     : {} ({})",
+                    cli.baseline.display(),
+                    if baseline_present {
+                        "present".green().to_string()
+                    } else {
+                        "missing".yellow().to_string()
+                    }
+                );
+                println!(
+                    " Kernel hooks      : {}",
+                    "NONE ATTACHED (userspace only)".yellow().bold()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
             emit(
                 &cli.event_log,
                 EventKind::Health,

@@ -81,6 +81,8 @@ enum Commands {
         /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
         #[arg(long)]
         since: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Counts by product / severity / kind
     Stats {
@@ -779,9 +781,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             severity,
             kind,
             since,
+            json,
         } => {
             if !event_log.exists() {
-                println!("[cyberlog] no events yet.");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "event_log": event_log.display().to_string(),
+                            "present": false,
+                            "count": 0,
+                            "events": [],
+                        }))?
+                    );
+                } else {
+                    println!("[cyberlog] no events yet.");
+                }
                 return Ok(());
             }
             let store = EventStore::open(&event_log)?;
@@ -809,36 +824,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 events
             };
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "          CyberLog — filtered events                     "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            if events.is_empty() {
-                println!("(no matches)");
-            }
-            for ev in events {
+            if json {
                 println!(
-                    "[{}] [{:?}] {:?} / {:?} -> {}",
-                    ev.ts.to_rfc3339().cyan(),
-                    ev.severity,
-                    ev.product,
-                    ev.kind,
-                    ev.message
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "event_log": event_log.display().to_string(),
+                        "present": true,
+                        "product": product,
+                        "severity": severity,
+                        "kind": kind,
+                        "since": since,
+                        "limit": limit,
+                        "count": events.len(),
+                        "events": events,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
                 );
                 println!(
                     "{}",
-                    "---------------------------------------------------------".cyan()
+                    "          CyberLog — filtered events                     "
+                        .bold()
+                        .green()
                 );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                if events.is_empty() {
+                    println!("(no matches)");
+                }
+                for ev in &events {
+                    println!(
+                        "[{}] [{:?}] {:?} / {:?} -> {}",
+                        ev.ts.to_rfc3339().cyan(),
+                        ev.severity,
+                        ev.product,
+                        ev.kind,
+                        ev.message
+                    );
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                }
             }
         }
         Commands::Alerts {

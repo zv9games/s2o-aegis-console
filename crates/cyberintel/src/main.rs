@@ -28,9 +28,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Lookup domain / IP / hash in local store
-    Lookup { target: String },
+    Lookup {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add an IOC: kind = domain|ip|hash|url
     Add {
         kind: String,
@@ -222,55 +229,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let store = IocStore::load(&cli.store)?;
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "      S2O ThreatGrid (Phase 2 shell)                     "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(" Store path        : {}", cli.store.display());
-            println!(" Schema version    : {}", STORE_VERSION);
-            println!(" Total IOCs        : {}", store.entries.len().to_string().bold());
-            println!(" Domains           : {}", store.count_by_kind(IocKind::Domain));
-            println!(" IPs               : {}", store.count_by_kind(IocKind::Ip));
-            println!(" Hashes            : {}", store.count_by_kind(IocKind::Hash));
-            println!(" URLs              : {}", store.count_by_kind(IocKind::Url));
-            println!(
-                " Updated           : {}",
-                store.updated_at.to_rfc3339()
-            );
-            println!(
-                " Implemented       : {}",
-                "local IOC store, lookup/add/remove/import-file/sync, prune, export, stats, doctor"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "cloud ML scoring, commercial mega-feed, real-time TIP".red()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+            let domains = store.count_by_kind(IocKind::Domain);
+            let ips = store.count_by_kind(IocKind::Ip);
+            let hashes = store.count_by_kind(IocKind::Hash);
+            let urls = store.count_by_kind(IocKind::Url);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberintel",
+                        "store": cli.store.display().to_string(),
+                        "schema_version": STORE_VERSION,
+                        "total": store.entries.len(),
+                        "domains": domains,
+                        "ips": ips,
+                        "hashes": hashes,
+                        "urls": urls,
+                        "updated_at": store.updated_at.to_rfc3339(),
+                        "implemented": "local IOC store, lookup/add/remove/import-file/sync, prune, export, stats, doctor",
+                        "not_implemented": "cloud ML scoring, commercial mega-feed, real-time TIP",
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O ThreatGrid (Phase 2 shell)                     "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Store path        : {}", cli.store.display());
+                println!(" Schema version    : {}", STORE_VERSION);
+                println!(" Total IOCs        : {}", store.entries.len().to_string().bold());
+                println!(" Domains           : {domains}");
+                println!(" IPs               : {ips}");
+                println!(" Hashes            : {hashes}");
+                println!(" URLs              : {urls}");
+                println!(
+                    " Updated           : {}",
+                    store.updated_at.to_rfc3339()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "local IOC store, lookup/add/remove/import-file/sync, prune, export, stats, doctor"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "cloud ML scoring, commercial mega-feed, real-time TIP".red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
         }
-        Commands::Lookup { target } => {
+        Commands::Lookup { target, json } => {
             let store = IocStore::load(&cli.store)?;
             let hits = store.lookup(&target);
             if hits.is_empty() {
-                println!(
-                    "{}",
-                    format!("[threatgrid] no hit for '{target}'").green()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "target": target,
+                            "hit": false,
+                            "hit_count": 0,
+                            "entries": [],
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[threatgrid] no hit for '{target}'").green()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
@@ -281,17 +323,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 std::process::exit(0);
             }
-            println!(
-                "{}",
-                format!("[threatgrid] {} hit(s) for '{target}'", hits.len())
-                    .red()
-                    .bold()
-            );
-            for h in &hits {
+            if json {
                 println!(
-                    "  {:?} {} source={} severity={:?}",
-                    h.kind, h.value, h.source, h.severity
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "target": target,
+                        "hit": true,
+                        "hit_count": hits.len(),
+                        "entries": hits,
+                    }))?
                 );
+            } else {
+                println!(
+                    "{}",
+                    format!("[threatgrid] {} hit(s) for '{target}'", hits.len())
+                        .red()
+                        .bold()
+                );
+                for h in &hits {
+                    println!(
+                        "  {:?} {} source={} severity={:?}",
+                        h.kind, h.value, h.source, h.severity
+                    );
+                }
             }
             let ioc = match guess_kind(&target) {
                 IocKind::Domain => Some(Ioc::Domain(target.clone())),

@@ -203,6 +203,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate route add/remove + EDR listen/alerts JSON + response playbooks pack  
 - ✅ CyberID/Mesh doctor+status JSON + SIEM correlate JSON + playbook show  
 - ✅ Gate/DNS/SIEM status JSON + DNS/intel list JSON + fleet status + quarantine list JSON  
+- ✅ EDR/Defender/Intel status JSON + gate check/SIEM events/lookup JSON + playbook remove  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

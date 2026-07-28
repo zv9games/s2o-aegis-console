@@ -181,6 +181,8 @@ enum Commands {
     Check {
         #[arg(long, default_value_t = 50)]
         min_score: u32,
+        #[arg(long)]
+        json: bool,
     },
     /// Connect shorthand: print how to reach an app route
     Connect { app: String },
@@ -1184,18 +1186,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Check { min_score } => {
+        Commands::Check { min_score, json } => {
             let fw = create_firewall_engine();
             let posture = compute_posture_score(&fw).await?;
             let pass = posture.passes(min_score);
-            println!("posture_score={} max={} min={} pass={}", posture.score, posture.max_score, min_score, pass);
-            for c in &posture.checks {
+            if json {
                 println!(
-                    "  [{}] {} {}",
-                    if c.pass { "PASS" } else { "FAIL" },
-                    c.id,
-                    c.detail
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "score": posture.score,
+                        "max_score": posture.max_score,
+                        "min_score": min_score,
+                        "pass": pass,
+                        "checks": posture.checks,
+                    }))?
                 );
+            } else {
+                println!(
+                    "posture_score={} max={} min={} pass={}",
+                    posture.score, posture.max_score, min_score, pass
+                );
+                for c in &posture.checks {
+                    println!(
+                        "  [{}] {} {}",
+                        if c.pass { "PASS" } else { "FAIL" },
+                        c.id,
+                        c.detail
+                    );
+                }
             }
             emit(
                 &cli.event_log,

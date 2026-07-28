@@ -508,6 +508,15 @@ enum PlaybookCmd {
         #[arg(long, default_value = ".aegis/playbooks.json")]
         path: PathBuf,
     },
+    /// Remove a rule by name
+    Remove {
+        name: String,
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        /// Actually delete (default dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
     /// Evaluate playbooks against recent events
     Run {
         #[arg(long, default_value = ".aegis/playbooks.json")]
@@ -2921,6 +2930,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("[aegis] disabled rule '{name}' → {}", path.display())
                             .yellow()
                             .bold()
+                    );
+                }
+            }
+            PlaybookCmd::Remove { name, path, apply } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let mut pb: PlaybookFile =
+                    serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                let before = pb.rules.len();
+                let idx = pb
+                    .rules
+                    .iter()
+                    .position(|r| r.name.eq_ignore_ascii_case(&name));
+                let Some(i) = idx else {
+                    eprintln!("[aegis] playbook rule not found: {name}");
+                    std::process::exit(1);
+                };
+                let removed = pb.rules[i].name.clone();
+                let enabled = pb.rules[i].enabled;
+                if apply {
+                    pb.rules.remove(i);
+                    std::fs::write(&path, serde_json::to_string_pretty(&pb)?)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] removed rule '{removed}' (was enabled={enabled}) → {} ({} remaining)",
+                            path.display(),
+                            pb.rules.len()
+                        )
+                        .yellow()
+                        .bold()
+                    );
+                } else {
+                    println!(
+                        "[aegis] playbook remove dry-run: would remove '{removed}' (enabled={enabled}) from {} ({before} rules; use --apply)",
+                        path.display()
                     );
                 }
             }

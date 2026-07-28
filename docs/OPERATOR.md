@@ -44,6 +44,7 @@ cargo run -p cyberwall -- doctor
 cargo run -p cyberdefender -- doctor
 cargo run -p cyberztna -- doctor
 cargo run -p cyberztna -- status --json
+cargo run -p cyberztna -- check --json
 cargo run -p cyberztna -- routes --json
 cargo run -p cyberztna -- route-add lab-api --path-prefix /api --upstream http://127.0.0.1:8080
 cargo run -p cyberztna -- route-remove lab-api
@@ -61,6 +62,7 @@ cargo run -p aegis-cli -- health --status --metrics
 cargo run -p aegis-cli -- selftest
 cargo run -p cybersiem -- doctor
 cargo run -p cybersiem -- status --json
+cargo run -p cybersiem -- events --limit 10 --json
 cargo run -p cybersiem -- search "blocklist" --since 24h --max 20
 cargo run -p cybersiem -- search gate --product cyberztna --json
 cargo run -p cybersiem -- correlate evil.example --json
@@ -70,7 +72,9 @@ cargo run -p aegis-cli -- playbook run --json
 cargo run -p aegis-cli -- playbook show echo-dns-blocks
 cargo run -p aegis-cli -- playbook show echo-dns-blocks --json
 cargo run -p cyberintel -- doctor
+cargo run -p cyberintel -- status --json
 cargo run -p cyberintel -- list --limit 20 --json
+cargo run -p cyberintel -- lookup evil.example --json
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o --apply
 cargo run -p cyberid -- status --json
@@ -80,8 +84,10 @@ cargo run -p cybermesh -- doctor --json
 cargo run -p cyberid -- sessions --json
 cargo run -p cyberid -- sessions --all --user operator
 cargo run -p cyberid -- revoke --user labuser
+cargo run -p cyberedr -- status --json
 cargo run -p cyberedr -- export --state established --format csv --out .aegis/tcp.csv
 cargo run -p cyberedr -- export --state listen --limit 50
+cargo run -p cyberdefender -- status --json
 cargo run -p cyberdefender -- quarantine list --json
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
@@ -95,6 +101,8 @@ cargo run -p aegis-cli -- playbook show echo-dns-blocks --json
 cargo run -p aegis-cli -- playbook validate
 cargo run -p aegis-cli -- playbook disable webhook-on-high-block
 cargo run -p aegis-cli -- playbook enable emit-on-high-block
+cargo run -p aegis-cli -- playbook remove disposable-rule          # dry-run
+cargo run -p aegis-cli -- playbook remove disposable-rule --apply
 cargo run -p aegis-cli -- playbook run              # dry-run (log/dns/emit/ioc_add_attr/…)
 cargo run -p aegis-cli -- playbook run --apply      # mutate blocklist / IOC store etc.
 cargo run -p cybersiem -- stats --since 24h --json

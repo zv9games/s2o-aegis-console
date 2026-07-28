@@ -48,7 +48,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// SHA-256 + yara-lite (+ optional YARA-X) scan a file or directory
     Scan {
         path: String,
@@ -757,7 +760,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let is_active = tokio::task::spawn_blocking(|| {
                 s2o_net_lib::defender::DefenderController::is_defender_active()
             })
@@ -766,89 +769,115 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (patterns, perrs) = load_patterns(&cli.patterns);
             let yara_files = yara_x_engine::collect_rule_files(&cli.yara_dir);
             let yara_eng = try_load_yara(&cli.yara_dir, false);
-
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "      S2O CyberDefender (Phase 2/3 shell)                "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " WinDefend service : {}",
-                if is_active {
-                    "Running".green().bold()
-                } else {
-                    "Not running / query failed".red().bold()
-                }
-            );
-            println!(" Rules file        : {}", cli.rules.display());
-            println!(
-                " Local hash rules  : {}",
-                rules.blocked_hashes.len().to_string().yellow()
-            );
-            println!(
-                " Name substr rules : {}",
-                rules.blocked_name_substrings.len().to_string().yellow()
-            );
             let ioc_hashes = IocStore::load(&cli.ioc_store)
                 .map(|s| s.count_by_kind(s2o_ioc::IocKind::Hash))
                 .unwrap_or(0);
-            println!(" IOC hash rules    : {ioc_hashes}");
-            println!(
-                " yara-lite patterns: {} ({})",
-                patterns.len(),
-                cli.patterns.display()
-            );
-            if !perrs.is_empty() {
-                println!(" pattern errors    : {}", perrs.len().to_string().red());
-            }
-            println!(
-                " YARA-X engine     : {} (yara-x {})",
-                "enabled".green(),
-                yara_x_engine::engine_version()
-            );
-            println!(" YARA-X rules dir  : {}", cli.yara_dir.display());
-            println!(
-                " YARA-X rule files : {}",
-                yara_files.len().to_string().yellow()
-            );
-            if let Some(ref eng) = yara_eng {
+            let yara_rules = yara_eng.as_ref().map(|e| e.rule_count).unwrap_or(0);
+            let yara_ok = yara_eng.is_some();
+
+            if json {
                 println!(
-                    " YARA-X rules      : {}",
-                    eng.rule_count.to_string().yellow()
-                );
-            } else if yara_files.is_empty() {
-                println!(
-                    " YARA-X rules      : {}",
-                    "none (run: cyberdefender yara init)".yellow()
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberdefender",
+                        "defender_active": is_active,
+                        "rules_file": cli.rules.display().to_string(),
+                        "hash_rules": rules.blocked_hashes.len(),
+                        "name_rules": rules.blocked_name_substrings.len(),
+                        "ioc_hashes": ioc_hashes,
+                        "patterns_file": cli.patterns.display().to_string(),
+                        "patterns": patterns.len(),
+                        "pattern_errors": perrs.len(),
+                        "yara_engine": yara_x_engine::engine_version(),
+                        "yara_dir": cli.yara_dir.display().to_string(),
+                        "yara_files": yara_files.len(),
+                        "yara_rules": yara_rules,
+                        "yara_loaded": yara_ok,
+                        "implemented": "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + rules list/export + doctor",
+                        "not_implemented": "realtime FS minifilter, cloud signature feed",
+                    }))?
                 );
             } else {
                 println!(
-                    " YARA-X rules      : {}",
-                    "compile failed".red()
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberDefender (Phase 2/3 shell)                "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " WinDefend service : {}",
+                    if is_active {
+                        "Running".green().bold()
+                    } else {
+                        "Not running / query failed".red().bold()
+                    }
+                );
+                println!(" Rules file        : {}", cli.rules.display());
+                println!(
+                    " Local hash rules  : {}",
+                    rules.blocked_hashes.len().to_string().yellow()
+                );
+                println!(
+                    " Name substr rules : {}",
+                    rules.blocked_name_substrings.len().to_string().yellow()
+                );
+                println!(" IOC hash rules    : {ioc_hashes}");
+                println!(
+                    " yara-lite patterns: {} ({})",
+                    patterns.len(),
+                    cli.patterns.display()
+                );
+                if !perrs.is_empty() {
+                    println!(" pattern errors    : {}", perrs.len().to_string().red());
+                }
+                println!(
+                    " YARA-X engine     : {} (yara-x {})",
+                    "enabled".green(),
+                    yara_x_engine::engine_version()
+                );
+                println!(" YARA-X rules dir  : {}", cli.yara_dir.display());
+                println!(
+                    " YARA-X rule files : {}",
+                    yara_files.len().to_string().yellow()
+                );
+                if yara_ok {
+                    println!(
+                        " YARA-X rules      : {}",
+                        yara_rules.to_string().yellow()
+                    );
+                } else if yara_files.is_empty() {
+                    println!(
+                        " YARA-X rules      : {}",
+                        "none (run: cyberdefender yara init)".yellow()
+                    );
+                } else {
+                    println!(
+                        " YARA-X rules      : {}",
+                        "compile failed".red()
+                    );
+                }
+                println!(
+                    " Implemented       : {}",
+                    "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + rules list/export + doctor"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "realtime FS minifilter, cloud signature feed".red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
                 );
             }
-            println!(
-                " Implemented       : {}",
-                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + rules list/export + doctor"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "realtime FS minifilter, cloud signature feed".red()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
 
             emit(
                 &cli.event_log,
@@ -860,10 +889,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ("hash_rules", serde_json::json!(rules.blocked_hashes.len())),
                     ("patterns", serde_json::json!(patterns.len())),
                     ("yara_files", serde_json::json!(yara_files.len())),
-                    (
-                        "yara_rules",
-                        serde_json::json!(yara_eng.as_ref().map(|e| e.rule_count).unwrap_or(0)),
-                    ),
+                    ("yara_rules", serde_json::json!(yara_rules)),
                 ],
                 None,
             );

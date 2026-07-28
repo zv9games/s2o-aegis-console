@@ -148,6 +148,8 @@
 - `aegis playbook show <name>` full rule dump (`--json`)
 - Gate / CyberDNS / CyberLog `status --json`; DNS `list --json` (+ optional `--limit`)
 - ThreatGrid `list --json`; `aegis fleet status --json`; Defender `quarantine list --json`
+- EDR / Defender / ThreatGrid `status --json`; Gate `check --json`; SIEM `events --json`
+- ThreatGrid `lookup --json`; `aegis playbook remove <name> [--apply]`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
