@@ -418,6 +418,8 @@ enum ConfigCmd {
     Show {
         #[arg(long, default_value = ".aegis/config.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Write default config file
     Init {
@@ -447,6 +449,8 @@ enum PolicyCmd {
         path: PathBuf,
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Validate a policy pack JSON without applying (shape + soft path checks)
     Validate {
@@ -2373,33 +2377,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            PolicyCmd::Apply { path, event_log } => {
+            PolicyCmd::Apply { path, event_log, json } => {
                 let doc = load_policy_file(&path)?;
                 let store = Arc::new(EventStore::open(&event_log)?);
                 let result = apply_policy(&doc, &fw, Some(store)).await?;
-                if result.ok {
-                    println!(
-                        "{}",
-                        format!("[aegis] policy OK: {}", result.policy_name)
-                            .green()
-                            .bold()
-                    );
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
                 } else {
-                    println!(
-                        "{}",
-                        format!("[aegis] policy incomplete: {}", result.policy_name)
-                            .yellow()
-                            .bold()
-                    );
-                }
-                for a in &result.applied {
-                    println!("  applied : {}", a.green());
-                }
-                for s in &result.skipped {
-                    println!("  skipped : {}", s.dimmed());
-                }
-                for e in &result.errors {
-                    println!("  error   : {}", e.red());
+                    if result.ok {
+                        println!(
+                            "{}",
+                            format!("[aegis] policy OK: {}", result.policy_name)
+                                .green()
+                                .bold()
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format!("[aegis] policy incomplete: {}", result.policy_name)
+                                .yellow()
+                                .bold()
+                        );
+                    }
+                    for a in &result.applied {
+                        println!("  applied : {}", a.green());
+                    }
+                    for s in &result.skipped {
+                        println!("  skipped : {}", s.dimmed());
+                    }
+                    for e in &result.errors {
+                        println!("  error   : {}", e.red());
+                    }
                 }
                 if !result.ok {
                     std::process::exit(1);
@@ -3111,13 +3119,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Commands::Config { command } => match command {
-            ConfigCmd::Show { path } => {
+            ConfigCmd::Show { path, json } => {
                 let cfg = SuiteConfig::load(&path);
-                println!("{}", serde_json::to_string_pretty(&cfg)?);
-                if path.exists() {
-                    eprintln!("(from {})", path.display());
+                let present = path.exists();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "present": present,
+                            "config": cfg,
+                        }))?
+                    );
                 } else {
-                    eprintln!("(defaults; no file at {})", path.display());
+                    println!("{}", serde_json::to_string_pretty(&cfg)?);
+                    if present {
+                        eprintln!("(from {})", path.display());
+                    } else {
+                        eprintln!("(defaults; no file at {})", path.display());
+                    }
                 }
             }
             ConfigCmd::Init { path } => {

@@ -150,6 +150,9 @@
 - ThreatGrid `list --json`; `aegis fleet status --json`; Defender `quarantine list --json`
 - EDR / Defender / ThreatGrid `status --json`; Gate `check --json`; SIEM `events --json`
 - ThreatGrid `lookup --json`; `aegis playbook remove <name> [--apply]`
+- CyberDNS `resolve --json`; CyberID `authenticate --json` + `verify --json`
+- `aegis policy apply --json` + `config show --json`
+- Defender `patterns list --json` + `yara list --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

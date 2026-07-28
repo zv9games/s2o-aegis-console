@@ -112,7 +112,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    Resolve { domain: String },
+    Resolve {
+        domain: String,
+        #[arg(long)]
+        json: bool,
+    },
     Block { domain: String },
     Unblock { domain: String },
     /// Add domain to allowlist (overrides block/IOC)
@@ -957,17 +961,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[cyberdns] not in allowlist: {d}");
             }
         }
-        Commands::Resolve { domain } => {
+        Commands::Resolve { domain, json } => {
             let d = normalize_domain(&domain);
             if let Some(reason) =
                 domain_denied(&cli.blocklist, &cli.allowlist, &cli.ioc_store, &d)
             {
-                println!(
-                    "{}",
-                    format!("[CYBERDNS] BLOCKED by {reason}: {d}")
-                        .red()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "domain": d,
+                            "decision": "blocked",
+                            "reason": reason,
+                            "ips": [],
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[CYBERDNS] BLOCKED by {reason}: {d}")
+                            .red()
+                            .bold()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Blocked,
@@ -978,19 +994,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(3);
             }
 
-            println!(
-                "{}",
-                format!(
-                    "[CYBERDNS] Resolving '{d}' via DoH ({})...",
-                    doh_eps.join(" → ")
-                )
-                .cyan()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    format!(
+                        "[CYBERDNS] Resolving '{d}' via DoH ({})...",
+                        doh_eps.join(" → ")
+                    )
+                    .cyan()
+                );
+            }
             match doh::resolve_a_strings(&d, &doh_eps).await {
                 Ok((ips, used)) if !ips.is_empty() => {
-                    println!(" DoH resolver  : {}", used.yellow());
-                    for ip in &ips {
-                        println!(" Resolved IP   : {}", ip.green().bold());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "domain": d,
+                                "decision": "allowed",
+                                "reason": null,
+                                "resolver": used,
+                                "ips": ips,
+                            }))?
+                        );
+                    } else {
+                        println!(" DoH resolver  : {}", used.yellow());
+                        for ip in &ips {
+                            println!(" Resolved IP   : {}", ip.green().bold());
+                        }
                     }
                     emit(
                         &cli.event_log,
@@ -1001,8 +1032,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 Ok((_, used)) => {
-                    println!("{}", "NXDOMAIN / no A records.".yellow());
-                    println!(" DoH resolver  : {used}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "domain": d,
+                                "decision": "nxdomain",
+                                "reason": null,
+                                "resolver": used,
+                                "ips": [],
+                            }))?
+                        );
+                    } else {
+                        println!("{}", "NXDOMAIN / no A records.".yellow());
+                        println!(" DoH resolver  : {used}");
+                    }
                     emit(
                         &cli.event_log,
                         EventAction::Observed,
@@ -1012,7 +1056,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 Err(e) => {
-                    eprintln!("{}", format!("DoH error: {e}").red());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "domain": d,
+                                "decision": "error",
+                                "error": e.to_string(),
+                                "ips": [],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("{}", format!("DoH error: {e}").red());
+                    }
                     std::process::exit(1);
                 }
             }

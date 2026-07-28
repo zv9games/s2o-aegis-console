@@ -200,7 +200,10 @@ enum QuarantineCmd {
 #[derive(Subcommand)]
 enum PatternsCmd {
     /// List loaded rules
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Write default seed rules if missing (or --force)
     Init {
         #[arg(long)]
@@ -223,7 +226,10 @@ enum YaraCmd {
         force: bool,
     },
     /// List rule files and compiled rule count
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Test YARA-X against a file or --text
     Test {
         path: Option<PathBuf>,
@@ -1368,24 +1374,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Commands::Patterns { command } => match command {
-            PatternsCmd::List => {
+            PatternsCmd::List { json } => {
                 let (patterns, errs) = load_patterns(&cli.patterns);
-                println!(
-                    "[cyberdefender] {} rules from {}",
-                    patterns.len(),
-                    cli.patterns.display()
-                );
-                for p in &patterns {
+                if json {
+                    let rows: Vec<_> = patterns
+                        .iter()
+                        .map(|p| {
+                            serde_json::json!({
+                                "name": p.name,
+                                "kind": p.kind_label(),
+                                "severity": format!("{:?}", p.severity).to_ascii_lowercase(),
+                                "body": p.display_body(),
+                            })
+                        })
+                        .collect();
                     println!(
-                        "  [{:?}] {:<8} {:<24} {}",
-                        p.severity,
-                        p.kind_label(),
-                        p.name,
-                        p.display_body()
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": cli.patterns.display().to_string(),
+                            "count": rows.len(),
+                            "errors": errs,
+                            "patterns": rows,
+                        }))?
                     );
-                }
-                for e in errs {
-                    eprintln!("  ! {e}");
+                } else {
+                    println!(
+                        "[cyberdefender] {} rules from {}",
+                        patterns.len(),
+                        cli.patterns.display()
+                    );
+                    for p in &patterns {
+                        println!(
+                            "  [{:?}] {:<8} {:<24} {}",
+                            p.severity,
+                            p.kind_label(),
+                            p.name,
+                            p.display_body()
+                        );
+                    }
+                    for e in errs {
+                        eprintln!("  ! {e}");
+                    }
                 }
             }
             PatternsCmd::Init { force } => {
@@ -1465,29 +1494,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .bold()
                 );
             }
-            YaraCmd::List => {
+            YaraCmd::List { json } => {
                 let files = yara_x_engine::collect_rule_files(&cli.yara_dir);
-                println!(
-                    "[cyberdefender] YARA-X {} — dir {}",
-                    yara_x_engine::engine_version(),
-                    cli.yara_dir.display()
-                );
-                if files.is_empty() {
-                    println!("  (no .yar/.yara files — run: cyberdefender yara init)");
-                }
-                for f in &files {
-                    println!("  file  {}", f.display());
-                }
-                match YaraEngine::compile_dir(&cli.yara_dir) {
-                    Ok(eng) => {
-                        println!("  compiled rules: {}", eng.rule_count);
-                        for s in &eng.sources {
-                            println!("  source  {}", s.display());
-                        }
+                let compile = YaraEngine::compile_dir(&cli.yara_dir);
+                if json {
+                    let (rule_count, sources, compile_error) = match &compile {
+                        Ok(eng) => (
+                            Some(eng.rule_count),
+                            eng.sources
+                                .iter()
+                                .map(|s| s.display().to_string())
+                                .collect::<Vec<_>>(),
+                            None::<String>,
+                        ),
+                        Err(e) => (None, Vec::new(), Some(e.to_string())),
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "engine": yara_x_engine::engine_version(),
+                            "yara_dir": cli.yara_dir.display().to_string(),
+                            "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+                            "file_count": files.len(),
+                            "rule_count": rule_count,
+                            "sources": sources,
+                            "compile_error": compile_error,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[cyberdefender] YARA-X {} — dir {}",
+                        yara_x_engine::engine_version(),
+                        cli.yara_dir.display()
+                    );
+                    if files.is_empty() {
+                        println!("  (no .yar/.yara files — run: cyberdefender yara init)");
                     }
-                    Err(e) => {
-                        eprintln!("  compile WARN: {e}");
-                        eprintln!("  (files listed; fix duplicates before scan --yara)");
+                    for f in &files {
+                        println!("  file  {}", f.display());
+                    }
+                    match compile {
+                        Ok(eng) => {
+                            println!("  compiled rules: {}", eng.rule_count);
+                            for s in &eng.sources {
+                                println!("  source  {}", s.display());
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("  compile WARN: {e}");
+                            eprintln!("  (files listed; fix duplicates before scan --yara)");
+                        }
                     }
                 }
             }

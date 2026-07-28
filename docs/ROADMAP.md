@@ -204,6 +204,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ CyberID/Mesh doctor+status JSON + SIEM correlate JSON + playbook show  
 - ✅ Gate/DNS/SIEM status JSON + DNS/intel list JSON + fleet status + quarantine list JSON  
 - ✅ EDR/Defender/Intel status JSON + gate check/SIEM events/lookup JSON + playbook remove  
+- ✅ DNS resolve + ID auth/verify JSON + policy apply/config show + patterns/yara list JSON  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

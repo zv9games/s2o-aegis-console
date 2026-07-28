@@ -52,6 +52,8 @@ enum Commands {
         min_score: u32,
         #[arg(long, default_value_t = 8)]
         ttl_hours: i64,
+        #[arg(long)]
+        json: bool,
     },
     /// List sessions (active by default)
     Sessions {
@@ -88,7 +90,11 @@ enum Commands {
         #[arg(long)]
         user: Option<String>,
     },
-    Verify { token: String },
+    Verify {
+        token: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(serde::Serialize)]
@@ -523,6 +529,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             user,
             min_score,
             ttl_hours,
+            json,
         } => {
             let fw = create_firewall_engine();
             let st = cyberwall_core::FirewallEngine::get_status(fw.as_ref()).await?;
@@ -544,9 +551,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 score += 15;
             }
             if score < min_score {
-                eprintln!(
-                    "[cyberid] authenticate DENY for '{user}': posture {score} < {min_score}"
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "user": user,
+                            "score": score,
+                            "min_score": min_score,
+                            "decision": "deny",
+                        }))?
+                    );
+                } else {
+                    eprintln!(
+                        "[cyberid] authenticate DENY for '{user}': posture {score} < {min_score}"
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Blocked,
@@ -563,30 +583,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut store = SessionStore::load(&cli.sessions);
             let session = store.mint(&user, &host_id(), score, ttl_hours);
             store.save(&cli.sessions)?;
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "      CyberID session issued                             "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(" User     : {}", user.bold());
-            println!(" Score    : {score}");
-            println!(" Token    : {}", session.token.yellow().bold());
-            println!(" Expires  : {}", session.expires_at);
-            println!(" Store    : {}", cli.sessions.display());
-            println!(" Header   : X-Aegis-Session: {}", session.token);
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "user": user,
+                        "score": score,
+                        "min_score": min_score,
+                        "decision": "allow",
+                        "session_id": session.id,
+                        "token": session.token,
+                        "expires_at": session.expires_at,
+                        "host_id": session.host_id,
+                        "sessions_file": cli.sessions.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      CyberID session issued                             "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" User     : {}", user.bold());
+                println!(" Score    : {score}");
+                println!(" Token    : {}", session.token.yellow().bold());
+                println!(" Expires  : {}", session.expires_at);
+                println!(" Store    : {}", cli.sessions.display());
+                println!(" Header   : X-Aegis-Session: {}", session.token);
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
             emit(
                 &cli.event_log,
                 EventAction::Allowed,
@@ -808,17 +846,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(2);
             }
         }
-        Commands::Verify { token } => {
+        Commands::Verify { token, json } => {
             let store = SessionStore::load(&cli.sessions);
             match store.verify(&token) {
                 Some(s) => {
-                    println!(
-                        "OK user={} score={} exp={}",
-                        s.user, s.posture_score, s.expires_at
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "valid": true,
+                                "user": s.user,
+                                "session_id": s.id,
+                                "host_id": s.host_id,
+                                "posture_score": s.posture_score,
+                                "expires_at": s.expires_at,
+                                "last_used": s.last_used,
+                                "issued_at": s.issued_at,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "OK user={} score={} exp={}",
+                            s.user, s.posture_score, s.expires_at
+                        );
+                    }
                 }
                 None => {
-                    eprintln!("INVALID");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "valid": false,
+                                "token_prefix": token.chars().take(12).collect::<String>(),
+                            }))?
+                        );
+                    } else {
+                        eprintln!("INVALID");
+                    }
                     std::process::exit(3);
                 }
             }
