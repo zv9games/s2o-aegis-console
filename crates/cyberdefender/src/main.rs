@@ -141,6 +141,22 @@ enum RulesCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Add a blocked name substring
+    AddName {
+        substring: String,
+    },
+    /// Add a blocked SHA-256 (or any hex hash string)
+    AddHash {
+        hash: String,
+    },
+    /// Remove a name substring (case-insensitive match)
+    RemoveName {
+        substring: String,
+    },
+    /// Remove a hash (case-insensitive)
+    RemoveHash {
+        hash: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1158,6 +1174,119 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!();
                     }
                 }
+            }
+            RulesCmd::AddName { substring } => {
+                let sub = substring.trim().to_string();
+                if sub.is_empty() {
+                    eprintln!("[cyberdefender] empty name substring");
+                    std::process::exit(2);
+                }
+                let mut rules = load_rules(&cli.rules);
+                if rules.version.is_empty() {
+                    rules.version = "0.1.0".into();
+                }
+                let low = sub.to_ascii_lowercase();
+                if rules
+                    .blocked_name_substrings
+                    .iter()
+                    .any(|n| n.to_ascii_lowercase() == low)
+                {
+                    println!("[cyberdefender] name rule already present: {sub}");
+                } else {
+                    rules.blocked_name_substrings.push(sub.clone());
+                    save_rules(&cli.rules, &rules)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] added name rule '{sub}' ({} names)",
+                            rules.blocked_name_substrings.len()
+                        )
+                        .green()
+                        .bold()
+                    );
+                    emit(
+                        &cli.event_log,
+                        EventAction::Observed,
+                        Severity::Info,
+                        format!("defender rule add name={sub}"),
+                        &[("name", serde_json::json!(sub))],
+                        None,
+                    );
+                }
+            }
+            RulesCmd::AddHash { hash } => {
+                let h = hash.trim().to_ascii_lowercase();
+                if h.is_empty() || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+                    eprintln!("[cyberdefender] hash must be non-empty hex");
+                    std::process::exit(2);
+                }
+                let mut rules = load_rules(&cli.rules);
+                if rules.version.is_empty() {
+                    rules.version = "0.1.0".into();
+                }
+                if rules
+                    .blocked_hashes
+                    .iter()
+                    .any(|x| x.to_ascii_lowercase() == h)
+                {
+                    println!("[cyberdefender] hash already present: {h}");
+                } else {
+                    rules.blocked_hashes.push(h.clone());
+                    save_rules(&cli.rules, &rules)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] added hash rule ({} hashes)",
+                            rules.blocked_hashes.len()
+                        )
+                        .green()
+                        .bold()
+                    );
+                    emit(
+                        &cli.event_log,
+                        EventAction::Observed,
+                        Severity::Info,
+                        format!("defender rule add hash={}", &h[..h.len().min(16)]),
+                        &[("hash", serde_json::json!(h))],
+                        None,
+                    );
+                }
+            }
+            RulesCmd::RemoveName { substring } => {
+                let low = substring.trim().to_ascii_lowercase();
+                let mut rules = load_rules(&cli.rules);
+                let before = rules.blocked_name_substrings.len();
+                rules
+                    .blocked_name_substrings
+                    .retain(|n| n.to_ascii_lowercase() != low);
+                let removed = before.saturating_sub(rules.blocked_name_substrings.len());
+                if removed == 0 {
+                    eprintln!("[cyberdefender] name rule not found: {substring}");
+                    std::process::exit(1);
+                }
+                save_rules(&cli.rules, &rules)?;
+                println!(
+                    "{}",
+                    format!("[cyberdefender] removed {removed} name rule(s)").yellow()
+                );
+            }
+            RulesCmd::RemoveHash { hash } => {
+                let low = hash.trim().to_ascii_lowercase();
+                let mut rules = load_rules(&cli.rules);
+                let before = rules.blocked_hashes.len();
+                rules
+                    .blocked_hashes
+                    .retain(|h| h.to_ascii_lowercase() != low);
+                let removed = before.saturating_sub(rules.blocked_hashes.len());
+                if removed == 0 {
+                    eprintln!("[cyberdefender] hash not found");
+                    std::process::exit(1);
+                }
+                save_rules(&cli.rules, &rules)?;
+                println!(
+                    "{}",
+                    format!("[cyberdefender] removed {removed} hash rule(s)").yellow()
+                );
             }
         },
         Commands::UpdateDefs => {

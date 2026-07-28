@@ -133,6 +133,9 @@
 - CyberDNS `import` domains from text/hosts file into block or allow list
 - `aegis config get|set` for suite config keys
 - CyberID `sessions-export` (json/csv + `--all`/`--user`/`--out`)
+- CyberDefender `rules add-name|add-hash|remove-name|remove-hash`
+- CyberEDR `ps --json`, `drift --json`, `baseline-export` (json/csv)
+- ThreatGrid `import-file` offline IOC load (text/hosts/JSON)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

@@ -38,6 +38,21 @@ enum Commands {
         #[arg(long, default_value = "manual")]
         source: String,
     },
+    /// Import IOCs from a local file (domains one-per-line, or json array/export)
+    ImportFile {
+        path: PathBuf,
+        /// domain|ip|hash|url (used for plain text lines; json uses entry kinds)
+        #[arg(long, default_value = "domain")]
+        kind: String,
+        #[arg(long, default_value = "file-import")]
+        source: String,
+        /// Max entries to import
+        #[arg(long, default_value_t = 10_000)]
+        max: usize,
+        /// Dry-run: report only
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Import domains from DNS blocklist + optional URL feed(s)
     Sync {
         #[arg(long, default_value = ".aegis/dns-blocklist.txt")]
@@ -234,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "local IOC store, lookup/add/remove/sync, prune, export, stats, doctor"
+                "local IOC store, lookup/add/remove/import-file/sync, prune, export, stats, doctor"
                     .green()
             );
             println!(
@@ -326,6 +341,149 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
                 None,
             );
+        }
+        Commands::ImportFile {
+            path,
+            kind,
+            source,
+            max,
+            dry_run,
+        } => {
+            if !path.exists() {
+                eprintln!("[threatgrid] missing {}", path.display());
+                std::process::exit(2);
+            }
+            let text = std::fs::read_to_string(&path)?;
+            let default_kind =
+                parse_kind(&kind).ok_or_else(|| format!("unknown kind '{kind}'"))?;
+            let mut store = IocStore::load(&cli.store)?;
+            let before = store.entries.len();
+            let mut added = 0usize;
+            let mut scanned = 0usize;
+
+            let trimmed = text.trim_start();
+            if trimmed.starts_with('[') || trimmed.starts_with('{') {
+                // JSON: array of IocEntry-like objects, or {entries:[...]}, or string array
+                let v: serde_json::Value = serde_json::from_str(&text)?;
+                let arr = if let Some(a) = v.as_array() {
+                    a.clone()
+                } else if let Some(a) = v.get("entries").and_then(|e| e.as_array()) {
+                    a.clone()
+                } else {
+                    vec![v]
+                };
+                for item in arr {
+                    if scanned >= max {
+                        break;
+                    }
+                    scanned += 1;
+                    if let Some(s) = item.as_str() {
+                        if store.upsert(IocEntry {
+                            kind: default_kind,
+                            value: s.to_string(),
+                            source: source.clone(),
+                            severity: IocSeverity::High,
+                            note: Some(format!("import {}", path.display())),
+                            added_at: Utc::now(),
+                        }) {
+                            added += 1;
+                        }
+                        continue;
+                    }
+                    let k = item
+                        .get("kind")
+                        .and_then(|x| x.as_str())
+                        .and_then(parse_kind)
+                        .unwrap_or(default_kind);
+                    let val = item
+                        .get("value")
+                        .and_then(|x| x.as_str())
+                        .or_else(|| item.get("domain").and_then(|x| x.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+                    if val.trim().is_empty() {
+                        continue;
+                    }
+                    let src = item
+                        .get("source")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(&source)
+                        .to_string();
+                    if store.upsert(IocEntry {
+                        kind: k,
+                        value: val,
+                        source: src,
+                        severity: IocSeverity::High,
+                        note: Some(format!("import {}", path.display())),
+                        added_at: Utc::now(),
+                    }) {
+                        added += 1;
+                    }
+                }
+            } else {
+                for line in text.lines() {
+                    if scanned >= max {
+                        break;
+                    }
+                    let line = line.split('#').next().unwrap_or("").trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let domain = if line.contains(char::is_whitespace) {
+                        line.split_whitespace().last().unwrap_or("").trim()
+                    } else {
+                        line
+                    };
+                    if domain.is_empty() || domain.parse::<std::net::IpAddr>().is_ok() {
+                        // skip bare IPs in domain mode unless kind=ip
+                        if !matches!(default_kind, IocKind::Ip) {
+                            continue;
+                        }
+                    }
+                    scanned += 1;
+                    if store.upsert(IocEntry {
+                        kind: default_kind,
+                        value: domain.to_string(),
+                        source: source.clone(),
+                        severity: IocSeverity::High,
+                        note: Some(format!("import {}", path.display())),
+                        added_at: Utc::now(),
+                    }) {
+                        added += 1;
+                    }
+                }
+            }
+
+            if dry_run {
+                println!(
+                    "[threatgrid] import-file dry-run: scanned={scanned} new={added} store_was={before} total_after={}",
+                    before + added
+                );
+            } else {
+                store.save(&cli.store)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[threatgrid] import-file added={added} scanned={scanned} total={} from {}",
+                        store.entries.len(),
+                        path.display()
+                    )
+                    .green()
+                    .bold()
+                );
+                emit(
+                    &cli.event_log,
+                    EventAction::Observed,
+                    Severity::Info,
+                    format!("ioc import-file added={added}"),
+                    &[
+                        ("path", serde_json::json!(path.display().to_string())),
+                        ("added", serde_json::json!(added)),
+                        ("scanned", serde_json::json!(scanned)),
+                    ],
+                    None,
+                );
+            }
         }
         Commands::Sync {
             blocklist,

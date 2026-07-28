@@ -43,16 +43,30 @@ enum Commands {
         /// Include command line + parent PID (WMI/ps - richer, slower)
         #[arg(long)]
         rich: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Snapshot process image names into baseline file
     Baseline {
         #[arg(long, default_value_t = 500)]
         limit: usize,
     },
+    /// Export process baseline (json/csv)
+    BaselineExport {
+        #[arg(long, default_value = ".aegis/edr-baseline.json")]
+        baseline: PathBuf,
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Compare live process names to baseline (exit 3 if new images found)
     Drift {
         #[arg(long, default_value_t = 500)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Heuristic alerts from TCP snapshot (no ETW yet)
     Alerts,
@@ -772,42 +786,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Commands::Ps { limit, rich } => {
+        Commands::Ps { limit, rich, json } => {
             let rows = list_processes(limit, rich);
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                format!(
-                    "       Process inventory ({})                     ",
-                    if rich { "rich/WMI" } else { "userspace" }
-                )
-                .bold()
-                .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            for p in &rows {
-                if rich {
-                    println!(
-                        " PID {:<6} PPID {:<6} | {}{}",
-                        p.pid,
-                        p.ppid.map(|x| x.to_string()).unwrap_or_else(|| "-".into()),
-                        p.name,
-                        p.cmdline
-                            .as_ref()
-                            .map(|c| format!("\n    cmd: {c}"))
-                            .unwrap_or_default()
-                    );
-                } else {
-                    println!(" PID {:<6} | {}", p.pid, p.name);
+            if json {
+                let items: Vec<_> = rows
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "pid": p.pid,
+                            "name": p.name,
+                            "ppid": p.ppid,
+                            "cmdline": p.cmdline,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "rich": rich,
+                        "count": items.len(),
+                        "processes": items,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!(
+                        "       Process inventory ({})                     ",
+                        if rich { "rich/WMI" } else { "userspace" }
+                    )
+                    .bold()
+                    .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                for p in &rows {
+                    if rich {
+                        println!(
+                            " PID {:<6} PPID {:<6} | {}{}",
+                            p.pid,
+                            p.ppid.map(|x| x.to_string()).unwrap_or_else(|| "-".into()),
+                            p.name,
+                            p.cmdline
+                                .as_ref()
+                                .map(|c| format!("\n    cmd: {c}"))
+                                .unwrap_or_default()
+                        );
+                    } else {
+                        println!(" PID {:<6} | {}", p.pid, p.name);
+                    }
                 }
+                println!(" Count: {}", rows.len());
             }
-            println!(" Count: {}", rows.len());
             emit(
                 &cli.event_log,
                 EventKind::Process,
@@ -854,7 +890,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
             );
         }
-        Commands::Drift { limit } => {
+        Commands::BaselineExport {
+            baseline,
+            format,
+            out,
+        } => {
+            // Prefer explicit --baseline; fall back to global --baseline default path
+            let path = if baseline.exists() || baseline != PathBuf::from(".aegis/edr-baseline.json")
+            {
+                baseline
+            } else {
+                cli.baseline.clone()
+            };
+            if !path.exists() {
+                eprintln!(
+                    "[cyberedr] no baseline at {} — run: cyberedr baseline",
+                    path.display()
+                );
+                std::process::exit(2);
+            }
+            let bl: ProcessBaseline = serde_json::from_str(&fs::read_to_string(&path)?)?;
+            let text = if format.eq_ignore_ascii_case("csv") {
+                let mut s = String::from("image\n");
+                for img in &bl.images {
+                    s.push_str(img);
+                    s.push('\n');
+                }
+                s
+            } else {
+                serde_json::to_string_pretty(&bl)?
+            };
+            if let Some(outp) = out {
+                if let Some(p) = outp.parent() {
+                    fs::create_dir_all(p)?;
+                }
+                fs::write(&outp, &text)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberedr] baseline exported {} images → {}",
+                        bl.images.len(),
+                        outp.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            } else {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Commands::Drift { limit, json } => {
             if !cli.baseline.exists() {
                 eprintln!(
                     "[cyberedr] no baseline at {} — run: cyberedr baseline",
@@ -868,6 +956,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let live = process_images(limit);
             let new: Vec<_> = live.difference(&base).cloned().collect();
             let gone: Vec<_> = base.difference(&live).cloned().collect();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "baseline": cli.baseline.display().to_string(),
+                        "live_count": live.len(),
+                        "baseline_count": base.len(),
+                        "new": new,
+                        "gone": gone,
+                        "drift": !new.is_empty(),
+                    }))?
+                );
+                if !new.is_empty() {
+                    std::process::exit(3);
+                }
+                return Ok(());
+            }
             println!(
                 "{}",
                 "=========================================================".cyan()

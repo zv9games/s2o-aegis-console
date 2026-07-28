@@ -21,6 +21,14 @@ cargo run -p cyberdns -- import domains.txt --list allow --dry-run
 cargo run -p aegis-cli -- config get min_posture
 cargo run -p aegis-cli -- config set min_posture 50
 cargo run -p cyberid -- sessions-export --format csv --out .aegis/sessions.csv
+cargo run -p cyberdefender -- rules add-name lab-malware
+cargo run -p cyberdefender -- rules add-hash deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+cargo run -p cyberdefender -- rules remove-name lab-malware
+cargo run -p cyberedr -- ps --json --limit 10
+cargo run -p cyberedr -- baseline-export --format csv --out .aegis/baseline.csv
+cargo run -p cyberedr -- drift --json
+cargo run -p cyberintel -- import-file .aegis/import-lab.txt --kind domain --dry-run
+cargo run -p cyberintel -- import-file .aegis/import-lab.txt --source lab
 # Managed Windows rules (prefix S2O-Aegis-*; elevate for live apply)
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-run
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
@@ -171,14 +179,14 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 |-----|---------|
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
 | DNS | `cyberdns doctor\|check\|export\|import\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
-| Defender | `cyberdefender doctor\|rules\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
-| EDR | `cyberedr doctor\|export\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
+| Defender | `cyberdefender doctor\|rules list\|add-name\|add-hash\|scan\|yara\|quarantine` |
+| EDR | `cyberedr doctor\|export\|ps --json\|baseline\|baseline-export\|drift --json\|listen\|net-watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem doctor\|search\|stats\|alerts\|top\|correlate\|collect\|follow` (+ `--since`) |
 | Mesh | `cybermesh doctor\|probe\|peers list\|export\|config\|genkey` |
-| Intel | `cyberintel doctor\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
+| Intel | `cyberintel doctor\|import-file\|sync\|prune\|remove\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|sessions-export\|revoke\|verify` |
 | Gate | `cyberztna doctor\|serve\|access-stats\|access-export\|routes\|oauth\|jwt` |
 
