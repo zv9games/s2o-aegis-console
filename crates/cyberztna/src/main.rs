@@ -185,7 +185,11 @@ enum Commands {
         json: bool,
     },
     /// Connect shorthand: print how to reach an app route
-    Connect { app: String },
+    Connect {
+        app: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show recent Gate events from the suite event log
     Audit {
         #[arg(long, default_value_t = 20)]
@@ -1984,18 +1988,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-        Commands::Connect { app } => {
+        Commands::Connect { app, json } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             if let Some(r) = cfg.routes.iter().find(|r| r.name == app) {
-                println!("App route '{app}':");
-                println!("  prefix   : {}", r.path_prefix);
-                println!("  upstream : {}", r.upstream);
-                println!("  access   : http://{}/  (via cyberztna serve)", cfg.listen);
-                println!("  gate     : posture score >= {}", cfg.min_score);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "app": app,
+                            "path_prefix": r.path_prefix,
+                            "upstream": r.upstream,
+                            "listen": cfg.listen,
+                            "access_url": format!("http://{}/", cfg.listen),
+                            "min_score": cfg.min_score,
+                        }))?
+                    );
+                } else {
+                    println!("App route '{app}':");
+                    println!("  prefix   : {}", r.path_prefix);
+                    println!("  upstream : {}", r.upstream);
+                    println!("  access   : http://{}/  (via cyberztna serve)", cfg.listen);
+                    println!("  gate     : posture score >= {}", cfg.min_score);
+                }
             } else {
-                eprintln!("[gate] unknown app '{app}'. Known:");
-                for r in &cfg.routes {
-                    eprintln!("  - {}", r.name);
+                if json {
+                    let known: Vec<_> = cfg.routes.iter().map(|r| &r.name).collect();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("unknown app '{app}'"),
+                            "known": known,
+                        }))?
+                    );
+                } else {
+                    eprintln!("[gate] unknown app '{app}'. Known:");
+                    for r in &cfg.routes {
+                        eprintln!("  - {}", r.name);
+                    }
                 }
                 std::process::exit(1);
             }

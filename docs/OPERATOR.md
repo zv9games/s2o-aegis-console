@@ -92,8 +92,10 @@ cargo run -p cybermesh -- status --json
 cargo run -p cybermesh -- doctor --json
 cargo run -p cyberid -- sessions --json
 cargo run -p cyberid -- sessions --all --user operator
-cargo run -p cyberid -- revoke --user labuser
+cargo run -p cyberid -- revoke --user labuser --json
+cargo run -p cyberid -- gc --json
 cargo run -p cyberedr -- status --json
+cargo run -p cyberedr -- baseline --json
 cargo run -p cyberedr -- export --state established --format csv --out .aegis/tcp.csv
 cargo run -p cyberedr -- export --state listen --limit 50
 cargo run -p cyberdefender -- status --json
@@ -146,17 +148,21 @@ cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --j
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- fleet enroll --json
 cargo run -p aegis-cli -- fleet heartbeat --json
+cargo run -p aegis-cli -- fleet prune --json
 cargo run -p aegis-cli -- backup --json
+cargo run -p aegis-cli -- rotate --json
 cargo run -p cyberztna -- mtls status --json
+cargo run -p cyberztna -- connect demo --json
 cargo run -p cybermesh -- config --private-key-file .aegis/wg-private.key --json
 cargo run -p cyberintel -- add domain ioc-lab.s2o --json
+cargo run -p cyberintel -- remove ioc-lab.s2o --json
 cargo run -p aegis-cli -- cleanup              # dry-run sessions/fleet/events hygiene
 cargo run -p aegis-cli -- cleanup --apply
 cargo run -p cyberintel -- export --format csv --out .aegis/ioc.csv --limit 1000
 cargo run -p cyberintel -- stats
 cargo run -p cyberintel -- stats --json
-cargo run -p cyberintel -- prune --older-days 90 --source openphish   # dry-run
-cargo run -p cyberintel -- prune --older-days 90 --apply
+cargo run -p cyberintel -- prune --older-days 90 --source openphish --json   # dry-run
+cargo run -p cyberintel -- prune --older-days 90 --apply --json
 cargo run -p cyberztna -- access-stats --since 24h
 cargo run -p cyberztna -- access-stats --since 1h --json
 cargo run -p aegis-cli -- backup

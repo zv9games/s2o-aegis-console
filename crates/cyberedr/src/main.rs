@@ -55,6 +55,8 @@ enum Commands {
     Baseline {
         #[arg(long, default_value_t = 500)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Export process baseline (json/csv)
     BaselineExport {
@@ -917,7 +919,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
             );
         }
-        Commands::Baseline { limit } => {
+        Commands::Baseline { limit, json } => {
             let images: Vec<String> = process_images(limit).into_iter().collect();
             let bl = ProcessBaseline {
                 version: "0.1.0".into(),
@@ -929,16 +931,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fs::create_dir_all(p)?;
             }
             fs::write(&cli.baseline, serde_json::to_string_pretty(&bl)?)?;
-            println!(
-                "{}",
-                format!(
-                    "[cyberedr] baseline wrote {} ({} images)",
-                    cli.baseline.display(),
-                    images.len()
-                )
-                .green()
-                .bold()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "path": cli.baseline.display().to_string(),
+                        "image_count": images.len(),
+                        "baseline": bl,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberedr] baseline wrote {} ({} images)",
+                        cli.baseline.display(),
+                        images.len()
+                    )
+                    .green()
+                    .bold()
+                );
+            }
             emit(
                 &cli.event_log,
                 EventKind::Process,

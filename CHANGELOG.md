@@ -162,6 +162,9 @@
 - CyberDNS `block|unblock|allow|unallow --json`; ThreatGrid `add --json`
 - `aegis version --json` + `backup --json`; fleet `enroll|heartbeat --json`
 - Gate `mtls status --json`; mesh `config --json`; example `policies/examples/posture-pack.json`
+- CyberID `gc|revoke --json`; ThreatGrid `remove|prune --json`
+- CyberEDR `baseline --json`; `aegis rotate --json`
+- Fleet `prune|remove --json`; Gate `connect --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

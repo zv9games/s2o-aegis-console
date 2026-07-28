@@ -99,6 +99,8 @@ enum Commands {
         /// Actually delete (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Export IOC store to JSON or CSV
     Export {
@@ -134,6 +136,8 @@ enum Commands {
         /// Actually delete (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -702,6 +706,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             older_days,
             source,
             apply,
+            json,
         } => {
             let mut store = IocStore::load(&cli.store)?;
             let before = store.entries.len();
@@ -717,15 +722,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             if apply {
                 store.save(&cli.store)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[threatgrid] prune APPLIED age={age_n} source={src_n} remaining={} (was {before})",
-                        store.entries.len()
-                    )
-                    .green()
-                    .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": true,
+                            "before": before,
+                            "age_removed": age_n,
+                            "source_removed": src_n,
+                            "remaining": store.entries.len(),
+                            "source": source,
+                            "older_days": older_days,
+                            "store": cli.store.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[threatgrid] prune APPLIED age={age_n} source={src_n} remaining={} (was {before})",
+                            store.entries.len()
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Observed,
@@ -737,6 +759,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ("remaining", serde_json::json!(store.entries.len())),
                     ],
                     None,
+                );
+            } else if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "apply": false,
+                        "before": before,
+                        "age_removed": age_n,
+                        "source_removed": src_n,
+                        "would_remove": age_n + src_n,
+                        "source": source,
+                        "older_days": older_days,
+                        "store": cli.store.display().to_string(),
+                    }))?
                 );
             } else {
                 println!(
@@ -1091,6 +1128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value,
             kind,
             apply,
+            json,
         } => {
             let filter = kind.as_ref().and_then(|k| parse_kind(k));
             if kind.is_some() && filter.is_none() {
@@ -1099,32 +1137,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let mut store = IocStore::load(&cli.store)?;
             let hits = store.lookup(&value);
-            let preview: Vec<_> = hits
+            let matched: Vec<_> = hits
                 .iter()
                 .filter(|e| filter.map(|k| e.kind == k).unwrap_or(true))
+                .cloned()
+                .collect();
+            let preview: Vec<_> = matched
+                .iter()
                 .map(|e| format!("{:?} {} src={}", e.kind, e.value, e.source))
                 .collect();
             if preview.is_empty() {
-                println!("[threatgrid] no match for '{value}'");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": "no match",
+                            "value": value,
+                            "kind": kind,
+                            "matches": 0,
+                        }))?
+                    );
+                } else {
+                    println!("[threatgrid] no match for '{value}'");
+                }
                 std::process::exit(1);
             }
             if !apply {
-                println!(
-                    "[threatgrid] remove dry-run: would drop {} entr(y/ies) (use --apply)",
-                    preview.len()
-                );
-                for p in &preview {
-                    println!("  - {p}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": false,
+                            "value": value,
+                            "kind": kind,
+                            "would_remove": matched.len(),
+                            "entries": matched,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[threatgrid] remove dry-run: would drop {} entr(y/ies) (use --apply)",
+                        preview.len()
+                    );
+                    for p in &preview {
+                        println!("  - {p}");
+                    }
                 }
             } else {
                 let n = store.remove(&value, filter);
                 store.save(&cli.store)?;
-                println!(
-                    "{}",
-                    format!("[threatgrid] removed {n} entr(y/ies) for '{value}'")
-                        .green()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": true,
+                            "value": value,
+                            "kind": kind,
+                            "removed": n,
+                            "remaining": store.entries.len(),
+                            "store": cli.store.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[threatgrid] removed {n} entr(y/ies) for '{value}'")
+                            .green()
+                            .bold()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Observed,

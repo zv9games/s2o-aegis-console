@@ -122,6 +122,8 @@ enum Commands {
         event_log: PathBuf,
         #[arg(long, default_value_t = 5)]
         keep: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Follow live events from the JSONL store
     Watch {
@@ -279,6 +281,8 @@ enum FleetCmd {
         id: String,
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Add tag(s) to a fleet host
     TagAdd {
@@ -306,6 +310,8 @@ enum FleetCmd {
         /// Actually delete (default dry-run)
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Export fleet roster (json/csv)
     #[command(name = "export")]
@@ -2625,16 +2631,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&events)?);
             }
         }
-        Commands::Rotate { event_log, keep } => {
+        Commands::Rotate {
+            event_log,
+            keep,
+            json,
+        } => {
             let store = EventStore::open_with_rotation(&event_log, 0, keep)?;
             let before = store.len_bytes().unwrap_or(0);
             store.rotate()?;
-            println!(
-                "[aegis] rotated {} (was {} bytes) → {}.1",
-                event_log.display(),
-                before,
-                event_log.display()
-            );
+            let after = store.len_bytes().unwrap_or(0);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "event_log": event_log.display().to_string(),
+                        "keep": keep,
+                        "bytes_before": before,
+                        "bytes_after": after,
+                        "archive": format!("{}.1", event_log.display()),
+                    }))?
+                );
+            } else {
+                println!(
+                    "[aegis] rotated {} (was {} bytes) → {}.1",
+                    event_log.display(),
+                    before,
+                    event_log.display()
+                );
+            }
         }
         Commands::Watch {
             event_log,
@@ -4181,12 +4206,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fleet,
                 stale_minutes,
                 apply,
+                json,
             } => {
                 let mut store = FleetStore::load(&fleet);
                 // dry-run: clone prune without save
                 let mut probe = store.clone();
                 let removed = probe.prune_stale(stale_minutes);
-                if removed.is_empty() {
+                if json {
+                    if apply && !removed.is_empty() {
+                        let _ = store.prune_stale(stale_minutes);
+                        store.save(&fleet)?;
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "apply": apply,
+                            "stale_minutes": stale_minutes,
+                            "removed_count": removed.len(),
+                            "removed": removed,
+                            "remaining": store.hosts.len(),
+                            "fleet": fleet.display().to_string(),
+                        }))?
+                    );
+                } else if removed.is_empty() {
                     println!(
                         "[aegis] fleet prune: no hosts older than {stale_minutes}m"
                     );
@@ -4218,13 +4261,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            FleetCmd::Remove { id, fleet } => {
+            FleetCmd::Remove { id, fleet, json } => {
                 let mut store = FleetStore::load(&fleet);
                 if store.remove(&id) {
                     store.save(&fleet)?;
-                    println!("{}", format!("[aegis] removed {id}").yellow());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "removed": id,
+                                "remaining": store.hosts.len(),
+                                "fleet": fleet.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!("{}", format!("[aegis] removed {id}").yellow());
+                    }
                 } else {
-                    eprintln!("[aegis] host not found: {id}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "host not found",
+                                "id": id,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[aegis] host not found: {id}");
+                    }
                     std::process::exit(1);
                 }
             }

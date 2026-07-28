@@ -81,7 +81,10 @@ enum Commands {
         out: Option<PathBuf>,
     },
     /// Remove expired/revoked sessions from the store
-    Gc,
+    Gc {
+        #[arg(long)]
+        json: bool,
+    },
     /// Revoke a token/id, or all sessions for --user
     Revoke {
         /// Session token or id (optional if --user set)
@@ -89,6 +92,8 @@ enum Commands {
         /// Revoke all sessions for this user
         #[arg(long)]
         user: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     Verify {
         token: String,
@@ -785,11 +790,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Gc => {
+        Commands::Gc { json } => {
             let mut store = SessionStore::load(&cli.sessions);
+            let before = store.sessions.len();
             let n = store.gc();
             store.save(&cli.sessions)?;
-            println!("[cyberid] gc removed {n} session(s); active={}", store.active().count());
+            let active = store.active().count();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "removed": n,
+                        "before": before,
+                        "remaining": store.sessions.len(),
+                        "active": active,
+                        "sessions_file": cli.sessions.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "[cyberid] gc removed {n} session(s); active={active}"
+                );
+            }
             emit(
                 &cli.event_log,
                 EventAction::Observed,
@@ -798,21 +821,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &[("removed", serde_json::json!(n))],
             );
         }
-        Commands::Revoke { token, user } => {
+        Commands::Revoke { token, user, json } => {
             let mut store = SessionStore::load(&cli.sessions);
             if let Some(ref u) = user {
                 let n = store.revoke_user(u);
                 if n == 0 {
-                    eprintln!("[cyberid] no active sessions for user={u}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("no active sessions for user={u}"),
+                                "user": u,
+                                "revoked": 0,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberid] no active sessions for user={u}");
+                    }
                     std::process::exit(1);
                 }
                 store.save(&cli.sessions)?;
-                println!(
-                    "{}",
-                    format!("[cyberid] revoked {n} session(s) for user={u}")
-                        .yellow()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "user": u,
+                            "revoked": n,
+                            "sessions_file": cli.sessions.display().to_string(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[cyberid] revoked {n} session(s) for user={u}")
+                            .yellow()
+                            .bold()
+                    );
+                }
                 emit(
                     &cli.event_log,
                     EventAction::Observed,
@@ -826,7 +873,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if let Some(ref tok) = token {
                 if store.revoke_token(tok) {
                     store.save(&cli.sessions)?;
-                    println!("{}", "[cyberid] session revoked".yellow().bold());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "revoked": 1,
+                                "token_prefix": &tok[..tok.len().min(16)],
+                                "sessions_file": cli.sessions.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!("{}", "[cyberid] session revoked".yellow().bold());
+                    }
                     emit(
                         &cli.event_log,
                         EventAction::Observed,
@@ -838,11 +897,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )],
                     );
                 } else {
-                    eprintln!("[cyberid] token not found");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "token not found",
+                                "token_prefix": &tok[..tok.len().min(16)],
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberid] token not found");
+                    }
                     std::process::exit(1);
                 }
             } else {
-                eprintln!("[cyberid] provide TOKEN or --user");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": "provide TOKEN or --user",
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cyberid] provide TOKEN or --user");
+                }
                 std::process::exit(2);
             }
         }
