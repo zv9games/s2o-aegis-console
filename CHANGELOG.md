@@ -153,6 +153,9 @@
 - CyberDNS `resolve --json`; CyberID `authenticate --json` + `verify --json`
 - `aegis policy apply --json` + `config show --json`
 - Defender `patterns list --json` + `yara list --json`
+- CyberEDR `processes --json`; Gate `audit --json` + `jwt mint|verify --json`
+- Mesh `peers show` / `peers set` (endpoint/allowed-ips/keepalive); DNS `system-dns show --json`
+- `aegis fleet tag-add|tag-remove` host tag mutators
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

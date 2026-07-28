@@ -53,7 +53,16 @@ cargo run -p cyberedr -- listen --json --limit 20
 cargo run -p cyberedr -- alerts --json
 cargo run -p aegis-cli -- playbook run --path policies/examples/response-playbooks.json --json
 cargo run -p cybermesh -- peers list --json
+cargo run -p cybermesh -- peers show hub --json
+cargo run -p cybermesh -- peers set hub --endpoint 10.0.0.1:51820
 cargo run -p cybermesh -- peers export --format csv --out .aegis/mesh-peers.csv
+cargo run -p cyberdns -- system-dns show --json
+cargo run -p cyberedr -- processes --json --limit 20
+cargo run -p cyberztna -- audit --json
+cargo run -p cyberztna -- jwt mint labuser --secret lab-secret --json
+cargo run -p cyberztna -- jwt verify <token> --secret lab-secret --json
+cargo run -p aegis-cli -- fleet tag-add $env:COMPUTERNAME lab smoke
+cargo run -p aegis-cli -- fleet tag-remove $env:COMPUTERNAME smoke
 cargo run -p aegis-cli -- fleet doctor
 cargo run -p aegis-cli -- doctor
 cargo run -p aegis-cli -- doctor --json

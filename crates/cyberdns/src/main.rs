@@ -200,7 +200,10 @@ enum Commands {
 #[derive(Subcommand)]
 enum SystemDnsCmd {
     /// Show current system DNS configuration
-    Show,
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
     /// Backup current DNS then set primary to SERVER (default 127.0.0.1)
     Set {
         #[arg(long, default_value = "127.0.0.1")]
@@ -1086,13 +1089,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         }
         Commands::SystemDns { command } => match command {
-            SystemDnsCmd::Show => match system_dns::show_current() {
-                Ok(s) => print!("{s}"),
-                Err(e) => {
-                    eprintln!("[cyberdns] {e}");
-                    std::process::exit(1);
+            SystemDnsCmd::Show { json } => {
+                if json {
+                    match system_dns::show_current_structured() {
+                        Ok(v) => println!("{}", serde_json::to_string_pretty(&v)?),
+                        Err(e) => {
+                            eprintln!("[cyberdns] {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    match system_dns::show_current() {
+                        Ok(s) => print!("{s}"),
+                        Err(e) => {
+                            eprintln!("[cyberdns] {e}");
+                            std::process::exit(1);
+                        }
+                    }
                 }
-            },
+            }
             SystemDnsCmd::Backup { backup } => match system_dns::backup_current(&backup) {
                 Ok(b) => {
                     println!(

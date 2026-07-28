@@ -265,6 +265,22 @@ enum FleetCmd {
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
     },
+    /// Add tag(s) to a fleet host
+    TagAdd {
+        id: String,
+        #[arg(required = true)]
+        tags: Vec<String>,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+    },
+    /// Remove tag(s) from a fleet host
+    TagRemove {
+        id: String,
+        #[arg(required = true)]
+        tags: Vec<String>,
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+    },
     /// Drop hosts not seen within stale window
     Prune {
         #[arg(long, default_value = ".aegis/fleet.json")]
@@ -3851,6 +3867,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
+            }
+            FleetCmd::TagAdd { id, tags, fleet } => {
+                let mut store = FleetStore::load(&fleet);
+                let Some(h) = store.hosts.iter_mut().find(|h| h.host_id == id || h.display_name.eq_ignore_ascii_case(&id)) else {
+                    eprintln!("[aegis] host not found: {id}");
+                    std::process::exit(1);
+                };
+                let mut added = Vec::new();
+                for t in tags {
+                    let t = t.trim();
+                    if t.is_empty() {
+                        continue;
+                    }
+                    if !h.tags.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                        h.tags.push(t.to_string());
+                        added.push(t.to_string());
+                    }
+                }
+                let host = h.host_id.clone();
+                let all = h.tags.clone();
+                store.save(&fleet)?;
+                if added.is_empty() {
+                    println!("[aegis] fleet host '{host}' tags unchanged: {}", all.join(","));
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[aegis] fleet host '{host}' tags +{} → [{}]",
+                            added.join(","),
+                            all.join(",")
+                        )
+                        .green()
+                        .bold()
+                    );
+                }
+            }
+            FleetCmd::TagRemove { id, tags, fleet } => {
+                let mut store = FleetStore::load(&fleet);
+                let Some(h) = store.hosts.iter_mut().find(|h| h.host_id == id || h.display_name.eq_ignore_ascii_case(&id)) else {
+                    eprintln!("[aegis] host not found: {id}");
+                    std::process::exit(1);
+                };
+                let remove: Vec<String> = tags
+                    .iter()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let before = h.tags.len();
+                h.tags.retain(|x| {
+                    !remove
+                        .iter()
+                        .any(|r| r.eq_ignore_ascii_case(x))
+                });
+                let host = h.host_id.clone();
+                let all = h.tags.clone();
+                let n = before.saturating_sub(h.tags.len());
+                store.save(&fleet)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[aegis] fleet host '{host}' removed {n} tag(s) → [{}]",
+                        all.join(",")
+                    )
+                    .yellow()
+                    .bold()
+                );
             }
             FleetCmd::Prune {
                 fleet,

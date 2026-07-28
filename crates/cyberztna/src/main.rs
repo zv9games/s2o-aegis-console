@@ -190,6 +190,8 @@ enum Commands {
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -239,6 +241,8 @@ enum JwtCmd {
         posture: Option<u32>,
         #[arg(long, default_value = "s2o-cyberid")]
         issuer: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Verify a JWT against secret or JWKS/public PEM
     Verify {
@@ -253,6 +257,8 @@ enum JwtCmd {
         /// Discover OIDC issuer and verify with its JWKS
         #[arg(long)]
         oidc_issuer: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Generate lab RS256 keypair + JWKS under a directory
     Keygen {
@@ -1388,6 +1394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ttl_hours,
                 posture,
                 issuer,
+                json,
             } => {
                 let (token, alg) = if let Some(key_path) = rsa_key {
                     let pem = std::fs::read_to_string(&key_path)?;
@@ -1419,28 +1426,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("[gate] jwt mint needs --secret or --rsa-key");
                     std::process::exit(2);
                 };
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(
-                    "{}",
-                    format!("      Gate JWT minted ({alg} / OIDC-lite)")
-                        .bold()
-                        .green()
-                );
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(" User    : {}", user.bold());
-                if let Some(p) = posture {
-                    println!(" Posture : {p}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "user": user,
+                            "issuer": issuer,
+                            "alg": alg,
+                            "ttl_hours": ttl_hours,
+                            "posture": posture,
+                            "token": token,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(
+                        "{}",
+                        format!("      Gate JWT minted ({alg} / OIDC-lite)")
+                            .bold()
+                            .green()
+                    );
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(" User    : {}", user.bold());
+                    if let Some(p) = posture {
+                        println!(" Posture : {p}");
+                    }
+                    println!(" Issuer  : {issuer}");
+                    println!(" Alg     : {alg}");
+                    println!(" Token   : {}", token.yellow().bold());
+                    println!(" Header  : Authorization: Bearer <token>");
                 }
-                println!(" Issuer  : {issuer}");
-                println!(" Alg     : {alg}");
-                println!(" Token   : {}", token.yellow().bold());
-                println!(" Header  : Authorization: Bearer <token>");
                 emit(
                     &cli.event_log,
                     EventAction::Allowed,
@@ -1459,6 +1481,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 jwks,
                 iss,
                 oidc_issuer,
+                json,
             } => {
                 let result = if let Some(issuer) = oidc_issuer {
                     let (v, canon) = jwt::oidc_verifier_from_issuer(&issuer, None).await?;
@@ -1479,13 +1502,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 match result {
                     Ok(c) => {
-                        println!(
-                            "OK sub={} exp={} posture={:?} iss={:?}",
-                            c.sub, c.exp, c.posture, c.iss
-                        );
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "valid": true,
+                                    "claims": c,
+                                }))?
+                            );
+                        } else {
+                            println!(
+                                "OK sub={} exp={} posture={:?} iss={:?}",
+                                c.sub, c.exp, c.posture, c.iss
+                            );
+                        }
                     }
                     Err(e) => {
-                        eprintln!("INVALID: {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "valid": false,
+                                    "error": e,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("INVALID: {e}");
+                        }
                         std::process::exit(3);
                     }
                 }
@@ -1932,31 +1975,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Commands::Audit { limit } => {
+        Commands::Audit { limit, json } => {
             if !cli.event_log.exists() {
-                println!("[gate] no event log yet");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "event_log": cli.event_log.display().to_string(),
+                            "present": false,
+                            "count": 0,
+                            "events": [],
+                        }))?
+                    );
+                } else {
+                    println!("[gate] no event log yet");
+                }
                 return Ok(());
             }
             let store = EventStore::open(&cli.event_log)?;
             let events = store.recent(limit * 5)?;
-            let mut n = 0;
+            let mut hits = Vec::new();
             for e in events.into_iter().rev() {
                 if e.product != ProductId::Gate {
                     continue;
                 }
-                println!(
-                    "[{}] {:?} {} ",
-                    e.ts.to_rfc3339(),
-                    e.action,
-                    e.message
-                );
-                n += 1;
-                if n >= limit {
+                hits.push(e);
+                if hits.len() >= limit {
                     break;
                 }
             }
-            if n == 0 {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "event_log": cli.event_log.display().to_string(),
+                        "present": true,
+                        "limit": limit,
+                        "count": hits.len(),
+                        "events": hits,
+                    }))?
+                );
+            } else if hits.is_empty() {
                 println!("[gate] no Gate events in log");
+            } else {
+                for e in &hits {
+                    println!(
+                        "[{}] {:?} {} ",
+                        e.ts.to_rfc3339(),
+                        e.action,
+                        e.message
+                    );
+                }
             }
         }
     }

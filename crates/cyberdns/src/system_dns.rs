@@ -121,6 +121,64 @@ pub fn show_current() -> Result<String, String> {
     }
 }
 
+/// Structured OS DNS snapshot for machine-readable consumers.
+pub fn show_current_structured() -> Result<serde_json::Value, String> {
+    if cfg!(windows) {
+        let ifaces = list_windows_interfaces();
+        if ifaces.is_empty() {
+            let raw = if let Ok(o) = Command::new("netsh")
+                .args(["interface", "ip", "show", "dnsservers"])
+                .output()
+            {
+                String::from_utf8_lossy(&o.stdout).to_string()
+            } else {
+                String::new()
+            };
+            return Ok(serde_json::json!({
+                "os": "windows",
+                "interfaces": [],
+                "raw": raw,
+            }));
+        }
+        let rows: Vec<_> = ifaces
+            .into_iter()
+            .map(|name| {
+                let servers = parse_windows_dns_for_iface(&name);
+                serde_json::json!({
+                    "name": name,
+                    "servers": servers,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "os": "windows",
+            "interfaces": rows,
+        }))
+    } else {
+        let path = Path::new("/etc/resolv.conf");
+        if !path.exists() {
+            return Err("no /etc/resolv.conf".into());
+        }
+        let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let mut servers = Vec::new();
+        for line in text.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("nameserver") {
+                let s = rest.trim();
+                if !s.is_empty() {
+                    servers.push(s.to_string());
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "os": "unix",
+            "resolv_conf": path.display().to_string(),
+            "servers": servers,
+            "raw": text,
+        }))
+    }
+}
+
 pub fn backup_current(path: &Path) -> Result<DnsBackup, String> {
     let mut backup = DnsBackup {
         version: "0.1.0".into(),

@@ -154,6 +154,29 @@ enum PeersCmd {
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         file: PathBuf,
     },
+    /// Show one peer by name
+    Show {
+        name: String,
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update fields on an existing peer (endpoint / allowed-ips / keepalive)
+    Set {
+        name: String,
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Clear endpoint
+        #[arg(long)]
+        clear_endpoint: bool,
+        #[arg(long)]
+        allowed_ips: Option<String>,
+        #[arg(long)]
+        keepalive: Option<u16>,
+        #[arg(long, default_value = ".aegis/mesh-peers.json")]
+        file: PathBuf,
+    },
     /// Live peers from system `wg` (if installed)
     Live,
     /// POST local public key to aegisd mesh directory
@@ -889,6 +912,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("[cybermesh] peer not found: {name}");
                     std::process::exit(1);
                 }
+            }
+            PeersCmd::Show { name, file, json } => {
+                let reg = PeerRegistry::load(&file);
+                let Some(p) = reg.peers.iter().find(|p| p.name.eq_ignore_ascii_case(&name))
+                else {
+                    eprintln!("[cybermesh] peer not found: {name}");
+                    std::process::exit(1);
+                };
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": file.display().to_string(),
+                            "peer": p,
+                        }))?
+                    );
+                } else {
+                    println!("[cybermesh] peer '{}'", p.name);
+                    println!("  public_key  : {}", p.public_key);
+                    println!(
+                        "  endpoint    : {}",
+                        p.endpoint.as_deref().unwrap_or("-")
+                    );
+                    println!("  allowed_ips : {}", p.allowed_ips);
+                    println!("  keepalive   : {}", p.keepalive);
+                    if let Some(ref n) = p.notes {
+                        println!("  notes       : {n}");
+                    }
+                }
+            }
+            PeersCmd::Set {
+                name,
+                endpoint,
+                clear_endpoint,
+                allowed_ips,
+                keepalive,
+                file,
+            } => {
+                let mut reg = PeerRegistry::load(&file);
+                let Some(p) = reg
+                    .peers
+                    .iter_mut()
+                    .find(|p| p.name.eq_ignore_ascii_case(&name))
+                else {
+                    eprintln!("[cybermesh] peer not found: {name}");
+                    std::process::exit(1);
+                };
+                let mut changed = Vec::new();
+                if clear_endpoint {
+                    p.endpoint = None;
+                    changed.push("endpoint=cleared".into());
+                } else if let Some(ep) = endpoint {
+                    p.endpoint = Some(ep.clone());
+                    changed.push(format!("endpoint={ep}"));
+                }
+                if let Some(a) = allowed_ips {
+                    p.allowed_ips = a.clone();
+                    changed.push(format!("allowed_ips={a}"));
+                }
+                if let Some(k) = keepalive {
+                    p.keepalive = k;
+                    changed.push(format!("keepalive={k}"));
+                }
+                if changed.is_empty() {
+                    eprintln!(
+                        "[cybermesh] peers set: pass --endpoint, --clear-endpoint, --allowed-ips, and/or --keepalive"
+                    );
+                    std::process::exit(2);
+                }
+                let shown = p.name.clone();
+                reg.save(&file)?;
+                println!(
+                    "{}",
+                    format!(
+                        "[cybermesh] peer '{shown}' updated ({}) → {}",
+                        changed.join(", "),
+                        file.display()
+                    )
+                    .green()
+                    .bold()
+                );
             }
             PeersCmd::Live => {
                 if let Some(bin) = find_wg() {

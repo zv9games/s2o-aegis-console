@@ -38,6 +38,8 @@ enum Commands {
         limit: usize,
         #[arg(long, default_value_t = true)]
         emit_event: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// OS process inventory (tasklist / WMI / ps)
     Ps {
@@ -741,7 +743,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Processes { limit, emit_event } => {
+        Commands::Processes {
+            limit,
+            emit_event,
+            json,
+        } => {
             let conns = tokio::task::spawn_blocking(|| {
                 s2o_net_lib::telemetry::get_active_tcp_connections()
             })
@@ -755,45 +761,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .filter(|c| c.state.eq_ignore_ascii_case("LISTEN"))
                 .count();
+            let shown: Vec<_> = conns.iter().take(limit).collect();
 
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "       Active TCP connections (IP Helper telemetry)      "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            for c in conns.iter().take(limit) {
+            if json {
+                let rows: Vec<_> = shown
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "pid": c.pid,
+                            "local_addr": c.local_addr,
+                            "local_port": c.local_port,
+                            "remote_addr": c.remote_addr,
+                            "remote_port": c.remote_port,
+                            "state": c.state,
+                        })
+                    })
+                    .collect();
                 println!(
-                    " PID {:<6} | {:<15}:{} -> {:<15}:{} [{}]",
-                    c.pid,
-                    c.local_addr,
-                    c.local_port,
-                    c.remote_addr,
-                    c.remote_port,
-                    c.state.bold()
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "total": conns.len(),
+                        "established": established,
+                        "listen": listen,
+                        "limit": limit,
+                        "shown": rows.len(),
+                        "connections": rows,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "       Active TCP connections (IP Helper telemetry)      "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                for c in &shown {
+                    println!(
+                        " PID {:<6} | {:<15}:{} -> {:<15}:{} [{}]",
+                        c.pid,
+                        c.local_addr,
+                        c.local_port,
+                        c.remote_addr,
+                        c.remote_port,
+                        c.state.bold()
+                    );
+                }
+                println!(
+                    " Total: {}  ESTABLISHED: {}  LISTEN: {}  (showing up to {})",
+                    conns.len(),
+                    established,
+                    listen,
+                    limit
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
                 );
             }
-            println!(
-                " Total: {}  ESTABLISHED: {}  LISTEN: {}  (showing up to {})",
-                conns.len(),
-                established,
-                listen,
-                limit
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
 
-            if emit_event {
+            if emit_event && !json {
                 emit(
                     &cli.event_log,
                     EventKind::NetFlow,
