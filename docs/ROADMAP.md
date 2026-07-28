@@ -216,6 +216,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Gate init/mTLS/JWT/OAuth mutator JSON (lab IdP automation surfaces)  
 - ✅ aegisd policy/reload + aegis events/watch + SIEM collect/follow + EDR watch/trace JSON  
 - ✅ Defender/DNS/playbook long-poll watch surfaces with JSON seed/ready envelopes  
+- ✅ Policy mesh fragment + suite-lab pack + JSON dev-smoke path  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

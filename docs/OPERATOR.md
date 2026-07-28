@@ -12,6 +12,11 @@ cargo run -p aegis-cli -- report --json --out .aegis/report.json
 cargo run -p aegis-cli -- policy validate policies/examples/edge-pack.json
 cargo run -p aegis-cli -- policy plan policies/examples/edge-pack.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
+cargo run -p aegis-cli -- policy plan policies/examples/suite-lab-pack.json --json
+cargo run -p aegis-cli -- policy apply policies/examples/suite-lab-pack.json --json
+cargo run -p aegis-cli -- policy apply policies/examples/mesh-seed-pack.json --json
+# Full JSON automation smoke (after cargo build):
+#   pwsh -File scripts/dev-smoke.ps1 -Json
 cargo run -p cyberdefender -- rules list
 cargo run -p cyberdefender -- rules export --format csv --out .aegis/defender-rules.csv
 cargo run -p aegis-cli -- cleanup                    # dry-run (+ IOC age + DNS dedupe)

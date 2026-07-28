@@ -183,6 +183,9 @@
 - EDR `trace|watch|net-watch --json`; Defender `realtime --json` (honest not-implemented)
 - Defender `watch --json` (seed snapshot / max-blocks); DNS `serve --json --ready-only|--max-queries`
 - Playbook `watch --json` (ready envelope / max-hits)
+- Policy **mesh** fragment (seed peers into `mesh-peers.json`); example `suite-lab-pack.json`
+- Mesh seed pack includes mesh peers; selftest loads suite/mesh packs
+- `scripts/dev-smoke.ps1 -Json` automation path for machine-readable surfaces
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

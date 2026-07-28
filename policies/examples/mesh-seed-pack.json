@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "name": "example-mesh-seed-pack",
-  "description": "Lightweight edge-adjacent pack: DNS seed domains + posture floor (no firewall/gate). Pair with cybermesh peers/config for WireGuard conf.",
+  "description": "Lightweight edge-adjacent pack: DNS seed domains + posture floor + mesh peer registry seed (no firewall/gate, no tunnel up).",
   "dns": {
     "blocklist_path": ".aegis/dns-blocklist.txt",
     "allowlist_path": ".aegis/dns-allowlist.txt",
@@ -17,5 +17,20 @@
   },
   "posture": {
     "min_score": 40
+  },
+  "mesh": {
+    "peers_file": ".aegis/mesh-peers.json",
+    "replace": false,
+    "peers": [
+      {
+        "name": "hub",
+        "public_key": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+        "endpoint": "10.0.0.1:51820",
+        "allowed_ips": "10.220.0.0/24",
+        "keepalive": 25,
+        "notes": "mesh-seed-pack lab hub placeholder key"
+      }
+    ]
   }
 }
+

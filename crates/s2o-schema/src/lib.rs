@@ -454,6 +454,9 @@ pub struct PolicyDocument {
     pub posture: Option<PosturePolicyIntent>,
     #[serde(default)]
     pub gate: Option<GatePolicyIntent>,
+    /// Mesh peer registry seed (CyberMesh file-backed peers)
+    #[serde(default)]
+    pub mesh: Option<MeshPolicyIntent>,
 }
 
 impl PolicyDocument {
@@ -471,6 +474,7 @@ impl PolicyDocument {
             intel: None,
             posture: None,
             gate: None,
+            mesh: None,
         }
     }
 
@@ -507,6 +511,7 @@ impl PolicyDocument {
                 allow_ips: vec!["127.0.0.1".into(), "::1".into()],
                 config_path: Some(".aegis/gate-routes.json".into()),
             }),
+            mesh: None,
         }
     }
 }
@@ -617,6 +622,41 @@ pub struct GatePolicyIntent {
     /// Path to gate routes JSON (default `.aegis/gate-routes.json`).
     #[serde(default)]
     pub config_path: Option<String>,
+}
+
+/// Mesh peer registry seed — merges peers into mesh-peers.json (no tunnel up).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MeshPolicyIntent {
+    /// Registry path (default `.aegis/mesh-peers.json`).
+    #[serde(default)]
+    pub peers_file: Option<String>,
+    /// Replace entire registry instead of merge-by-name.
+    #[serde(default)]
+    pub replace: bool,
+    #[serde(default)]
+    pub peers: Vec<MeshPeerIntent>,
+}
+
+/// One peer entry for mesh policy seed (WireGuard public key base64).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshPeerIntent {
+    pub name: String,
+    pub public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default = "default_mesh_allowed")]
+    pub allowed_ips: String,
+    #[serde(default = "default_mesh_keepalive")]
+    pub keepalive: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+fn default_mesh_allowed() -> String {
+    "10.220.0.0/24".into()
+}
+fn default_mesh_keepalive() -> u16 {
+    25
 }
 
 /// Result of applying one policy document through the kernel.

@@ -7,6 +7,7 @@ mod dns_policy;
 mod gate_policy;
 mod host;
 mod intel_policy;
+mod mesh_policy;
 mod platform;
 mod policy;
 mod posture_policy;

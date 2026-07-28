@@ -126,7 +126,15 @@ pub async fn apply_policy(
         skipped.push("gate: no fragment".into());
     }
 
-    skipped.push("mesh: not routed in policy v0".into());
+    if let Some(mesh_intent) = &doc.mesh {
+        match crate::mesh_policy::apply_mesh_intent(mesh_intent, store_ref) {
+            Ok(lines) if !lines.is_empty() => applied.extend(lines),
+            Ok(_) => skipped.push("mesh: empty fragment".into()),
+            Err(e) => errors.push(format!("mesh: {e}")),
+        }
+    } else {
+        skipped.push("mesh: no fragment".into());
+    }
 
     let ok = errors.is_empty() && !applied.is_empty();
     let result = PolicyApplyResult {

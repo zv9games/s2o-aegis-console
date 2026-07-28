@@ -1,0 +1,54 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-suite-lab-pack",
+  "description": "Full T0 lab bootstrap: firewall on (no outbound lock), DNS+allow seed, ThreatGrid sync, posture floor, Gate defaults, mesh peer seed (no tunnel up). Safe for CI/lab; live wall rules still need elevation.",
+  "firewall": {
+    "enabled": true,
+    "outbound_block": false
+  },
+  "dns": {
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "allowlist_path": ".aegis/dns-allowlist.txt",
+    "block_domains": [
+      "malware.test.s2o",
+      "phishing.test.s2o",
+      "c2.lab.s2o",
+      "suite.lab.block.s2o"
+    ],
+    "unblock_domains": [],
+    "allow_domains": [
+      "updates.microsoft.com",
+      "registry.mesh.lab.s2o"
+    ],
+    "unallow_domains": []
+  },
+  "intel": {
+    "sync_blocklist": true,
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "ioc_store_path": ".aegis/ioc-store.json"
+  },
+  "posture": {
+    "min_score": 40
+  },
+  "gate": {
+    "min_score": 50,
+    "require_session": true,
+    "rate_limit_per_minute": 120,
+    "allow_ips": ["127.0.0.1", "::1"],
+    "config_path": ".aegis/gate-routes.json"
+  },
+  "mesh": {
+    "peers_file": ".aegis/mesh-peers.json",
+    "replace": false,
+    "peers": [
+      {
+        "name": "lab-hub",
+        "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "endpoint": "127.0.0.1:51820",
+        "allowed_ips": "10.220.0.0/24",
+        "keepalive": 25,
+        "notes": "placeholder lab hub key — replace with cybermesh genkey output"
+      }
+    ]
+  }
+}

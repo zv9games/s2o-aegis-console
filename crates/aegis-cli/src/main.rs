@@ -2306,8 +2306,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                if let Some(ref m) = doc.mesh {
+                    fragments += 1;
+                    if m.peers.is_empty() && !m.replace {
+                        warns.push("mesh: empty peers (and replace=false)".into());
+                    }
+                    for (i, p) in m.peers.iter().enumerate() {
+                        if p.name.trim().is_empty() {
+                            issues.push(format!("mesh.peers[{i}]: empty name"));
+                        }
+                        if p.public_key.trim().is_empty() {
+                            issues.push(format!("mesh.peers[{i}]: empty public_key"));
+                        }
+                    }
+                }
                 if fragments == 0 {
-                    issues.push("no policy fragments (firewall/dns/intel/posture/gate)".into());
+                    issues.push(
+                        "no policy fragments (firewall/dns/intel/posture/gate/mesh)".into(),
+                    );
                 }
                 let ok = issues.is_empty();
                 if json {
@@ -2460,6 +2476,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     steps.push(format!("gate.update_config({}) [{}]", cp, bits.join(" ")));
                 } else {
                     steps.push("gate: (no fragment — skip)".into());
+                }
+                if let Some(ref m) = doc.mesh {
+                    let pf = m
+                        .peers_file
+                        .as_deref()
+                        .unwrap_or(".aegis/mesh-peers.json");
+                    if m.replace {
+                        steps.push(format!("mesh.replace_registry → {pf}"));
+                    }
+                    if !m.peers.is_empty() {
+                        steps.push(format!(
+                            "mesh.upsert_peers(n={}) → {pf}",
+                            m.peers.len()
+                        ));
+                        for p in m.peers.iter().take(6) {
+                            steps.push(format!(
+                                "  peer name={} endpoint={:?}",
+                                p.name, p.endpoint
+                            ));
+                        }
+                        if m.peers.len() > 6 {
+                            steps.push(format!("  … +{} more peers", m.peers.len() - 6));
+                        }
+                    } else if !m.replace {
+                        steps.push("mesh: fragment present but empty peers".into());
+                    }
+                } else {
+                    steps.push("mesh: (no fragment — skip)".into());
                 }
                 if json {
                     println!(
@@ -4152,6 +4196,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 true // optional when run outside repo root
             };
             checks.push(("policy_load_edge", policy_ok));
+            let suite = PathBuf::from("policies/examples/suite-lab-pack.json");
+            let suite_ok = if suite.exists() {
+                match load_policy_file(&suite) {
+                    Ok(doc) => doc.mesh.is_some() && doc.dns.is_some() && doc.gate.is_some(),
+                    Err(_) => false,
+                }
+            } else {
+                true
+            };
+            checks.push(("policy_load_suite_lab", suite_ok));
+            let mesh_pack = PathBuf::from("policies/examples/mesh-seed-pack.json");
+            let mesh_pack_ok = if mesh_pack.exists() {
+                match load_policy_file(&mesh_pack) {
+                    Ok(doc) => doc.mesh.as_ref().map(|m| !m.peers.is_empty()).unwrap_or(false),
+                    Err(_) => false,
+                }
+            } else {
+                true
+            };
+            checks.push(("policy_load_mesh_seed", mesh_pack_ok));
             // relative --since parser
             checks.push((
                 "parse_since_1h",
