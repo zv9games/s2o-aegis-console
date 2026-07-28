@@ -61,11 +61,18 @@ cargo run -p aegis-cli -- selftest
 cargo run -p cybersiem -- doctor
 cargo run -p cybersiem -- search "blocklist" --since 24h --max 20
 cargo run -p cybersiem -- search gate --product cyberztna --json
+cargo run -p cybersiem -- correlate evil.example --json
 cargo run -p aegis-cli -- fleet export --format csv --out .aegis/fleet.csv
 cargo run -p aegis-cli -- playbook run --json
+cargo run -p aegis-cli -- playbook show echo-dns-blocks
+cargo run -p aegis-cli -- playbook show echo-dns-blocks --json
 cargo run -p cyberintel -- doctor
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o          # dry-run
 cargo run -p cyberintel -- remove playbook-ioc-smoke.s2o --apply
+cargo run -p cyberid -- status --json
+cargo run -p cyberid -- doctor --json
+cargo run -p cybermesh -- status --json
+cargo run -p cybermesh -- doctor --json
 cargo run -p cyberid -- sessions --json
 cargo run -p cyberid -- sessions --all --user operator
 cargo run -p cyberid -- revoke --user labuser
@@ -79,6 +86,7 @@ cargo run -p aegis-cli -- emit "udp" --udp 127.0.0.1:9091 --no-local
 cargo run -p aegis-cli -- rotate
 cargo run -p aegis-cli -- playbook init
 cargo run -p aegis-cli -- playbook list
+cargo run -p aegis-cli -- playbook show echo-dns-blocks --json
 cargo run -p aegis-cli -- playbook validate
 cargo run -p aegis-cli -- playbook disable webhook-on-high-block
 cargo run -p aegis-cli -- playbook enable emit-on-high-block

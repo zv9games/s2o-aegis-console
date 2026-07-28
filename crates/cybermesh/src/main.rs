@@ -23,7 +23,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate keys/conf/peers registry (no tunnel create)
     Doctor {
         #[arg(long, default_value = ".aegis/wg0.conf")]
@@ -32,6 +35,8 @@ enum Commands {
         peers_file: PathBuf,
         #[arg(long, default_value = ".aegis/wg-private.key")]
         private_key_file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Print system `wg show` if available (does not create tunnels)
     Show,
@@ -326,124 +331,175 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let wg = find_wg();
             let conf_path = PathBuf::from(".aegis/wg0.conf");
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "        S2O CyberMesh (Phase 3)                          "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " system wg tool    : {}",
-                if wg.is_some() {
-                    format!("found ({})", wg.unwrap()).green().to_string()
-                } else {
-                    "not found (optional)".yellow().to_string()
-                }
-            );
-            println!(
-                " conf template     : {} ({})",
-                conf_path.display(),
-                if conf_path.exists() {
-                    "present".green().to_string()
-                } else {
-                    "missing — cybermesh config".yellow().to_string()
-                }
-            );
-            if let Some(bin) = wg {
+            let peers = PathBuf::from(".aegis/mesh-peers.json");
+            let peer_count = if peers.exists() {
+                Some(PeerRegistry::load(&peers).peers.len())
+            } else {
+                None
+            };
+            let mut tunnel_status = if wg.is_some() {
+                "unknown".to_string()
+            } else {
+                "no_wg_tool".to_string()
+            };
+            let mut tunnel_lines: Vec<String> = Vec::new();
+            if let Some(bin) = wg.as_deref() {
                 if let Ok(out) = Command::new(bin).arg("show").output() {
                     let text = String::from_utf8_lossy(&out.stdout);
                     if text.trim().is_empty() {
-                        println!(
-                            " Tunnel status     : {}",
-                            "no interfaces (wg show empty)".yellow()
-                        );
+                        tunnel_status = "no_interfaces".into();
                     } else {
+                        tunnel_status = "interfaces_reported".into();
+                        tunnel_lines = text.lines().take(12).map(|s| s.to_string()).collect();
+                    }
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cybermesh",
+                        "wg_tool": wg,
+                        "conf": conf_path.display().to_string(),
+                        "conf_present": conf_path.exists(),
+                        "peers_file": peers.display().to_string(),
+                        "peers_present": peers.exists(),
+                        "peer_count": peer_count,
+                        "tunnel_status": tunnel_status,
+                        "tunnel_preview": tunnel_lines,
+                        "implemented": "X25519 keys, multi-peer registry, conf writer, doctor, probe, wg show/wg-quick",
+                        "not_implemented": "embedded boringtun userspace stack",
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "        S2O CyberMesh (Phase 3)                          "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " system wg tool    : {}",
+                    if let Some(bin) = wg.as_deref() {
+                        format!("found ({bin})").green().to_string()
+                    } else {
+                        "not found (optional)".yellow().to_string()
+                    }
+                );
+                println!(
+                    " conf template     : {} ({})",
+                    conf_path.display(),
+                    if conf_path.exists() {
+                        "present".green().to_string()
+                    } else {
+                        "missing — cybermesh config".yellow().to_string()
+                    }
+                );
+                match tunnel_status.as_str() {
+                    "no_interfaces" => println!(
+                        " Tunnel status     : {}",
+                        "no interfaces (wg show empty)".yellow()
+                    ),
+                    "interfaces_reported" => {
                         println!(
                             " Tunnel status     : {}",
                             "interfaces reported by wg show".green().bold()
                         );
-                        for line in text.lines().take(12) {
+                        for line in &tunnel_lines {
                             println!("   {line}");
                         }
                     }
+                    _ => println!(
+                        " Tunnel status     : {}",
+                        "unknown (install WireGuard tools to activate)".yellow()
+                    ),
                 }
-            } else {
                 println!(
-                    " Tunnel status     : {}",
-                    "unknown (install WireGuard tools to activate)".yellow()
+                    " peers registry    : {} ({})",
+                    peers.display(),
+                    match peer_count {
+                        Some(n) => format!("{n} peers").green().to_string(),
+                        None => "missing".yellow().to_string(),
+                    }
+                );
+                println!(
+                    " Implemented       : {}",
+                    "X25519 keys, multi-peer registry, conf writer, doctor, probe, wg show/wg-quick"
+                        .green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "embedded boringtun userspace stack".red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
                 );
             }
-            let peers = PathBuf::from(".aegis/mesh-peers.json");
-            println!(
-                " peers registry    : {} ({})",
-                peers.display(),
-                if peers.exists() {
-                    let n = PeerRegistry::load(&peers).peers.len();
-                    format!("{n} peers").green().to_string()
-                } else {
-                    "missing".yellow().to_string()
-                }
-            );
-            println!(
-                " Implemented       : {}",
-                "X25519 keys, multi-peer registry, conf writer, doctor, probe, wg show/wg-quick"
-                    .green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "embedded boringtun userspace stack".red()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
         }
         Commands::Doctor {
             conf,
             peers_file,
             private_key_file,
+            json,
         } => {
             let mut ok = 0u32;
             let mut warn = 0u32;
             let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
             let mut check = |label: &str, good: bool, detail: &str| {
+                let soft = !good && detail.starts_with("WARN");
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft,
+                    "detail": detail,
+                }));
                 if good {
                     ok += 1;
-                    println!("  {} {} — {}", "OK".green().bold(), label, detail);
-                } else if detail.starts_with("WARN") {
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
                     warn += 1;
-                    println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
                 } else {
                     fail += 1;
-                    println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
                 }
             };
 
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "      S2O CyberMesh doctor                               "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberMesh doctor                               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
 
             // X25519 / key material
             if private_key_file.exists() {
@@ -519,7 +575,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &format!("{} ({} peer(s))", peers_file.display(), reg.peers.len()),
                 );
                 for p in &reg.peers {
-                    let pk_ok = B64.decode(p.public_key.trim()).map(|b| b.len() == 32).unwrap_or(false);
+                    let pk_ok = B64
+                        .decode(p.public_key.trim())
+                        .map(|b| b.len() == 32)
+                        .unwrap_or(false);
                     check(
                         &format!("peer {}", p.name),
                         pk_ok,
@@ -552,15 +611,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             }
 
-            println!(
-                "{}",
-                "---------------------------------------------------------".cyan()
-            );
-            println!(" Summary: ok={ok} warn={warn} fail={fail}");
-            println!(
-                " Not embedded: {}",
-                "boringtun userspace stack (later)".yellow()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "checks": notes,
+                        "not_embedded": "boringtun userspace stack (later)",
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Summary: ok={ok} warn={warn} fail={fail}");
+                println!(
+                    " Not embedded: {}",
+                    "boringtun userspace stack (later)".yellow()
+                );
+            }
             if fail > 0 {
                 std::process::exit(2);
             }

@@ -142,6 +142,10 @@
 - Gate `route-add` / `route-remove` for gate-routes.json
 - CyberEDR `listen --json` + `alerts --json` (optional `--emit-event`)
 - Example response playbooks `policies/examples/response-playbooks.json`
+- CyberID `status --json` + `doctor --json` (posture/session health machine-readable)
+- CyberMesh `status --json` + `doctor --json` (keys/conf/peers/tools)
+- CyberLog `correlate --json` trail + product histogram
+- `aegis playbook show <name>` full rule dump (`--json`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

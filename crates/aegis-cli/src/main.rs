@@ -479,6 +479,14 @@ enum PlaybookCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show one rule by name (full when/then)
+    Show {
+        name: String,
+        #[arg(long, default_value = ".aegis/playbooks.json")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate playbook JSON + known action types
     Validate {
         #[arg(long, default_value = ".aegis/playbooks.json")]
@@ -2650,6 +2658,91 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             r.name,
                             acts.join(",")
                         );
+                    }
+                }
+            }
+            PlaybookCmd::Show { name, path, json } => {
+                if !path.exists() {
+                    eprintln!(
+                        "[aegis] missing {} — run: aegis playbook init",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                let pb: PlaybookFile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                let rule = pb.rules.iter().find(|r| r.name.eq_ignore_ascii_case(&name));
+                let Some(r) = rule else {
+                    eprintln!(
+                        "[aegis] rule '{}' not found in {} ({} rules)",
+                        name,
+                        path.display(),
+                        pb.rules.len()
+                    );
+                    std::process::exit(1);
+                };
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "rule": r,
+                        }))?
+                    );
+                } else {
+                    let flag = if r.enabled {
+                        "enabled".green().bold().to_string()
+                    } else {
+                        "disabled".yellow().to_string()
+                    };
+                    println!(
+                        "[aegis] playbook rule '{}' ({flag}) — {}",
+                        r.name,
+                        path.display()
+                    );
+                    println!("  when:");
+                    println!(
+                        "    product={} action={} severity={} kind={}",
+                        r.when.product.as_deref().unwrap_or("-"),
+                        r.when.action.as_deref().unwrap_or("-"),
+                        r.when.severity.as_deref().unwrap_or("-"),
+                        r.when.kind.as_deref().unwrap_or("-"),
+                    );
+                    if r.when.message_contains.is_some()
+                        || r.when.attr.is_some()
+                        || r.when.attr_equals.is_some()
+                        || r.when.attr_contains.is_some()
+                    {
+                        println!(
+                            "    msg~{} attr={} equals={} contains={}",
+                            r.when.message_contains.as_deref().unwrap_or("-"),
+                            r.when.attr.as_deref().unwrap_or("-"),
+                            r.when.attr_equals.as_deref().unwrap_or("-"),
+                            r.when.attr_contains.as_deref().unwrap_or("-"),
+                        );
+                    }
+                    println!("  then ({} action(s)):", r.then.len());
+                    for (i, a) in r.then.iter().enumerate() {
+                        println!(
+                            "    [{}] type={} attr={} domain={} url={} value={} user={} token={}",
+                            i + 1,
+                            a.action_type,
+                            a.attr.as_deref().unwrap_or("-"),
+                            a.domain.as_deref().unwrap_or("-"),
+                            a.url.as_deref().unwrap_or("-"),
+                            a.value.as_deref().unwrap_or("-"),
+                            a.user.as_deref().unwrap_or("-"),
+                            a.token.as_deref().unwrap_or("-"),
+                        );
+                        if a.message.is_some() || a.severity.is_some() || a.kind.is_some() {
+                            println!(
+                                "        message={} severity={} kind={} source={} product={}",
+                                a.message.as_deref().unwrap_or("-"),
+                                a.severity.as_deref().unwrap_or("-"),
+                                a.kind.as_deref().unwrap_or("-"),
+                                a.source.as_deref().unwrap_or("-"),
+                                a.product.as_deref().unwrap_or("-"),
+                            );
+                        }
                     }
                 }
             }

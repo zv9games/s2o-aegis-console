@@ -27,11 +27,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate posture signals + session store health
     Doctor {
         #[arg(long, default_value_t = 40)]
         min_score: u32,
+        #[arg(long)]
+        json: bool,
     },
     /// Device posture from live OS + suite signals
     Posture {
@@ -170,74 +175,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => {
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "        S2O CyberID (Phase 2/3)                          "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                " Implemented       : {}",
-                "posture + doctor + sessions (mint/list/revoke/verify/gc)".green()
-            );
-            println!(
-                " Not implemented   : {}",
-                "OIDC/FIDO2, enterprise PAM, federated IdP".red()
-            );
-            println!(
-                " Sessions file     : {} ({})",
-                cli.sessions.display(),
-                if cli.sessions.exists() {
-                    "present".green().to_string()
-                } else {
-                    "missing".yellow().to_string()
-                }
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+        Commands::Status { json } => {
+            let sessions_present = cli.sessions.exists();
+            let store = SessionStore::load(&cli.sessions);
+            let active = store.active().count();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "product": "cyberid",
+                        "implemented": "posture + doctor + sessions (mint/list/revoke/verify/gc)",
+                        "not_implemented": "OIDC/FIDO2, enterprise PAM, federated IdP",
+                        "sessions_file": cli.sessions.display().to_string(),
+                        "sessions_present": sessions_present,
+                        "sessions_total": store.sessions.len(),
+                        "sessions_active": active,
+                        "event_log": cli.event_log.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "        S2O CyberID (Phase 2/3)                          "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Implemented       : {}",
+                    "posture + doctor + sessions (mint/list/revoke/verify/gc)".green()
+                );
+                println!(
+                    " Not implemented   : {}",
+                    "OIDC/FIDO2, enterprise PAM, federated IdP".red()
+                );
+                println!(
+                    " Sessions file     : {} ({})",
+                    cli.sessions.display(),
+                    if sessions_present {
+                        "present".green().to_string()
+                    } else {
+                        "missing".yellow().to_string()
+                    }
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
             let _ = compute_score();
         }
-        Commands::Doctor { min_score } => {
+        Commands::Doctor { min_score, json } => {
             let mut ok = 0u32;
             let mut warn = 0u32;
             let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
             let mut check = |label: &str, good: bool, detail: &str, soft: bool| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
                 if good {
                     ok += 1;
-                    println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
                 } else if soft {
                     warn += 1;
-                    println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
                 } else {
                     fail += 1;
-                    println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
                 }
             };
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "      S2O CyberID doctor                                 "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberID doctor                                 "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
 
             let fw = create_firewall_engine();
             let st = cyberwall_core::FirewallEngine::get_status(fw.as_ref()).await?;
@@ -316,11 +355,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let verified = probe.verify(&s.token).is_some();
             check("session mint/verify", verified, "in-memory round-trip", false);
 
-            println!(
-                "{}",
-                "---------------------------------------------------------".cyan()
-            );
-            println!(" Summary: ok={ok} warn={warn} fail={fail}");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "min_score": min_score,
+                        "posture_score": pct,
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(" Summary: ok={ok} warn={warn} fail={fail}");
+            }
             if fail > 0 {
                 std::process::exit(2);
             }

@@ -137,6 +137,8 @@ enum Commands {
         /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
         #[arg(long)]
         since: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Free-text search across message/attrs/iocs (optional product/severity/since)
     Search {
@@ -1052,6 +1054,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_log,
             limit,
             since,
+            json,
         } => {
             if !event_log.exists() {
                 eprintln!("[cyberlog] no event log");
@@ -1073,43 +1076,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hits.push(e);
                 }
             }
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                format!("  CyberLog correlate: '{query}' ({} hits)", hits.len())
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
             let mut products: BTreeMap<String, usize> = BTreeMap::new();
             for e in &hits {
                 *products.entry(e.product.as_str().into()).or_default() += 1;
-                println!(
-                    "[{}] {:?} {:?} | {}",
-                    e.ts.to_rfc3339().cyan(),
-                    e.product,
-                    e.action,
-                    e.message
-                );
             }
-            if !products.is_empty() {
+            if json {
                 println!(
                     "{}",
-                    "---------------------------------------------------------".cyan()
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "query": query,
+                        "since": since,
+                        "hit_count": hits.len(),
+                        "products": products,
+                        "events": hits,
+                    }))?
                 );
-                println!(" Products in trail:");
-                for (p, n) in products {
-                    println!("  {p}: {n}");
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    format!("  CyberLog correlate: '{query}' ({} hits)", hits.len())
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                for e in &hits {
+                    println!(
+                        "[{}] {:?} {:?} | {}",
+                        e.ts.to_rfc3339().cyan(),
+                        e.product,
+                        e.action,
+                        e.message
+                    );
                 }
-            }
-            if hits.is_empty() {
-                println!("(no correlated events)");
+                if !products.is_empty() {
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
+                    println!(" Products in trail:");
+                    for (p, n) in &products {
+                        println!("  {p}: {n}");
+                    }
+                }
+                if hits.is_empty() {
+                    println!("(no correlated events)");
+                }
             }
         }
         Commands::Search {
