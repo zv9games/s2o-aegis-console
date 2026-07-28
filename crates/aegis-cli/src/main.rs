@@ -36,8 +36,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Kernel / host doctor
-    Doctor,
+    /// Kernel / host doctor (suite data + module matrix)
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
     /// Full audit report (status + posture + data files)
     Report {
         #[arg(long)]
@@ -255,6 +258,17 @@ enum FleetCmd {
         policy: PathBuf,
         #[arg(long, default_value_t = 60)]
         stale_minutes: i64,
+    },
+    /// Validate fleet roster + desired policy health
+    Doctor {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        #[arg(long, default_value = ".aegis/fleet-policy.json")]
+        policy: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        stale_minutes: i64,
+        #[arg(long)]
+        json: bool,
     },
     /// Fleet policy distribution (set / show / apply / push / pull)
     Policy {
@@ -1266,41 +1280,188 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Doctor => {
-            println!("{}", "Aegis doctor".bold().green());
-            println!(" kernel       : {KERNEL_VERSION}");
-            println!(" schema       : {SCHEMA_VERSION}");
-            println!(" phase        : {PHASE_LABEL}");
-            println!(" tier ceiling : {}", TIER_CEILING.as_str());
-            println!(" host_id      : {}", host_id());
-            println!(
-                " demo_mode    : {}",
-                if demo_mode() { "ON" } else { "OFF" }
-            );
-            match collect_platform_status(&fw).await.modules.iter().find(|m| m.id == "cyberwall") {
-                Some(m) => println!(" cyberwall    : {} — {}", m.state.as_str(), m.detail),
-                None => println!(" cyberwall    : missing from matrix"),
+        Commands::Doctor { json } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!("{}", "Aegis suite doctor".bold().green());
+                println!(
+                    " kernel={} schema={} phase={} tier={}",
+                    KERNEL_VERSION,
+                    SCHEMA_VERSION,
+                    PHASE_LABEL,
+                    TIER_CEILING.as_str()
+                );
+                println!(
+                    " host={} demo={}",
+                    host_id(),
+                    if demo_mode() { "ON" } else { "OFF" }
+                );
             }
+
+            let status = collect_platform_status(&fw).await;
+            let by_state = {
+                let mut m = std::collections::BTreeMap::new();
+                for modu in &status.modules {
+                    *m.entry(modu.state.as_str().to_string()).or_insert(0u32) += 1;
+                }
+                m
+            };
+            check(
+                "module matrix",
+                !status.modules.is_empty(),
+                false,
+                &format!(
+                    "{} modules ({})",
+                    status.modules.len(),
+                    by_state
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+            );
+            for m in &status.modules {
+                let (good, soft) = match m.state.as_str() {
+                    "implemented" => (true, false),
+                    "partial" => (true, false),
+                    "demo" => (true, true),
+                    "degraded" => (false, true),
+                    // not_implemented / unsupported_on_os — expected gaps, warn only
+                    _ => (false, true),
+                };
+                check(
+                    &format!("module {}", m.id),
+                    good,
+                    soft,
+                    &format!("{} — {}", m.state.as_str(), m.detail.replace('\n', " ")),
+                );
+            }
+
             let event_log = PathBuf::from(".aegis/events.jsonl");
             if event_log.exists() {
-                let store = EventStore::open(&event_log)?;
+                match EventStore::open(&event_log) {
+                    Ok(store) => {
+                        let n = store.count().unwrap_or(0);
+                        let b = store.len_bytes().unwrap_or(0);
+                        check(
+                            "event log",
+                            true,
+                            false,
+                            &format!("{} ({} events, {} bytes)", event_log.display(), n, b),
+                        );
+                    }
+                    Err(e) => check("event log", false, false, &format!("open error: {e}")),
+                }
+            } else {
+                check(
+                    "event log",
+                    false,
+                    true,
+                    &format!("{} missing", event_log.display()),
+                );
+            }
+
+            let data_checks = [
+                (".aegis/dns-blocklist.txt", true),
+                (".aegis/ioc-store.json", true),
+                (".aegis/playbooks.json", true),
+                (".aegis/gate-routes.json", true),
+                (".aegis/fleet.json", true),
+                (".aegis/sessions.json", true),
+                (".aegis/config.json", true),
+            ];
+            for (p, soft_missing) in data_checks {
+                let path = Path::new(p);
+                check(
+                    p,
+                    path.exists(),
+                    soft_missing,
+                    if path.exists() { "present" } else { "missing" },
+                );
+            }
+
+            let fleet = s2o_fleet::FleetStore::load(Path::new(".aegis/fleet.json"));
+            let fsum = fleet.summary(60);
+            check(
+                "fleet roster",
+                fsum.total > 0,
+                true,
+                &format!(
+                    "{} hosts (online={} stale@60m={})",
+                    fsum.total, fsum.online, fsum.stale
+                ),
+            );
+
+            let posture = compute_posture_score(&fw).await?;
+            check(
+                "posture@50",
+                posture.passes(50),
+                true,
+                &format!("{}/{}", posture.score, posture.max_score),
+            );
+
+            if json {
                 println!(
-                    " event_log    : {} ({} events)",
-                    event_log.display(),
-                    store.count()?
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "kernel_version": KERNEL_VERSION,
+                        "schema_version": SCHEMA_VERSION,
+                        "phase": PHASE_LABEL,
+                        "host_id": host_id(),
+                        "module_state_counts": by_state,
+                        "posture_score": posture.score,
+                        "fleet_hosts": fsum.total,
+                        "checks": notes,
+                    }))?
                 );
             } else {
                 println!(
-                    " event_log    : {} (missing)",
-                    event_log.display()
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    " {}",
+                    "Tip: cyberwall/dns/edr/defender/gate/mesh doctor for world-depth checks."
+                        .dimmed()
                 );
             }
-            let bl = PathBuf::from(".aegis/dns-blocklist.txt");
-            println!(
-                " dns_blocklist: {} ({})",
-                bl.display(),
-                if bl.exists() { "present" } else { "missing" }
-            );
+            if fail > 0 {
+                std::process::exit(1);
+            }
         }
         Commands::Report { json, out } => {
             let status = collect_platform_status(&fw).await;
@@ -2646,6 +2807,168 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         " On policy: {}  behind: {}",
                         s.hosts_on_policy, s.hosts_behind_policy
                     );
+                }
+            }
+            FleetCmd::Doctor {
+                fleet,
+                policy,
+                stale_minutes,
+                json,
+            } => {
+                let mut ok = 0u32;
+                let mut warn = 0u32;
+                let mut fail = 0u32;
+                let mut notes: Vec<serde_json::Value> = Vec::new();
+                let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                    notes.push(serde_json::json!({
+                        "label": label,
+                        "ok": good,
+                        "warn": soft && !good,
+                        "detail": detail,
+                    }));
+                    if good {
+                        ok += 1;
+                        if !json {
+                            println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                        }
+                    } else if soft {
+                        warn += 1;
+                        if !json {
+                            println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                        }
+                    } else {
+                        fail += 1;
+                        if !json {
+                            println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                        }
+                    }
+                };
+
+                if !json {
+                    println!("{}", "Aegis fleet doctor".bold().green());
+                }
+
+                let store = FleetStore::load(&fleet);
+                check(
+                    "fleet store",
+                    fleet.exists() || store.hosts.is_empty(),
+                    true,
+                    &if fleet.exists() {
+                        format!("{} (v{})", fleet.display(), store.version)
+                    } else {
+                        format!("{} missing (run: aegis fleet enroll)", fleet.display())
+                    },
+                );
+
+                let pv = local_policy_version(&policy);
+                let s = store.summary_with_policy(stale_minutes, pv);
+                check(
+                    "hosts enrolled",
+                    s.total > 0,
+                    true,
+                    &if s.total > 0 {
+                        format!("{} hosts", s.total)
+                    } else {
+                        "empty roster".into()
+                    },
+                );
+                check(
+                    "online window",
+                    s.total == 0 || s.online > 0,
+                    true,
+                    &format!(
+                        "online={} stale={} (window={}m) avg_posture={:.0}",
+                        s.online, s.stale, stale_minutes, s.avg_posture
+                    ),
+                );
+                if s.stale > 0 {
+                    check(
+                        "stale hosts",
+                        false,
+                        true,
+                        &format!(
+                            "{}/{} stale — prune: aegis fleet prune --stale-minutes {stale_minutes}",
+                            s.stale, s.total
+                        ),
+                    );
+                }
+
+                let bundle = FleetPolicyBundle::load(&policy);
+                check(
+                    "desired policy",
+                    bundle.is_some(),
+                    true,
+                    &match &bundle {
+                        Some(b) => format!(
+                            "{} name={} version={}",
+                            policy.display(),
+                            b.name,
+                            b.version
+                        ),
+                        None => format!(
+                            "{} missing (set: aegis fleet policy set <pack.json>)",
+                            policy.display()
+                        ),
+                    },
+                );
+                if let Some(ref b) = bundle {
+                    check(
+                        "policy sync",
+                        s.hosts_behind_policy == 0 || s.total == 0,
+                        true,
+                        &format!(
+                            "on_policy={} behind={} desired_v={}",
+                            s.hosts_on_policy, s.hosts_behind_policy, b.version
+                        ),
+                    );
+                }
+
+                // Duplicate host ids
+                let mut seen = std::collections::BTreeSet::new();
+                let mut dups = 0u32;
+                for h in &store.hosts {
+                    if !seen.insert(h.host_id.clone()) {
+                        dups += 1;
+                    }
+                }
+                check(
+                    "host_id uniqueness",
+                    dups == 0,
+                    false,
+                    &if dups == 0 {
+                        "no duplicates".into()
+                    } else {
+                        format!("{dups} duplicate host_id row(s)")
+                    },
+                );
+
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": fail == 0,
+                            "ok_count": ok,
+                            "warn_count": warn,
+                            "fail_count": fail,
+                            "total": s.total,
+                            "online": s.online,
+                            "stale": s.stale,
+                            "policy_version": pv,
+                            "hosts_on_policy": s.hosts_on_policy,
+                            "hosts_behind_policy": s.hosts_behind_policy,
+                            "checks": notes,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        " Summary: {} ok, {} warn, {} fail",
+                        ok.to_string().green(),
+                        warn.to_string().yellow(),
+                        fail.to_string().red()
+                    );
+                }
+                if fail > 0 {
+                    std::process::exit(1);
                 }
             }
             FleetCmd::Policy { command } => match command {

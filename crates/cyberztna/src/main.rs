@@ -51,6 +51,19 @@ enum Commands {
         #[command(subcommand)]
         command: OauthCmd,
     },
+    /// Validate routes config, certs, access log, posture (read-only)
+    Doctor {
+        #[arg(long, default_value = ".aegis/gate-access.log")]
+        access_log: PathBuf,
+        #[arg(long, default_value = ".aegis/sessions.json")]
+        sessions: PathBuf,
+        #[arg(long, default_value = ".aegis/gate-cert.pem")]
+        tls_cert: PathBuf,
+        #[arg(long, default_value = ".aegis/gate-key.pem")]
+        tls_key: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Summarize Gate access log (ALLOW/DENY counts)
     AccessStats {
         #[arg(long, default_value = ".aegis/gate-access.log")]
@@ -372,7 +385,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, access-stats".green()
+                "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, doctor, access-stats"
+                    .green()
             );
             println!(
                 " Not implemented   : {}",
@@ -393,6 +407,292 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+        }
+        Commands::Doctor {
+            access_log,
+            sessions,
+            tls_cert,
+            tls_key,
+            json,
+        } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O Gate doctor                                    "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+
+            let cfg = match load_config(&cli.config) {
+                Ok(c) => {
+                    check(
+                        "config file",
+                        true,
+                        false,
+                        &format!("{}", cli.config.display()),
+                    );
+                    c
+                }
+                Err(e) => {
+                    check(
+                        "config file",
+                        false,
+                        true,
+                        &format!(
+                            "{} — {} (defaults used; run: cyberztna init)",
+                            cli.config.display(),
+                            e
+                        ),
+                    );
+                    default_config()
+                }
+            };
+
+            check(
+                "listen",
+                !cfg.listen.trim().is_empty() && cfg.listen.contains(':'),
+                false,
+                &cfg.listen,
+            );
+            check(
+                "min_score",
+                cfg.min_score > 0 && cfg.min_score <= 100,
+                true,
+                &format!("{}", cfg.min_score),
+            );
+            check(
+                "routes",
+                !cfg.routes.is_empty(),
+                false,
+                &if cfg.routes.is_empty() {
+                    "no routes configured".into()
+                } else {
+                    format!(
+                        "{} route(s): {}",
+                        cfg.routes.len(),
+                        cfg.routes
+                            .iter()
+                            .map(|r| format!("{}→{}", r.path_prefix, r.upstream))
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+            );
+            for r in &cfg.routes {
+                if r.upstream.trim().is_empty() {
+                    check(
+                        &format!("route {}", r.name),
+                        false,
+                        false,
+                        "empty upstream",
+                    );
+                } else if !(r.upstream.starts_with("http://") || r.upstream.starts_with("https://"))
+                {
+                    check(
+                        &format!("route {}", r.name),
+                        false,
+                        true,
+                        &format!("upstream not http(s): {}", r.upstream),
+                    );
+                }
+                if r.path_prefix.is_empty() || !r.path_prefix.starts_with('/') {
+                    check(
+                        &format!("route {} path", r.name),
+                        false,
+                        true,
+                        &format!("path_prefix should start with / (got {:?})", r.path_prefix),
+                    );
+                }
+            }
+
+            if !cfg.allow_ips.is_empty() {
+                check(
+                    "ip allowlist",
+                    true,
+                    false,
+                    &format!("{} entr(y/ies)", cfg.allow_ips.len()),
+                );
+            } else {
+                check(
+                    "ip allowlist",
+                    false,
+                    true,
+                    "empty (all client IPs allowed)",
+                );
+            }
+            check(
+                "rate limit",
+                true,
+                false,
+                &if cfg.rate_limit_per_minute == 0 {
+                    "disabled".into()
+                } else {
+                    format!("{} req/min per IP", cfg.rate_limit_per_minute)
+                },
+            );
+            check(
+                "session flags",
+                true,
+                false,
+                &format!(
+                    "require_session={} enforce_session_posture={}",
+                    cfg.require_session, cfg.enforce_session_posture
+                ),
+            );
+
+            let access_lines = if access_log.exists() {
+                std::fs::read_to_string(&access_log)
+                    .map(|t| t.lines().filter(|l| !l.trim().is_empty()).count())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            check(
+                "access log",
+                access_log.exists(),
+                true,
+                &if access_log.exists() {
+                    format!("{} ({} lines)", access_log.display(), access_lines)
+                } else {
+                    format!("{} missing (created on serve)", access_log.display())
+                },
+            );
+
+            let cert_ok = tls_cert.exists() && tls_key.exists();
+            check(
+                "tls pem pair",
+                cert_ok,
+                true,
+                &if cert_ok {
+                    format!(
+                        "{} + {} present (use --tls on serve)",
+                        tls_cert.display(),
+                        tls_key.display()
+                    )
+                } else {
+                    "missing (HTTP-only unless --tls; run serve --tls once to mint lab certs)"
+                        .into()
+                },
+            );
+
+            let sess = s2o_session::SessionStore::load(&sessions);
+            let active = sess.active().count();
+            check(
+                "sessions store",
+                sessions.exists(),
+                true,
+                &if sessions.exists() {
+                    format!(
+                        "{} ({} total, {} active)",
+                        sessions.display(),
+                        sess.sessions.len(),
+                        active
+                    )
+                } else {
+                    format!("{} missing (mint via cyberid authenticate)", sessions.display())
+                },
+            );
+
+            check(
+                "event log",
+                cli.event_log.exists(),
+                true,
+                &format!("{}", cli.event_log.display()),
+            );
+
+            let fw = create_firewall_engine();
+            let posture = compute_posture_score(&fw).await?;
+            let passes = posture.passes(cfg.min_score);
+            check(
+                "host posture vs min_score",
+                passes,
+                true,
+                &format!(
+                    "score={}/{} min={} {}",
+                    posture.score,
+                    posture.max_score,
+                    cfg.min_score,
+                    if passes { "PASS" } else { "BELOW (gate would deny)" }
+                ),
+            );
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "listen": cfg.listen,
+                        "min_score": cfg.min_score,
+                        "routes": cfg.routes.len(),
+                        "access_log_lines": access_lines,
+                        "sessions_active": active,
+                        "posture_score": posture.score,
+                        "posture_pass": passes,
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    " {}",
+                    "Note: doctor does not start the proxy (use cyberztna serve)."
+                        .dimmed()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
         }
         Commands::AccessStats {
             log,

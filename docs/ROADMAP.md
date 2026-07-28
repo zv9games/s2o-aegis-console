@@ -190,6 +190,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Playbook IOC actions + kind/attr matching + intel stats + Gate access-stats `--since`  
 - ✅ DNS doctor/check + EDR doctor + playbook list/validate  
 - ✅ Wall/Defender doctors + filtered `aegis events`  
+- ✅ Gate doctor + fleet doctor + deeper suite doctor  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

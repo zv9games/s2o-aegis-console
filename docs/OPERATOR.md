@@ -19,6 +19,10 @@ cargo run -p aegis-cli -- events --since 1h --product dns --text
 cargo run -p aegis-cli -- events --severity high --limit 10 --text
 cargo run -p cyberwall -- doctor
 cargo run -p cyberdefender -- doctor
+cargo run -p cyberztna -- doctor
+cargo run -p aegis-cli -- fleet doctor
+cargo run -p aegis-cli -- doctor
+cargo run -p aegis-cli -- doctor --json
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
 cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall
@@ -143,7 +147,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Intel | `cyberintel sync\|prune\|export\|stats\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
-| Gate | `cyberztna serve\|access-stats\|oauth\|jwt` |
+| Gate | `cyberztna doctor\|serve\|access-stats\|oauth\|jwt` |
 
 ## Gate HTTPS + session
 

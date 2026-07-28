@@ -108,6 +108,9 @@
 - Cyberwall `doctor` (enabled/profiles/managed `S2O-Aegis-*` rules, read-only)
 - CyberDefender `doctor` (rules, yara-lite/YARA-X, quarantine, IOC hashes)
 - `aegis events` filters: `--product`, `--severity`, `--since`, `--text`
+- Gate `doctor` (routes/listen/certs/access log/sessions/posture vs min_score)
+- `aegis fleet doctor` (roster, stale window, desired policy sync, host_id uniqueness)
+- Expanded `aegis doctor` suite matrix + data-file checks (`--json`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed
