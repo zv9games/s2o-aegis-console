@@ -88,6 +88,9 @@
 - macOS Cyberwall `apply_policy`: socketfilterfw managed app block/unblock (path rules)
 - CyberDNS serve query stats (`--stats-secs`); CyberDefender `yara pull` URL ruleset fetch (capped)
 - Expanded `aegis selftest` (event append, ingest decode, UDP bus, wall prefix, quarantine dir)
+- aegisd Prometheus ingest counters (`aegis_event_ingest_total` http/udp ok|err)
+- Fleet `prune [--stale-minutes] [--apply]` drop stale hosts
+- CyberID `doctor` posture + session store health
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

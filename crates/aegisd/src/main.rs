@@ -22,9 +22,19 @@ use s2o_schema::{
 use s2o_store::EventStore;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+/// Process-local counters for multi-process event ingest (Prometheus).
+#[derive(Default)]
+struct IngestMetrics {
+    http_ok: AtomicU64,
+    http_err: AtomicU64,
+    udp_ok: AtomicU64,
+    udp_err: AtomicU64,
+}
 
 #[derive(Parser)]
 #[command(name = "aegisd")]
@@ -105,7 +115,7 @@ enum PolicyCmd {
 }
 
 /// Minimal HTTP/1.0 health server: GET /health, /status, /metrics, /fleet
-/// POST /fleet/heartbeat ; GET/POST /fleet/policy
+/// POST /fleet/heartbeat ; GET/POST /fleet/policy ; POST /events
 async fn health_server(
     bind: String,
     fw: FirewallEngineHandle,
@@ -116,6 +126,7 @@ async fn health_server(
     jwks_path: PathBuf,
     jwt_private: PathBuf,
     oauth_devices: PathBuf,
+    ingest: Arc<IngestMetrics>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(&bind).await?;
     let public_base = format!("http://{bind}");
@@ -130,6 +141,7 @@ async fn health_server(
         let jwt_private = jwt_private.clone();
         let oauth_devices = oauth_devices.clone();
         let public_base = public_base.clone();
+        let ingest = ingest.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 65536];
             let n = match sock.read(&mut buf).await {
@@ -742,6 +754,7 @@ async fn health_server(
                             match EventStore::open(&event_log) {
                                 Ok(store) => match store.append(&ev) {
                                     Ok(()) => {
+                                        ingest.http_ok.fetch_add(1, Ordering::Relaxed);
                                         let body = serde_json::json!({
                                             "ok": true,
                                             "id": ev.id,
@@ -757,26 +770,35 @@ async fn health_server(
                                             "application/json",
                                         )
                                     }
-                                    Err(e) => (
+                                    Err(e) => {
+                                        ingest.http_err.fetch_add(1, Ordering::Relaxed);
+                                        (
                                         "500 Internal Server Error",
                                         format!("{{\"error\":\"{e}\"}}\n"),
                                         "application/json",
-                                    ),
+                                        )
+                                    }
                                 },
-                                Err(e) => (
+                                Err(e) => {
+                                    ingest.http_err.fetch_add(1, Ordering::Relaxed);
+                                    (
                                     "500 Internal Server Error",
                                     format!("{{\"error\":\"{e}\"}}\n"),
                                     "application/json",
-                                ),
+                                    )
+                                }
                             }
                         }
-                        Err(e) => (
+                        Err(e) => {
+                            ingest.http_err.fetch_add(1, Ordering::Relaxed);
+                            (
                             "400 Bad Request",
                             format!(
                                 "{{\"error\":\"invalid_event\",\"error_description\":\"{e}\"}}\n"
                             ),
                             "application/json",
-                        ),
+                            )
+                        }
                     }
                 } else {
                     match EventStore::open(&event_log) {
@@ -1105,12 +1127,22 @@ async fn health_server(
                      aegis_fleet_policy_behind {policy_behind}\n\
                      # HELP aegis_demo_mode 1 if AEGIS_DEMO is enabled\n\
                      # TYPE aegis_demo_mode gauge\n\
-                     aegis_demo_mode {}\n",
+                     aegis_demo_mode {}\n\
+                     # HELP aegis_event_ingest_total Events ingested via HTTP/UDP bus\n\
+                     # TYPE aegis_event_ingest_total counter\n\
+                     aegis_event_ingest_total{{channel=\"http\",result=\"ok\"}} {http_ok}\n\
+                     aegis_event_ingest_total{{channel=\"http\",result=\"err\"}} {http_err}\n\
+                     aegis_event_ingest_total{{channel=\"udp\",result=\"ok\"}} {udp_ok}\n\
+                     aegis_event_ingest_total{{channel=\"udp\",result=\"err\"}} {udp_err}\n",
                     if st.demo_mode { 1 } else { 0 },
                     fleet_total = fsum.total,
                     fleet_online = fsum.online,
                     policy_v = pv,
                     policy_behind = fsum.hosts_behind_policy,
+                    http_ok = ingest.http_ok.load(Ordering::Relaxed),
+                    http_err = ingest.http_err.load(Ordering::Relaxed),
+                    udp_ok = ingest.udp_ok.load(Ordering::Relaxed),
+                    udp_err = ingest.udp_err.load(Ordering::Relaxed),
                 );
                 ("200 OK", body, "text/plain; version=0.0.4")
             } else {
@@ -1233,6 +1265,8 @@ pub async fn run_daemon(
         println!("[AEGISD] health event written to store");
     }
 
+    let ingest_metrics = Arc::new(IngestMetrics::default());
+
     if !no_health && !health_bind.is_empty() {
         let bind = health_bind.clone();
         let fw_h = create_firewall_engine();
@@ -1243,8 +1277,9 @@ pub async fn run_daemon(
         let jw = jwks_path.clone();
         let jp = jwt_private.clone();
         let od = oauth_devices.clone();
+        let ing = ingest_metrics.clone();
         tokio::spawn(async move {
-            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp, jw, jp, od).await {
+            if let Err(e) = health_server(bind, fw_h, el, fl, fp, mp, jw, jp, od, ing).await {
                 eprintln!("[AEGISD] health server error: {e}");
             }
         });
@@ -1271,6 +1306,7 @@ pub async fn run_daemon(
         let el = event_log.clone();
         let bind = event_udp.clone();
         let hid = host_id();
+        let ing = ingest_metrics.clone();
         tokio::spawn(async move {
             let sock = match tokio::net::UdpSocket::bind(&bind).await {
                 Ok(s) => s,
@@ -1289,11 +1325,18 @@ pub async fn run_daemon(
                                 ev = ev
                                     .with_attr("ingest", serde_json::json!("udp"))
                                     .with_attr("udp_peer", serde_json::json!(peer.to_string()));
-                                if let Ok(store) = EventStore::open(&el) {
-                                    let _ = store.append(&ev);
+                                match EventStore::open(&el).and_then(|store| store.append(&ev)) {
+                                    Ok(()) => {
+                                        ing.udp_ok.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(e) => {
+                                        ing.udp_err.fetch_add(1, Ordering::Relaxed);
+                                        eprintln!("[AEGISD] event UDP append: {e}");
+                                    }
                                 }
                             }
                             Err(e) => {
+                                ing.udp_err.fetch_add(1, Ordering::Relaxed);
                                 eprintln!("[AEGISD] event UDP decode from {peer}: {e}");
                             }
                         }

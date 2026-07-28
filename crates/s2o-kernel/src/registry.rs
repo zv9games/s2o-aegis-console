@@ -88,7 +88,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: posture + local session tokens; no OIDC/FIDO2/PAM",
+            "partial: posture + doctor + local session tokens; no OIDC/FIDO2/PAM",
         ),
         ProductId::CyberMesh => ModuleStatus::new(
             product,

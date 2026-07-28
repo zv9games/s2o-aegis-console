@@ -176,6 +176,23 @@ impl FleetStore {
         )
     }
 
+    /// Remove hosts whose `last_seen` is older than `stale_minutes`. Returns removed hosts.
+    pub fn prune_stale(&mut self, stale_minutes: i64) -> Vec<FleetHost> {
+        let mins = stale_minutes.max(1);
+        let cutoff = Utc::now() - Duration::minutes(mins);
+        let mut removed = Vec::new();
+        self.hosts.retain(|h| {
+            let keep = chrono::DateTime::parse_from_rfc3339(&h.last_seen)
+                .map(|t| t.with_timezone(&Utc) >= cutoff)
+                .unwrap_or(false);
+            if !keep {
+                removed.push(h.clone());
+            }
+            keep
+        });
+        removed
+    }
+
     pub fn upsert_heartbeat(&mut self, hb: HeartbeatPayload) -> FleetHost {
         let now = Utc::now().to_rfc3339();
         if let Some(h) = self.hosts.iter_mut().find(|h| h.host_id == hb.host_id) {
@@ -346,5 +363,46 @@ mod tests {
         assert_eq!(b.version, 1);
         let b2 = FleetPolicyBundle::from_document(serde_json::json!({"name": "p2"}), Some(&b));
         assert_eq!(b2.version, 2);
+    }
+
+    #[test]
+    fn prune_stale_hosts() {
+        let mut s = FleetStore::new();
+        s.hosts.push(FleetHost {
+            host_id: "old".into(),
+            display_name: "old".into(),
+            os: String::new(),
+            phase: String::new(),
+            kernel: String::new(),
+            posture_score: 0,
+            modules_implemented: 0,
+            modules_partial: 0,
+            modules_other: 0,
+            tags: vec![],
+            enrolled_at: "2020-01-01T00:00:00Z".into(),
+            last_seen: "2020-01-01T00:00:00Z".into(),
+            last_ip: None,
+            notes: None,
+            policy_version: 0,
+        });
+        s.upsert_heartbeat(HeartbeatPayload {
+            host_id: "fresh".into(),
+            display_name: Some("fresh".into()),
+            os: None,
+            phase: None,
+            kernel: None,
+            posture_score: Some(50),
+            modules_implemented: None,
+            modules_partial: None,
+            modules_other: None,
+            tags: None,
+            last_ip: None,
+            policy_version: None,
+        });
+        let removed = s.prune_stale(60);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].host_id, "old");
+        assert_eq!(s.hosts.len(), 1);
+        assert_eq!(s.hosts[0].host_id, "fresh");
     }
 }

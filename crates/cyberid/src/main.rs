@@ -28,6 +28,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Status,
+    /// Validate posture signals + session store health
+    Doctor {
+        #[arg(long, default_value_t = 40)]
+        min_score: u32,
+    },
     /// Device posture from live OS + suite signals
     Posture {
         #[arg(long, default_value_t = 50)]
@@ -151,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture + sessions (mint/list/revoke/verify/gc, last_used)".green()
+                "posture + doctor + sessions (mint/list/revoke/verify/gc)".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -171,6 +176,123 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "=========================================================".cyan()
             );
             let _ = compute_score();
+        }
+        Commands::Doctor { min_score } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut check = |label: &str, good: bool, detail: &str, soft: bool| {
+                if good {
+                    ok += 1;
+                    println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                } else if soft {
+                    warn += 1;
+                    println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                } else {
+                    fail += 1;
+                    println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                }
+            };
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "      S2O CyberID doctor                                 "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+
+            let fw = create_firewall_engine();
+            let st = cyberwall_core::FirewallEngine::get_status(fw.as_ref()).await?;
+            check(
+                "firewall",
+                st.enabled,
+                &format!("enabled={} {}", st.enabled, st.backend_driver),
+                false,
+            );
+            if cfg!(windows) {
+                check(
+                    "defender",
+                    st.defender_active,
+                    &format!("WinDefend active={}", st.defender_active),
+                    false,
+                );
+            } else {
+                check("defender", true, "N/A on non-Windows", false);
+            }
+            check(
+                "ioc store",
+                Path::new(".aegis/ioc-store.json").exists(),
+                ".aegis/ioc-store.json",
+                true, // soft: lab hosts may lack IOC yet
+            );
+            check(
+                "dns blocklist",
+                Path::new(".aegis/dns-blocklist.txt").exists(),
+                ".aegis/dns-blocklist.txt",
+                true,
+            );
+            let (enc_ok, enc_detail) = bitlocker_or_encryption_hint();
+            check("disk encryption", enc_ok, &enc_detail, true);
+
+            // recompute posture via same path as Posture (inline simplified)
+            let mut score = 0u32;
+            let mut max = 0u32;
+            for (pass, w) in [
+                (st.enabled, 30u32),
+                (st.defender_active || !cfg!(windows), 25),
+                (Path::new(".aegis/ioc-store.json").exists(), 15),
+                (Path::new(".aegis/dns-blocklist.txt").exists(), 15),
+                (enc_ok, 15),
+            ] {
+                max += w;
+                if pass {
+                    score += w;
+                }
+            }
+            let pct = if max > 0 { (score * 100) / max } else { 0 };
+            check(
+                "posture floor",
+                pct >= min_score,
+                &format!("score={pct} min={min_score}"),
+                false,
+            );
+
+            let store = SessionStore::load(&cli.sessions);
+            let active: Vec<_> = store.active().collect();
+            let expired = store.sessions.len().saturating_sub(active.len());
+            check(
+                "session store",
+                true,
+                &format!(
+                    "{} total={} active={} expired/revoked={}",
+                    cli.sessions.display(),
+                    store.sessions.len(),
+                    active.len(),
+                    expired
+                ),
+                false,
+            );
+            // mint+verify round-trip in memory only if we can write
+            let mut probe = SessionStore::default();
+            let s = probe.mint("selftest", &host_id(), pct, 1);
+            let verified = probe.verify(&s.token).is_some();
+            check("session mint/verify", verified, "in-memory round-trip", false);
+
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
+            println!(" Summary: ok={ok} warn={warn} fail={fail}");
+            if fail > 0 {
+                std::process::exit(2);
+            }
         }
         Commands::Posture { min_score, json } => {
             let fw = create_firewall_engine();

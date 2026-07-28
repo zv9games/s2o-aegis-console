@@ -112,7 +112,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Events | `aegis emit\|events\|watch` ; aegisd `GET/POST /events` + `--event-udp` |
 | SIEM | `cybersiem stats\|correlate\|events\|collect\|follow` |
 | Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
-| Identity | `cyberid posture\|authenticate\|sessions\|verify` |
+| Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
 | Gate | `cyberztna serve [--tls] [--mtls-ca] [--jwt-secret] --upstream URL` |
 
@@ -190,6 +190,8 @@ curl -s http://127.0.0.1:9090/health
 
 ```powershell
 cargo run -p aegis-cli -- fleet enroll --tag lab
+cargo run -p aegis-cli -- fleet prune --stale-minutes 10080          # dry-run
+cargo run -p aegis-cli -- fleet prune --stale-minutes 10080 --apply  # drop stale
 cargo run -p aegis-cli -- fleet heartbeat
 cargo run -p aegis-cli -- fleet list
 cargo run -p aegis-cli -- fleet status

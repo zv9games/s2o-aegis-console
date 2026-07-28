@@ -182,6 +182,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Linux managed firewall apply + mesh doctor + playbook emit/dns_allow  
 - ✅ Defender quarantine list/restore/purge + macOS app-block apply_policy  
 - ✅ DNS proxy stats + YARA pull + expanded selftest  
+- ✅ Ingest metrics + fleet prune + CyberID doctor  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

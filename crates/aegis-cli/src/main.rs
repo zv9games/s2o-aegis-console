@@ -208,6 +208,17 @@ enum FleetCmd {
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
     },
+    /// Drop hosts not seen within stale window
+    Prune {
+        #[arg(long, default_value = ".aegis/fleet.json")]
+        fleet: PathBuf,
+        /// Minutes without heartbeat (default 10080 = 7 days)
+        #[arg(long, default_value_t = 10080)]
+        stale_minutes: i64,
+        /// Actually delete (default dry-run)
+        #[arg(long)]
+        apply: bool,
+    },
     /// Summary counts
     Status {
         #[arg(long, default_value = ".aegis/fleet.json")]
@@ -1785,6 +1796,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => {
                         eprintln!("[aegis] host not found: {id}");
                         std::process::exit(1);
+                    }
+                }
+            }
+            FleetCmd::Prune {
+                fleet,
+                stale_minutes,
+                apply,
+            } => {
+                let mut store = FleetStore::load(&fleet);
+                // dry-run: clone prune without save
+                let mut probe = store.clone();
+                let removed = probe.prune_stale(stale_minutes);
+                if removed.is_empty() {
+                    println!(
+                        "[aegis] fleet prune: no hosts older than {stale_minutes}m"
+                    );
+                } else {
+                    for h in &removed {
+                        println!(
+                            "  {} last_seen={} posture={}",
+                            h.host_id, h.last_seen, h.posture_score
+                        );
+                    }
+                    if apply {
+                        let _ = store.prune_stale(stale_minutes);
+                        store.save(&fleet)?;
+                        println!(
+                            "{}",
+                            format!(
+                                "[aegis] fleet prune removed {} host(s) → {}",
+                                removed.len(),
+                                fleet.display()
+                            )
+                            .green()
+                            .bold()
+                        );
+                    } else {
+                        println!(
+                            "[aegis] fleet prune dry-run: {} host(s) (use --apply)",
+                            removed.len()
+                        );
                     }
                 }
             }
