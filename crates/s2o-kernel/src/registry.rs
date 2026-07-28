@@ -29,7 +29,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             if demo {
                 "DEMO: DoH + blocklist + UDP proxy"
             } else {
-                "partial: DoH + allowlist/blocklist + IOC + UDP proxy stats + system-dns; no DoT/redirector"
+                "partial: DoH multi-resolver + allowlist/blocklist + IOC + UDP stats + system-dns; no DoT/redirector"
             },
         ),
         ProductId::CyberDefender => ModuleStatus::new(
@@ -110,7 +110,7 @@ pub fn world_baseline(product: ProductId, os: OsFamily) -> ModuleStatus {
             },
             os,
             CapabilityTier::T0,
-            "partial: posture+session+mTLS+JWT/JWKS/OIDC+OAuth device+auth-code lab; no prod IdP UI",
+            "partial: posture+session+mTLS+JWT/OIDC+OAuth lab + access-stats; no prod IdP UI",
         ),
         ProductId::Aegis => ModuleStatus::new(
             product,

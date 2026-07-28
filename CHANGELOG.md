@@ -91,6 +91,8 @@
 - aegisd Prometheus ingest counters (`aegis_event_ingest_total` http/udp ok|err)
 - Fleet `prune [--stale-minutes] [--apply]` drop stale hosts
 - CyberID `doctor` posture + session store health
+- CyberDNS multi-resolver DoH (Cloudflare → Google `/resolve`, `--doh` chain) + fallback stat
+- Gate `access-stats` on access log (allow/deny, reasons, paths, `--json`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

@@ -51,6 +51,16 @@ enum Commands {
         #[command(subcommand)]
         command: OauthCmd,
     },
+    /// Summarize Gate access log (ALLOW/DENY counts)
+    AccessStats {
+        #[arg(long, default_value = ".aegis/gate-access.log")]
+        log: PathBuf,
+        /// Only count lines containing this substring (optional)
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run posture-gated reverse proxy
     Serve {
         /// Override listen address
@@ -316,7 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!(
                 " Implemented       : {}",
-                "posture+session+JWT/OIDC discovery, TLS/mTLS, allowlist, rate-limit".green()
+                "posture+session+JWT/OIDC, TLS/mTLS, allowlist, rate-limit, access-stats".green()
             );
             println!(
                 " Not implemented   : {}",
@@ -337,6 +347,122 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "=========================================================".cyan()
             );
+        }
+        Commands::AccessStats { log, filter, json } => {
+            use std::collections::BTreeMap;
+            use std::fs;
+            use std::io::{BufRead, BufReader};
+
+            if !log.exists() {
+                eprintln!("[gate] access log missing: {}", log.display());
+                std::process::exit(2);
+            }
+            let f = fs::File::open(&log)?;
+            let mut total = 0u64;
+            let mut allow = 0u64;
+            let mut deny = 0u64;
+            let mut by_reason: BTreeMap<String, u64> = BTreeMap::new();
+            let mut by_status: BTreeMap<String, u64> = BTreeMap::new();
+            let mut by_path: BTreeMap<String, u64> = BTreeMap::new();
+            for line in BufReader::new(f).lines().flatten() {
+                if let Some(ref filt) = filter {
+                    if !line.contains(filt.as_str()) {
+                        continue;
+                    }
+                }
+                total += 1;
+                if line.contains(" ALLOW ") {
+                    allow += 1;
+                } else if line.contains(" DENY ") {
+                    deny += 1;
+                }
+                // reason=...
+                if let Some(idx) = line.find("reason=") {
+                    let rest = &line[idx + 7..];
+                    let reason = rest
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    *by_reason.entry(reason).or_default() += 1;
+                }
+                // status=NNN on ALLOW lines
+                if let Some(idx) = line.find("status=") {
+                    let rest = &line[idx + 7..];
+                    let st = rest
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("?")
+                        .to_string();
+                    *by_status.entry(st).or_default() += 1;
+                }
+                // path is usually the 4th/5th token after ALLOW/DENY METHOD path
+                // Format: ts ALLOW METHOD path ...  or ts DENY path reason=...
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                if let Some(pos) = tokens.iter().position(|t| *t == "ALLOW" || *t == "DENY") {
+                    let path_tok = if tokens[pos] == "ALLOW" {
+                        tokens.get(pos + 2)
+                    } else {
+                        tokens.get(pos + 1)
+                    };
+                    if let Some(p) = path_tok {
+                        if p.starts_with('/') {
+                            *by_path.entry((*p).to_string()).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            if json {
+                let out = serde_json::json!({
+                    "log": log.display().to_string(),
+                    "total": total,
+                    "allow": allow,
+                    "deny": deny,
+                    "by_reason": by_reason,
+                    "by_status": by_status,
+                    "by_path": by_path,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      Gate access stats                                "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Log    : {}", log.display());
+                println!(" Total  : {total}");
+                println!(" Allow  : {}", allow.to_string().green());
+                println!(" Deny   : {}", deny.to_string().red());
+                if !by_reason.is_empty() {
+                    println!("-- deny reasons --");
+                    for (k, v) in &by_reason {
+                        println!("  {k:<16} {v}");
+                    }
+                }
+                if !by_status.is_empty() {
+                    println!("-- upstream status (allow) --");
+                    for (k, v) in &by_status {
+                        println!("  {k:<8} {v}");
+                    }
+                }
+                if !by_path.is_empty() {
+                    println!("-- top paths --");
+                    let mut paths: Vec<_> = by_path.into_iter().collect();
+                    paths.sort_by(|a, b| b.1.cmp(&a.1));
+                    for (k, v) in paths.into_iter().take(15) {
+                        println!("  {v:<6} {k}");
+                    }
+                }
+            }
         }
         Commands::Init => {
             let cfg = default_config();

@@ -1,7 +1,7 @@
-//! Local UDP DNS proxy: blocklist → NXDOMAIN, else DoH A records.
+//! Local UDP DNS proxy: blocklist → NXDOMAIN, else DoH A records (multi-resolver).
 
 use crate::blocklist::{is_allowed, is_blocked, load_blocklist, normalize_domain};
-use serde::Deserialize;
+use crate::doh;
 use simple_dns::rdata::{RData, A};
 use simple_dns::{Name, Packet, PacketFlag, Question, CLASS, QTYPE, RCODE, TYPE};
 use s2o_ioc::{IocKind, IocStore};
@@ -25,6 +25,7 @@ pub struct ProxyStats {
     pub allowlisted: AtomicU64,
     pub doh_ok: AtomicU64,
     pub doh_fail: AtomicU64,
+    pub doh_fallback: AtomicU64,
     pub other_qtype: AtomicU64,
     pub encode_err: AtomicU64,
 }
@@ -32,13 +33,14 @@ pub struct ProxyStats {
 impl ProxyStats {
     pub fn snapshot_line(&self) -> String {
         format!(
-            "queries={} blocked={} allowlisted={} allowed={} doh_ok={} doh_fail={} other_qtype={} encode_err={}",
+            "queries={} blocked={} allowlisted={} allowed={} doh_ok={} doh_fail={} doh_fallback={} other_qtype={} encode_err={}",
             self.queries.load(Ordering::Relaxed),
             self.blocked.load(Ordering::Relaxed),
             self.allowlisted.load(Ordering::Relaxed),
             self.allowed.load(Ordering::Relaxed),
             self.doh_ok.load(Ordering::Relaxed),
             self.doh_fail.load(Ordering::Relaxed),
+            self.doh_fallback.load(Ordering::Relaxed),
             self.other_qtype.load(Ordering::Relaxed),
             self.encode_err.load(Ordering::Relaxed),
         )
@@ -61,29 +63,22 @@ fn load_allow_set(allowlist_path: &Path) -> BTreeSet<String> {
     crate::blocklist::load_allowlist(allowlist_path).unwrap_or_default()
 }
 
-#[derive(Debug, Deserialize)]
-struct DohAnswer {
-    #[serde(rename = "type")]
-    record_type: u16,
-    #[serde(default)]
-    data: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(non_snake_case)]
-struct DohResponse {
-    Answer: Option<Vec<DohAnswer>>,
-}
-
 fn host_id() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown-host".into())
 }
 
-fn emit_dns(event_log: &Path, action: EventAction, severity: Severity, message: &str, domain: &str) {
+fn emit_dns(
+    event_log: &Path,
+    action: EventAction,
+    severity: Severity,
+    message: &str,
+    domain: &str,
+    resolver: Option<&str>,
+) {
     if let Ok(store) = EventStore::open(event_log) {
-        let ev = AegisEvent::new(
+        let mut ev = AegisEvent::new(
             host_id(),
             ProductId::CyberDns,
             EventKind::Dns,
@@ -94,37 +89,11 @@ fn emit_dns(event_log: &Path, action: EventAction, severity: Severity, message: 
         .with_attr("domain", serde_json::json!(domain))
         .with_attr("source", serde_json::json!("proxy"))
         .with_ioc(Ioc::Domain(normalize_domain(domain)));
+        if let Some(r) = resolver {
+            ev = ev.with_attr("doh_resolver", serde_json::json!(r));
+        }
         let _ = store.append(&ev);
     }
-}
-
-async fn doh_a(domain: &str) -> Result<Vec<Ipv4Addr>, String> {
-    let url = format!("https://cloudflare-dns.com/dns-query?name={domain}&type=A");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let res = client
-        .get(&url)
-        .header("accept", "application/dns-json")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !res.status().is_success() {
-        return Err(format!("DoH HTTP {}", res.status()));
-    }
-    let doh: DohResponse = res.json().await.map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    if let Some(answers) = doh.Answer {
-        for a in answers {
-            if a.record_type == 1 {
-                if let Ok(ip) = a.data.parse::<Ipv4Addr>() {
-                    out.push(ip);
-                }
-            }
-        }
-    }
-    Ok(out)
 }
 
 fn qname_to_string(name: &Name<'_>) -> String {
@@ -177,6 +146,7 @@ pub async fn run_proxy(
     ioc_path: &Path,
     event_log: &Path,
     stats_interval_secs: u64,
+    doh_endpoints: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let set = Arc::new(RwLock::new(load_deny_set(blocklist_path, ioc_path)));
     let allow = Arc::new(RwLock::new(load_allow_set(allowlist_path)));
@@ -187,9 +157,18 @@ pub async fn run_proxy(
     let event_log = event_log.to_path_buf();
 
     let sock = UdpSocket::bind(listen).await?;
+    let doh_eps = if doh_endpoints.is_empty() {
+        doh::DEFAULT_DOH_ENDPOINTS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        doh_endpoints
+    };
     println!(
-        "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH=cloudflare)"
+        "[cyberdns] UDP proxy listening on {listen} (allowlist>blocklist+IOC, DoH multi-resolver)"
     );
+    println!("[cyberdns] DoH chain: {}", doh_eps.join(" → "));
     println!("[cyberdns] test: nslookup -port=53553 example.com 127.0.0.1");
     if stats_interval_secs > 0 {
         println!("[cyberdns] stats every {stats_interval_secs}s");
@@ -257,6 +236,7 @@ pub async fn run_proxy(
                 Severity::High,
                 &format!("proxy blocked: {domain}"),
                 &domain,
+                None,
             );
             match build_with_rcode(&packet, RCODE::NameError, &[]) {
                 Ok(b) => b,
@@ -270,16 +250,20 @@ pub async fn run_proxy(
             if on_allow {
                 stats.allowlisted.fetch_add(1, Ordering::Relaxed);
             }
-            match doh_a(&domain).await {
-                Ok(ips) => {
+            match doh::resolve_a(&domain, &doh_eps).await {
+                Ok((ips, used)) => {
                     stats.doh_ok.fetch_add(1, Ordering::Relaxed);
                     stats.allowed.fetch_add(1, Ordering::Relaxed);
+                    if doh_eps.len() > 1 && used != doh_eps[0] {
+                        stats.doh_fallback.fetch_add(1, Ordering::Relaxed);
+                    }
                     emit_dns(
                         &event_log,
                         EventAction::Allowed,
                         Severity::Info,
                         &format!("proxy resolve: {domain}"),
                         &domain,
+                        Some(&used),
                     );
                     let ans: Vec<(String, Ipv4Addr)> = ips
                         .into_iter()

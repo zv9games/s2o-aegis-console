@@ -1,6 +1,7 @@
 //! S2O CyberDNS — DoH resolve, blocklist, local UDP proxy, system DNS bind.
 
 mod blocklist;
+mod doh;
 mod serve;
 mod system_dns;
 
@@ -10,7 +11,6 @@ use blocklist::{
 };
 use clap::{Parser, Subcommand};
 use colored::*;
-use serde::Deserialize;
 use s2o_ioc::IocStore;
 use s2o_schema::{AegisEvent, EventAction, EventKind, Ioc, ProductId, Severity};
 use s2o_store::EventStore;
@@ -61,8 +61,23 @@ struct Cli {
     #[arg(long, global = true, default_value = ".aegis/ioc-store.json")]
     ioc_store: PathBuf,
 
+    /// DoH base URLs tried in order (repeatable). Default: Cloudflare then Google.
+    #[arg(long = "doh", global = true)]
+    doh: Vec<String>,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+fn doh_endpoints(cli: &Cli) -> Vec<String> {
+    if cli.doh.is_empty() {
+        doh::DEFAULT_DOH_ENDPOINTS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    } else {
+        cli.doh.clone()
+    }
 }
 
 #[derive(Subcommand)]
@@ -122,22 +137,6 @@ enum SystemDnsCmd {
     },
 }
 
-#[derive(Debug, Deserialize)]
-struct DohAnswer {
-    #[serde(rename = "type")]
-    record_type: u16,
-    #[serde(default)]
-    data: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(non_snake_case)]
-struct DohResponse {
-    #[allow(dead_code)]
-    Status: u32,
-    Answer: Option<Vec<DohAnswer>>,
-}
-
 fn host_id() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
@@ -166,32 +165,10 @@ fn emit(
     }
 }
 
-async fn doh_a_records(domain: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let url = format!("https://cloudflare-dns.com/dns-query?name={domain}&type=A");
-    let client = reqwest::Client::new();
-    let res = client
-        .get(&url)
-        .header("accept", "application/dns-json")
-        .send()
-        .await?;
-    if !res.status().is_success() {
-        return Err(format!("DoH HTTP {}", res.status()).into());
-    }
-    let doh: DohResponse = res.json().await?;
-    let mut ips = Vec::new();
-    if let Some(answers) = doh.Answer {
-        for ans in answers {
-            if ans.record_type == 1 && !ans.data.is_empty() {
-                ips.push(ans.data);
-            }
-        }
-    }
-    Ok(ips)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let doh_eps = doh_endpoints(&cli);
 
     match cli.command {
         Commands::Status => {
@@ -216,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let allow = load_allowlist(&cli.allowlist).unwrap_or_default();
             println!(
                 " Implemented       : {}",
-                "DoH + allowlist/blocklist + IOC + UDP proxy stats + system-dns".green()
+                "DoH multi-resolver + allowlist/blocklist + IOC + UDP stats + system-dns".green()
             );
             println!(" IOC store         : {} ({} entries)", cli.ioc_store.display(), ioc_n);
             println!(
@@ -224,8 +201,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "DoT, full recursive, transparent redirector".red()
             );
             println!(
-                " Primary Resolver  : {}",
-                "https://cloudflare-dns.com/dns-query".yellow()
+                " DoH chain         : {}",
+                doh_eps.join(" → ").yellow()
             );
             println!(" Blocklist path    : {}", cli.blocklist.display());
             println!(" Blocked domains   : {}", set.len());
@@ -377,10 +354,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!(
                 "{}",
-                format!("[CYBERDNS] Resolving '{d}' via Encrypted DoH...").cyan()
+                format!(
+                    "[CYBERDNS] Resolving '{d}' via DoH ({})...",
+                    doh_eps.join(" → ")
+                )
+                .cyan()
             );
-            match doh_a_records(&d).await {
-                Ok(ips) if !ips.is_empty() => {
+            match doh::resolve_a_strings(&d, &doh_eps).await {
+                Ok((ips, used)) if !ips.is_empty() => {
+                    println!(" DoH resolver  : {}", used.yellow());
                     for ip in &ips {
                         println!(" Resolved IP   : {}", ip.green().bold());
                     }
@@ -388,17 +370,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &cli.event_log,
                         EventAction::Allowed,
                         Severity::Info,
-                        format!("resolve ok: {d}"),
+                        format!("resolve ok: {d} via {used}"),
                         &d,
                     );
                 }
-                Ok(_) => {
+                Ok((_, used)) => {
                     println!("{}", "NXDOMAIN / no A records.".yellow());
+                    println!(" DoH resolver  : {used}");
                     emit(
                         &cli.event_log,
                         EventAction::Observed,
                         Severity::Low,
-                        format!("resolve nxdomain: {d}"),
+                        format!("resolve nxdomain: {d} via {used}"),
                         &d,
                     );
                 }
@@ -416,6 +399,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &cli.ioc_store,
                 &cli.event_log,
                 stats_secs,
+                doh_eps,
             )
             .await?;
         }

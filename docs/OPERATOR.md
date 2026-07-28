@@ -104,7 +104,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Job | Command |
 |-----|---------|
 | Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
-| DNS | `cyberdns resolve\|block\|allow\|serve [--stats-secs]\|system-dns` |
+| DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
 | Defender | `cyberdefender scan\|yara [pull]\|quarantine\|patterns\|watch` |
 | EDR | `cyberedr processes\|ps [--rich]\|listen\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
@@ -114,7 +114,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 | Intel | `cyberintel sync [--online] [--feed URL]\|lookup\|add` |
 | Identity | `cyberid posture\|doctor\|authenticate\|sessions\|verify` |
 | Mesh | `cybermesh genkey\|config\|doctor\|peers\|show` |
-| Gate | `cyberztna serve [--tls] [--mtls-ca] [--jwt-secret] --upstream URL` |
+| Gate | `cyberztna serve\|access-stats\|oauth\|jwt` |
 
 ## Gate HTTPS + session
 
