@@ -73,10 +73,14 @@ enum Commands {
         write_private: Option<String>,
         #[arg(long)]
         write_public: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Derive public key from a base64 private key
     Pubkey {
         private_b64: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Write a WireGuard interface conf (for system wg-quick / import)
     Config {
@@ -149,12 +153,16 @@ enum PeersCmd {
         keepalive: u16,
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a peer by name
     Remove {
         name: String,
         #[arg(long, default_value = ".aegis/mesh-peers.json")]
         file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Show one peer by name
     Show {
@@ -887,31 +895,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 allowed_ips,
                 keepalive,
                 file,
+                json,
             } => {
                 let mut reg = PeerRegistry::load(&file);
-                reg.add(MeshPeer {
+                let existed = reg.peers.iter().any(|p| p.name == name);
+                let peer = MeshPeer {
                     name: name.clone(),
-                    public_key,
-                    endpoint,
-                    allowed_ips,
+                    public_key: public_key.clone(),
+                    endpoint: endpoint.clone(),
+                    allowed_ips: allowed_ips.clone(),
                     keepalive,
                     notes: None,
-                });
+                };
+                reg.add(peer.clone());
                 reg.save(&file)?;
-                println!(
-                    "{}",
-                    format!("[cybermesh] peer '{name}' saved -> {}", file.display())
-                        .green()
-                        .bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "updated": existed,
+                            "added": !existed,
+                            "path": file.display().to_string(),
+                            "peer": peer,
+                            "count": reg.peers.len(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[cybermesh] peer '{name}' saved -> {}", file.display())
+                            .green()
+                            .bold()
+                    );
+                }
             }
-            PeersCmd::Remove { name, file } => {
+            PeersCmd::Remove { name, file, json } => {
                 let mut reg = PeerRegistry::load(&file);
                 if reg.remove(&name) {
                     reg.save(&file)?;
-                    println!("[cybermesh] removed peer '{name}'");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "removed": name,
+                                "remaining": reg.peers.len(),
+                                "path": file.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!("[cybermesh] removed peer '{name}'");
+                    }
                 } else {
-                    eprintln!("[cybermesh] peer not found: {name}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": "peer not found",
+                                "name": name,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cybermesh] peer not found: {name}");
+                    }
                     std::process::exit(1);
                 }
             }
@@ -1081,39 +1129,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Genkey {
             write_private,
             write_public,
+            json,
         } => {
             let (privkey, pubkey) = wg_keypair();
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(
-                "{}",
-                "  WireGuard X25519 keypair                               "
-                    .bold()
-                    .green()
-            );
-            println!(
-                "{}",
-                "=========================================================".cyan()
-            );
-            println!(" Private : {}", privkey.yellow());
-            println!(" Public  : {}", pubkey.green());
-            if let Some(path) = write_private {
-                ensure_parent(Path::new(&path))?;
-                fs::write(&path, format!("{privkey}\n"))?;
-                println!(" Wrote private → {path}");
+            if let Some(ref path) = write_private {
+                ensure_parent(Path::new(path))?;
+                fs::write(path, format!("{privkey}\n"))?;
             }
-            if let Some(path) = write_public {
-                ensure_parent(Path::new(&path))?;
-                fs::write(&path, format!("{pubkey}\n"))?;
-                println!(" Wrote public  → {path}");
+            if let Some(ref path) = write_public {
+                ensure_parent(Path::new(path))?;
+                fs::write(path, format!("{pubkey}\n"))?;
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "private": privkey,
+                        "public": pubkey,
+                        "write_private": write_private,
+                        "write_public": write_public,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "  WireGuard X25519 keypair                               "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(" Private : {}", privkey.yellow());
+                println!(" Public  : {}", pubkey.green());
+                if let Some(path) = write_private {
+                    println!(" Wrote private → {path}");
+                }
+                if let Some(path) = write_public {
+                    println!(" Wrote public  → {path}");
+                }
             }
         }
-        Commands::Pubkey { private_b64 } => match wg_pubkey_from_private(&private_b64) {
-            Ok(p) => println!("{p}"),
+        Commands::Pubkey { private_b64, json } => match wg_pubkey_from_private(&private_b64) {
+            Ok(p) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "public": p,
+                        }))?
+                    );
+                } else {
+                    println!("{p}");
+                }
+            }
             Err(e) => {
-                eprintln!("[cybermesh] {e}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": e.to_string(),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cybermesh] {e}");
+                }
                 std::process::exit(1);
             }
         },

@@ -206,6 +206,8 @@ enum Commands {
         /// Skip policy apply
         #[arg(long)]
         no_policy: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Show or write suite config (.aegis/config.json)
     Config {
@@ -3316,14 +3318,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_dir,
             apply_policy,
             no_policy,
+            json,
         } => {
             std::fs::create_dir_all(&data_dir)?;
-            println!(
-                "{}",
-                format!("[aegis] setup data dir {}", data_dir.display())
-                    .green()
-                    .bold()
-            );
+            let mut created: Vec<String> = Vec::new();
+            let mut note = |path: &Path| {
+                created.push(path.display().to_string());
+                if !json {
+                    println!("  + {}", path.display());
+                }
+            };
+            if !json {
+                println!(
+                    "{}",
+                    format!("[aegis] setup data dir {}", data_dir.display())
+                        .green()
+                        .bold()
+                );
+            }
 
             // Touch event log
             let event_log = data_dir.join("events.jsonl");
@@ -3338,7 +3350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cfg.playbooks = data_dir.join("playbooks.json").display().to_string();
                 cfg.gate_config = data_dir.join("gate-routes.json").display().to_string();
                 cfg.save(&cfg_path)?;
-                println!("  + {}", cfg_path.display());
+                note(&cfg_path);
             }
 
             // DNS blocklist seed
@@ -3348,7 +3360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &bl,
                     "# S2O CyberDNS blocklist\nmalware.test.s2o\nphishing.test.s2o\n",
                 )?;
-                println!("  + {}", bl.display());
+                note(&bl);
             }
 
             // Defender rules
@@ -3360,7 +3372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "blocked_name_substrings": ["eicar"]
                 });
                 std::fs::write(&rules, serde_json::to_string_pretty(&seed)?)?;
-                println!("  + {}", rules.display());
+                note(&rules);
             }
 
             // yara-lite (substr / re / hex)
@@ -3376,14 +3388,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "[medium] shellcode_nop_sled: hex:90 90 90 90 90 90 90 90\n",
                     ),
                 )?;
-                println!("  + {}", yara.display());
+                note(&yara);
             }
 
             // playbooks
             let pb = data_dir.join("playbooks.json");
             if !pb.exists() {
                 std::fs::write(&pb, serde_json::to_string_pretty(&default_playbooks())?)?;
-                println!("  + {}", pb.display());
+                note(&pb);
             }
 
             // gate routes
@@ -3399,7 +3411,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }]
                 });
                 std::fs::write(&gate, serde_json::to_string_pretty(&g)?)?;
-                println!("  + {}", gate.display());
+                note(&gate);
             }
 
             // IOC store empty
@@ -3411,7 +3423,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "entries": []
                 });
                 std::fs::write(&ioc, serde_json::to_string_pretty(&s)?)?;
-                println!("  + {}", ioc.display());
+                note(&ioc);
             }
 
             // edge policy example copy
@@ -3419,10 +3431,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let policy_dst = data_dir.join("edge-pack.json");
             if policy_src.exists() && !policy_dst.exists() {
                 std::fs::copy(&policy_src, &policy_dst)?;
-                println!("  + {}", policy_dst.display());
+                note(&policy_dst);
             }
 
             let do_policy = apply_policy && !no_policy;
+            let mut policy_ok: Option<bool> = None;
+            let mut policy_path_s: Option<String> = None;
             if do_policy {
                 let path = if policy_dst.exists() {
                     policy_dst
@@ -3430,27 +3444,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     policy_src
                 };
                 if path.exists() {
-                    println!("[aegis] applying policy {} ...", path.display());
+                    policy_path_s = Some(path.display().to_string());
+                    if !json {
+                        println!("[aegis] applying policy {} ...", path.display());
+                    }
                     let doc = load_policy_file(&path)?;
                     let store = Arc::new(EventStore::open(&event_log)?);
                     let result = s2o_kernel::apply_policy(&doc, &fw, Some(store)).await?;
-                    if result.ok {
-                        println!("{}", "[aegis] policy OK".green().bold());
-                    } else {
-                        println!("{}", "[aegis] policy incomplete".yellow().bold());
-                        for e in &result.errors {
-                            println!("  error: {e}");
+                    policy_ok = Some(result.ok);
+                    if !json {
+                        if result.ok {
+                            println!("{}", "[aegis] policy OK".green().bold());
+                        } else {
+                            println!("{}", "[aegis] policy incomplete".yellow().bold());
+                            for e in &result.errors {
+                                println!("  error: {e}");
+                            }
                         }
                     }
                 }
             }
 
-            println!("{}", "[aegis] setup complete".green().bold());
-            println!("Next:");
-            println!("  aegis doctor");
-            println!("  aegis selftest");
-            println!("  aegis status");
-            println!("  cyberztna serve --tls");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "data_dir": data_dir.display().to_string(),
+                        "created": created,
+                        "policy_applied": do_policy,
+                        "policy_path": policy_path_s,
+                        "policy_ok": policy_ok,
+                    }))?
+                );
+            } else {
+                println!("{}", "[aegis] setup complete".green().bold());
+                println!("Next:");
+                println!("  aegis doctor");
+                println!("  aegis selftest");
+                println!("  aegis status");
+                println!("  cyberztna serve --tls");
+            }
         }
         Commands::Backup {
             data_dir,

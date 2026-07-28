@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1.0",
+  "name": "example-mesh-seed-pack",
+  "description": "Lightweight edge-adjacent pack: DNS seed domains + posture floor (no firewall/gate). Pair with cybermesh peers/config for WireGuard conf.",
+  "dns": {
+    "blocklist_path": ".aegis/dns-blocklist.txt",
+    "allowlist_path": ".aegis/dns-allowlist.txt",
+    "block_domains": [
+      "c2.mesh.lab.s2o",
+      "malware.mesh.lab.s2o"
+    ],
+    "unblock_domains": [],
+    "allow_domains": [
+      "registry.mesh.lab.s2o"
+    ],
+    "unallow_domains": []
+  },
+  "posture": {
+    "min_score": 40
+  }
+}

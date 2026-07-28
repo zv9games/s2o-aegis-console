@@ -165,6 +165,9 @@
 - CyberID `gc|revoke --json`; ThreatGrid `remove|prune --json`
 - CyberEDR `baseline --json`; `aegis rotate --json`
 - Fleet `prune|remove --json`; Gate `connect --json`
+- CyberDNS `dedupe|import --json`; Defender `rules add/remove --json`
+- Mesh `peers add|remove --json` + `genkey|pubkey --json`; Gate `route-add|route-remove --json`
+- `aegis setup --json`; example `policies/examples/mesh-seed-pack.json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

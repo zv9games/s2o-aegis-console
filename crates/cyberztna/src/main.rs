@@ -51,10 +51,14 @@ enum Commands {
         /// Upstream base URL
         #[arg(long)]
         upstream: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a route by name
     RouteRemove {
         name: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Export access log lines (json/csv/text) with optional --since/--filter
     AccessExport {
@@ -1035,6 +1039,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name,
             path_prefix,
             upstream,
+            json,
         } => {
             use config::GateRoute;
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
@@ -1049,12 +1054,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if up.is_empty()
                 || !(up.starts_with("http://") || up.starts_with("https://"))
             {
-                eprintln!("[gate] --upstream must be http(s)://…");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": "--upstream must be http(s)://…",
+                        }))?
+                    );
+                } else {
+                    eprintln!("[gate] --upstream must be http(s)://…");
+                }
                 std::process::exit(2);
             }
-            if let Some(r) = cfg.routes.iter_mut().find(|r| r.name == name) {
+            let updated = if let Some(r) = cfg.routes.iter_mut().find(|r| r.name == name) {
                 r.path_prefix = prefix.clone();
                 r.upstream = up.clone();
+                true
+            } else {
+                cfg.routes.push(GateRoute {
+                    name: name.clone(),
+                    path_prefix: prefix.clone(),
+                    upstream: up.clone(),
+                });
+                false
+            };
+            save_config(&cli.config, &cfg)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "updated": updated,
+                        "added": !updated,
+                        "name": name,
+                        "path_prefix": prefix,
+                        "upstream": up,
+                        "route_count": cfg.routes.len(),
+                        "config": cli.config.display().to_string(),
+                    }))?
+                );
+            } else if updated {
                 println!(
                     "{}",
                     format!(
@@ -1063,40 +1103,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .green()
                     .bold()
                 );
+                println!("  wrote {}", cli.config.display());
             } else {
-                cfg.routes.push(GateRoute {
-                    name: name.clone(),
-                    path_prefix: prefix.clone(),
-                    upstream: up.clone(),
-                });
                 println!(
                     "{}",
                     format!("[gate] added route '{name}' prefix={prefix} → {up}")
                         .green()
                         .bold()
                 );
+                println!("  wrote {}", cli.config.display());
             }
-            save_config(&cli.config, &cfg)?;
-            println!("  wrote {}", cli.config.display());
         }
-        Commands::RouteRemove { name } => {
+        Commands::RouteRemove { name, json } => {
             let mut cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
             let before = cfg.routes.len();
             cfg.routes.retain(|r| r.name != name);
             if cfg.routes.len() == before {
-                eprintln!("[gate] route not found: {name}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": "route not found",
+                            "name": name,
+                        }))?
+                    );
+                } else {
+                    eprintln!("[gate] route not found: {name}");
+                }
                 std::process::exit(1);
             }
             save_config(&cli.config, &cfg)?;
-            println!(
-                "{}",
-                format!(
-                    "[gate] removed route '{name}' ({} left) → {}",
-                    cfg.routes.len(),
-                    cli.config.display()
-                )
-                .yellow()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "removed": name,
+                        "route_count": cfg.routes.len(),
+                        "config": cli.config.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[gate] removed route '{name}' ({} left) → {}",
+                        cfg.routes.len(),
+                        cli.config.display()
+                    )
+                    .yellow()
+                );
+            }
         }
         Commands::AccessExport {
             log,

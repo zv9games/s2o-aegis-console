@@ -168,6 +168,8 @@ enum Commands {
         /// Actually rewrite the file
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Import domains from a text file into block or allow list
     Import {
@@ -182,6 +184,8 @@ enum Commands {
         /// Dry-run: report counts only
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Validate lists, overlap, IOC, optional DoH probe
     Doctor {
@@ -442,7 +446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Dedupe { list, apply } => {
+        Commands::Dedupe { list, apply, json } => {
             let allow = list.eq_ignore_ascii_case("allow")
                 || list.eq_ignore_ascii_case("allowlist");
             let path = if allow {
@@ -451,7 +455,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cli.blocklist.clone()
             };
             if !path.exists() {
-                eprintln!("[cyberdns] missing {}", path.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("missing {}", path.display()),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cyberdns] missing {}", path.display());
+                }
                 std::process::exit(2);
             }
             let (raw_lines, dups, _) = list_line_stats(&path);
@@ -461,7 +475,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 load_blocklist(&path)?
             };
             let unique = set.len();
-            if dups == 0 && raw_lines == unique {
+            let already_unique = dups == 0 && raw_lines == unique;
+            if apply && !already_unique {
+                if allow {
+                    save_allowlist(&path, &set)?;
+                } else {
+                    save_blocklist(&path, &set)?;
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "list": if allow { "allow" } else { "block" },
+                        "path": path.display().to_string(),
+                        "apply": apply,
+                        "already_unique": already_unique,
+                        "raw_lines": raw_lines,
+                        "unique": unique,
+                        "dups": dups,
+                    }))?
+                );
+            } else if already_unique {
                 println!(
                     "[cyberdns] {} already unique ({} domains)",
                     path.display(),
@@ -472,19 +508,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[cyberdns] dedupe dry-run {}: raw_lines={raw_lines} unique={unique} dups={dups} (use --apply)",
                     path.display()
                 );
-            } else if allow {
-                save_allowlist(&path, &set)?;
-                println!(
-                    "{}",
-                    format!(
-                        "[cyberdns] dedupe APPLIED {} → {unique} domains (removed {dups} dups)",
-                        path.display()
-                    )
-                    .green()
-                    .bold()
-                );
             } else {
-                save_blocklist(&path, &set)?;
                 println!(
                     "{}",
                     format!(
@@ -501,9 +525,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             list,
             max,
             dry_run,
+            json,
         } => {
             if !path.exists() {
-                eprintln!("[cyberdns] missing import file {}", path.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("missing import file {}", path.display()),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[cyberdns] missing import file {}", path.display());
+                }
                 std::process::exit(2);
             }
             let allow = list.eq_ignore_ascii_case("allow")
@@ -551,7 +586,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let kind = if allow { "allow" } else { "block" };
-            if dry_run {
+            if !dry_run {
+                if allow {
+                    save_allowlist(&dest, &set)?;
+                } else {
+                    save_blocklist(&dest, &set)?;
+                }
+                if added > 0 {
+                    emit(
+                        &cli.event_log,
+                        EventAction::Observed,
+                        Severity::Info,
+                        format!("dns import {kind} added={added} from={}", path.display()),
+                        "import",
+                    );
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "dry_run": dry_run,
+                        "list": kind,
+                        "source": path.display().to_string(),
+                        "dest": dest.display().to_string(),
+                        "scanned": candidates.len(),
+                        "added": added,
+                        "before": before,
+                        "total_after": if dry_run { before + added } else { set.len() },
+                    }))?
+                );
+            } else if dry_run {
                 println!(
                     "[cyberdns] import dry-run → {kind}list: scanned={} new={added} already={} total_after={}",
                     candidates.len(),
@@ -559,11 +625,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     before + added
                 );
             } else {
-                if allow {
-                    save_allowlist(&dest, &set)?;
-                } else {
-                    save_blocklist(&dest, &set)?;
-                }
                 println!(
                     "{}",
                     format!(
@@ -575,15 +636,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .green()
                     .bold()
                 );
-                if added > 0 {
-                    emit(
-                        &cli.event_log,
-                        EventAction::Observed,
-                        Severity::Info,
-                        format!("dns import {kind} added={added} from={}", path.display()),
-                        "import",
-                    );
-                }
             }
         }
         Commands::Doctor { probe_doh, json } => {

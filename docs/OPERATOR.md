@@ -46,8 +46,8 @@ cargo run -p cyberztna -- doctor
 cargo run -p cyberztna -- status --json
 cargo run -p cyberztna -- check --json
 cargo run -p cyberztna -- routes --json
-cargo run -p cyberztna -- route-add lab-api --path-prefix /api --upstream http://127.0.0.1:8080
-cargo run -p cyberztna -- route-remove lab-api
+cargo run -p cyberztna -- route-add lab-api --path-prefix /api --upstream http://127.0.0.1:8080 --json
+cargo run -p cyberztna -- route-remove lab-api --json
 cargo run -p cyberztna -- access-export --since 24h --format csv --out .aegis/gate-access.csv
 cargo run -p cyberedr -- listen --json --limit 20
 cargo run -p cyberedr -- alerts --json
@@ -132,6 +132,8 @@ cargo run -p cyberdns -- list --json --limit 50
 cargo run -p cyberdns -- list --allow --json
 cargo run -p cyberdns -- block evil.lab.s2o --json
 cargo run -p cyberdns -- allow updates.example.com --json
+cargo run -p cyberdns -- dedupe --json
+cargo run -p cyberdns -- import domains.txt --dry-run --json
 cargo run -p cyberdns -- resolve example.com --json
 cargo run -p cyberdns -- doctor
 cargo run -p cyberdns -- doctor --probe-doh
@@ -140,12 +142,15 @@ cargo run -p cyberid -- authenticate labuser --json
 cargo run -p cyberid -- verify <token> --json
 cargo run -p cyberdefender -- patterns list --json
 cargo run -p cyberdefender -- yara list --json
+cargo run -p cyberdefender -- rules add-name lab-marker --json
 cargo run -p cyberedr -- doctor
 cargo run -p aegis-cli -- version --json
+cargo run -p aegis-cli -- setup --no-policy --json
 cargo run -p aegis-cli -- selftest
 cargo run -p aegis-cli -- config show --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
+cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json
 cargo run -p aegis-cli -- fleet enroll --json
 cargo run -p aegis-cli -- fleet heartbeat --json
 cargo run -p aegis-cli -- fleet prune --json
@@ -153,6 +158,7 @@ cargo run -p aegis-cli -- backup --json
 cargo run -p aegis-cli -- rotate --json
 cargo run -p cyberztna -- mtls status --json
 cargo run -p cyberztna -- connect demo --json
+cargo run -p cybermesh -- genkey --json
 cargo run -p cybermesh -- config --private-key-file .aegis/wg-private.key --json
 cargo run -p cyberintel -- add domain ioc-lab.s2o --json
 cargo run -p cyberintel -- remove ioc-lab.s2o --json

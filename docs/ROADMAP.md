@@ -209,6 +209,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Defender scan/test JSON + emit/selftest/cleanup JSON + wall apply JSON  
 - ✅ DNS/intel mutator JSON + version/backup/fleet heartbeat JSON + mTLS/mesh config + posture pack  
 - ✅ Session gc/revoke + IOC remove/prune + EDR baseline + rotate + fleet prune + gate connect JSON  
+- ✅ DNS dedupe/import + defender rules + mesh peers/genkey + gate routes + setup JSON + mesh pack  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 
