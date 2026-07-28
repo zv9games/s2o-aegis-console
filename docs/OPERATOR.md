@@ -171,6 +171,10 @@ cargo run -p cyberdefender -- yara scan Cargo.toml --json
 cargo run -p cybermesh -- show --json
 cargo run -p cybermesh -- up --json
 cargo run -p cybermesh -- peers set lab-peer --keepalive 30 --json
+cargo run -p cyberztna -- init --json
+cargo run -p cyberztna -- mtls init --json
+cargo run -p cyberztna -- jwt keygen --json
+cargo run -p cyberztna -- oauth code --url-only --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json

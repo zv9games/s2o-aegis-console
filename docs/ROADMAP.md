@@ -213,6 +213,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Config get/set + playbook toggles + quarantine/import-file + wall enable/disable JSON  
 - ✅ Fleet policy JSON + restore/config init + system-dns backup + intel sync + service status JSON  
 - ✅ Service lifecycle JSON + defender yara/patterns init + mesh show/up/down/peers mutator JSON  
+- ✅ Gate init/mTLS/JWT/OAuth mutator JSON (lab IdP automation surfaces)  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

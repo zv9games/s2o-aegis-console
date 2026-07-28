@@ -402,7 +402,18 @@ pub async fn fetch_jwks_url(
 }
 
 /// Write lab RS256 files under dir: jwt-private.pem, jwt-public.pem, jwks.json
+#[allow(dead_code)]
 pub fn write_rs256_lab(dir: &Path, kid: &str, force: bool) -> Result<Rs256Material, Box<dyn std::error::Error>> {
+    write_rs256_lab_opts(dir, kid, force, false)
+}
+
+/// Like [`write_rs256_lab`]; when `quiet`, skip human-readable stdout (JSON callers).
+pub fn write_rs256_lab_opts(
+    dir: &Path,
+    kid: &str,
+    force: bool,
+    quiet: bool,
+) -> Result<Rs256Material, Box<dyn std::error::Error>> {
     fs::create_dir_all(dir)?;
     let priv_path = dir.join("jwt-private.pem");
     let pub_path = dir.join("jwt-public.pem");
@@ -427,11 +438,13 @@ pub fn write_rs256_lab(dir: &Path, kid: &str, force: bool) -> Result<Rs256Materi
     fs::write(&priv_path, &mat.private_pem)?;
     fs::write(&pub_path, &mat.public_pem)?;
     fs::write(&jwks_path, &mat.jwks_json)?;
-    println!("[gate] RS256 lab keys written to {}", dir.display());
-    println!("  private : {}", priv_path.display());
-    println!("  public  : {}", pub_path.display());
-    println!("  jwks    : {}", jwks_path.display());
-    println!("  kid     : {}", mat.kid);
+    if !quiet {
+        println!("[gate] RS256 lab keys written to {}", dir.display());
+        println!("  private : {}", priv_path.display());
+        println!("  public  : {}", pub_path.display());
+        println!("  jwks    : {}", jwks_path.display());
+        println!("  kid     : {}", mat.kid);
+    }
     Ok(mat)
 }
 

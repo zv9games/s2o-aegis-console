@@ -176,6 +176,8 @@
 - Service `install|uninstall|start|stop --json`; policy `example --json`; playbook `init --json`
 - Defender `update-defs|patterns init|yara init|scan|pull --json`
 - Mesh `show|up|down --json`; peers `set|live|publish|pull --json`
+- Gate `init --json`; mTLS `init|probe --json`; JWT `keygen|fetch-jwks|oidc-discover --json`
+- Gate OAuth `device|approve|code --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

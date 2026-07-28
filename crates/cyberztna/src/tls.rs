@@ -78,17 +78,30 @@ impl MtlsPaths {
 }
 
 /// Generate a local lab CA, server cert (for Gate), and one client cert.
+#[allow(dead_code)]
 pub fn generate_mtls_pki(
     dir: &Path,
     client_cn: &str,
     force: bool,
 ) -> Result<MtlsPaths, Box<dyn std::error::Error>> {
+    generate_mtls_pki_opts(dir, client_cn, force, false)
+}
+
+/// Like [`generate_mtls_pki`]; when `quiet`, skip human-readable stdout (JSON callers).
+pub fn generate_mtls_pki_opts(
+    dir: &Path,
+    client_cn: &str,
+    force: bool,
+    quiet: bool,
+) -> Result<MtlsPaths, Box<dyn std::error::Error>> {
     let paths = MtlsPaths::in_dir(dir);
     if paths.complete() && !force {
-        println!(
-            "[gate] mTLS PKI already present in {} (use --force to regenerate)",
-            dir.display()
-        );
+        if !quiet {
+            println!(
+                "[gate] mTLS PKI already present in {} (use --force to regenerate)",
+                dir.display()
+            );
+        }
         return Ok(paths);
     }
     fs::create_dir_all(dir)?;
@@ -147,16 +160,18 @@ pub fn generate_mtls_pki(
     fs::write(&paths.client_cert, client_cert.pem())?;
     fs::write(&paths.client_key, client_key.serialize_pem())?;
 
-    println!("[gate] mTLS lab PKI written to {}", dir.display());
-    println!("  CA     : {}", paths.ca_cert.display());
-    println!("  server : {} + {}", paths.server_cert.display(), paths.server_key.display());
-    println!("  client : {} + {} (CN={client_cn})", paths.client_cert.display(), paths.client_key.display());
-    println!(
-        "  serve  : cyberztna serve --tls --tls-cert {} --tls-key {} --mtls-ca {}",
-        paths.server_cert.display(),
-        paths.server_key.display(),
-        paths.ca_cert.display()
-    );
+    if !quiet {
+        println!("[gate] mTLS lab PKI written to {}", dir.display());
+        println!("  CA     : {}", paths.ca_cert.display());
+        println!("  server : {} + {}", paths.server_cert.display(), paths.server_key.display());
+        println!("  client : {} + {} (CN={client_cn})", paths.client_cert.display(), paths.client_key.display());
+        println!(
+            "  serve  : cyberztna serve --tls --tls-cert {} --tls-key {} --mtls-ca {}",
+            paths.server_cert.display(),
+            paths.server_key.display(),
+            paths.ca_cert.display()
+        );
+    }
     Ok(paths)
 }
 

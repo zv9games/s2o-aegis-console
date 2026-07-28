@@ -36,7 +36,10 @@ enum Commands {
         json: bool,
     },
     /// Write a starter route config
-    Init,
+    Init {
+        #[arg(long)]
+        json: bool,
+    },
     /// List configured routes
     Routes {
         #[arg(long)]
@@ -213,6 +216,8 @@ enum MtlsCmd {
         client_cn: String,
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Show whether lab PKI files exist
     Status {
@@ -230,6 +235,8 @@ enum MtlsCmd {
         /// Also try without client cert (expect TLS failure when mTLS required)
         #[arg(long)]
         also_plain: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -278,6 +285,8 @@ enum JwtCmd {
         kid: String,
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Download remote JWKS (or PEM) to a file
     FetchJwks {
@@ -285,6 +294,8 @@ enum JwtCmd {
         url: String,
         #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
         out: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Discover OIDC provider via /.well-known/openid-configuration
     OidcDiscover {
@@ -295,6 +306,8 @@ enum JwtCmd {
         fetch_jwks: bool,
         #[arg(long, default_value = ".aegis/jwt/jwks-remote-cache.json")]
         jwks_out: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -309,6 +322,8 @@ enum OauthCmd {
         /// Max seconds to poll
         #[arg(long, default_value_t = 120)]
         timeout_secs: u64,
+        #[arg(long)]
+        json: bool,
     },
     /// Approve a user_code on the issuer (lab operator step)
     Approve {
@@ -317,6 +332,8 @@ enum OauthCmd {
         user: String,
         #[arg(long, default_value = "http://127.0.0.1:9090")]
         issuer: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Authorization-code grant (lab): auto-approve + token exchange
     Code {
@@ -337,6 +354,8 @@ enum OauthCmd {
         /// Exchange an existing authorization code
         #[arg(long)]
         code: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -997,16 +1016,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Init => {
+        Commands::Init { json } => {
             let cfg = default_config();
             save_config(&cli.config, &cfg)?;
-            println!(
-                "{}",
-                format!("[gate] wrote {}", cli.config.display())
-                    .green()
-                    .bold()
-            );
-            println!("Edit routes, then: cyberztna serve");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "init",
+                        "path": cli.config.display().to_string(),
+                        "config": cfg,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("[gate] wrote {}", cli.config.display())
+                        .green()
+                        .bold()
+                );
+                println!("Edit routes, then: cyberztna serve");
+            }
         }
         Commands::Routes { json } => {
             let cfg = load_config(&cli.config).unwrap_or_else(|_| default_config());
@@ -1313,8 +1344,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dir,
                 client_cn,
                 force,
+                json,
             } => {
-                tls::generate_mtls_pki(&dir, &client_cn, force)?;
+                let existed = tls::MtlsPaths::in_dir(&dir).complete();
+                let paths = tls::generate_mtls_pki_opts(&dir, &client_cn, force, json)?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "mtls-init",
+                            "dir": dir.display().to_string(),
+                            "client_cn": client_cn,
+                            "forced": force,
+                            "regenerated": force || !existed,
+                            "skipped_existing": existed && !force,
+                            "ca_cert": paths.ca_cert.display().to_string(),
+                            "server_cert": paths.server_cert.display().to_string(),
+                            "server_key": paths.server_key.display().to_string(),
+                            "client_cert": paths.client_cert.display().to_string(),
+                            "client_key": paths.client_key.display().to_string(),
+                            "ready": paths.complete(),
+                        }))?
+                    );
+                }
             }
             MtlsCmd::Status { dir, json } => {
                 let p = tls::MtlsPaths::in_dir(&dir);
@@ -1364,10 +1417,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 url,
                 dir,
                 also_plain,
+                json,
             } => {
                 let p = tls::MtlsPaths::in_dir(&dir);
                 if !p.client_cert.exists() || !p.client_key.exists() {
-                    eprintln!("[gate] missing client certs — run: cyberztna mtls init --dir {}", dir.display());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "mtls-probe",
+                                "error": format!("missing client certs — run: cyberztna mtls init --dir {}", dir.display()),
+                                "dir": dir.display().to_string(),
+                                "url": url,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[gate] missing client certs — run: cyberztna mtls init --dir {}", dir.display());
+                    }
                     std::process::exit(2);
                 }
                 let mut pem = std::fs::read(&p.client_cert)?;
@@ -1378,18 +1445,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .identity(identity)
                     .danger_accept_invalid_certs(true)
                     .build()?;
-                match client.get(&url).send().await {
+                let mut mtls_status: Option<u16> = None;
+                let mut mtls_error: Option<String> = None;
+                let mtls_ok = match client.get(&url).send().await {
                     Ok(res) => {
-                        println!(
-                            "[gate] mTLS probe OK status={} url={url}",
-                            res.status()
-                        );
+                        mtls_status = Some(res.status().as_u16());
+                        if !json {
+                            println!(
+                                "[gate] mTLS probe OK status={} url={url}",
+                                res.status()
+                            );
+                        }
+                        true
                     }
                     Err(e) => {
-                        eprintln!("[gate] mTLS probe FAIL: {e}");
-                        std::process::exit(3);
+                        mtls_error = Some(e.to_string());
+                        if !json {
+                            eprintln!("[gate] mTLS probe FAIL: {e}");
+                        }
+                        false
                     }
-                }
+                };
+                let mut plain_status: Option<u16> = None;
+                let mut plain_error: Option<String> = None;
                 if also_plain {
                     let plain = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(10))
@@ -1397,81 +1475,167 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .build()?;
                     match plain.get(&url).send().await {
                         Ok(res) => {
-                            println!(
-                                "[gate] plain TLS (no client cert) status={} (unexpected if mTLS required)",
-                                res.status()
-                            );
+                            plain_status = Some(res.status().as_u16());
+                            if !json {
+                                println!(
+                                    "[gate] plain TLS (no client cert) status={} (unexpected if mTLS required)",
+                                    res.status()
+                                );
+                            }
                         }
                         Err(e) => {
-                            println!(
-                                "[gate] plain TLS without client cert failed as expected: {e}"
-                            );
+                            plain_error = Some(e.to_string());
+                            if !json {
+                                println!(
+                                    "[gate] plain TLS without client cert failed as expected: {e}"
+                                );
+                            }
                         }
                     }
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": mtls_ok,
+                            "action": "mtls-probe",
+                            "url": url,
+                            "dir": dir.display().to_string(),
+                            "mtls_status": mtls_status,
+                            "mtls_error": mtls_error,
+                            "also_plain": also_plain,
+                            "plain_status": plain_status,
+                            "plain_error": plain_error,
+                        }))?
+                    );
+                }
+                if !mtls_ok {
+                    std::process::exit(3);
                 }
             }
         },
         Commands::Jwt { command } => match command {
-            JwtCmd::Keygen { dir, kid, force } => {
-                jwt::write_rs256_lab(&dir, &kid, force)?;
+            JwtCmd::Keygen {
+                dir,
+                kid,
+                force,
+                json,
+            } => {
+                let existed = dir.join("jwt-private.pem").exists()
+                    && dir.join("jwt-public.pem").exists()
+                    && dir.join("jwks.json").exists();
+                let mat = jwt::write_rs256_lab_opts(&dir, &kid, force, json)?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "jwt-keygen",
+                            "dir": dir.display().to_string(),
+                            "kid": mat.kid,
+                            "forced": force,
+                            "regenerated": force || !existed,
+                            "skipped_existing": existed && !force,
+                            "private": dir.join("jwt-private.pem").display().to_string(),
+                            "public": dir.join("jwt-public.pem").display().to_string(),
+                            "jwks": dir.join("jwks.json").display().to_string(),
+                        }))?
+                    );
+                }
             }
-            JwtCmd::FetchJwks { url, out } => {
+            JwtCmd::FetchJwks { url, out, json } => {
                 let v = jwt::fetch_jwks_url(&url, Some(&out)).await?;
                 let n = match &v {
                     jwt::JwtVerifier::Rs256JwkSet { keys } => keys.len(),
                     _ => 1,
                 };
-                println!(
-                    "[gate] fetched JWKS from {url} -> {} (keys~{n})",
-                    out.display()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "jwt-fetch-jwks",
+                            "url": url,
+                            "out": out.display().to_string(),
+                            "keys": n,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[gate] fetched JWKS from {url} -> {} (keys~{n})",
+                        out.display()
+                    );
+                }
             }
             JwtCmd::OidcDiscover {
                 issuer,
                 fetch_jwks,
                 jwks_out,
+                json,
             } => {
                 let disc = jwt::discover_oidc(&issuer).await?;
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(
-                    "{}",
-                    "      OIDC discovery                                   "
-                        .bold()
-                        .green()
-                );
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(" Issuer     : {}", disc.issuer);
-                println!(" JWKS URI   : {}", disc.jwks_uri);
-                if let Some(ref a) = disc.authorization_endpoint {
-                    println!(" Authorize  : {a}");
-                }
-                if let Some(ref t) = disc.token_endpoint {
-                    println!(" Token      : {t}");
-                }
-                if let Some(ref algs) = disc.id_token_signing_alg_values_supported {
-                    println!(" ID algs    : {}", algs.join(", "));
-                }
+                let mut jwks_keys: Option<usize> = None;
                 if fetch_jwks {
                     let v = jwt::fetch_jwks_url(&disc.jwks_uri, Some(&jwks_out)).await?;
-                    let n = match &v {
+                    jwks_keys = Some(match &v {
                         jwt::JwtVerifier::Rs256JwkSet { keys } => keys.len(),
                         _ => 1,
-                    };
+                    });
+                }
+                if json {
                     println!(
-                        "[gate] JWKS cached -> {} (keys~{n})",
-                        jwks_out.display()
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "oidc-discover",
+                            "issuer": disc.issuer,
+                            "jwks_uri": disc.jwks_uri,
+                            "authorization_endpoint": disc.authorization_endpoint,
+                            "token_endpoint": disc.token_endpoint,
+                            "id_token_signing_alg_values_supported": disc.id_token_signing_alg_values_supported,
+                            "fetch_jwks": fetch_jwks,
+                            "jwks_out": if fetch_jwks { Some(jwks_out.display().to_string()) } else { None },
+                            "jwks_keys": jwks_keys,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(
+                        "{}",
+                        "      OIDC discovery                                   "
+                            .bold()
+                            .green()
+                    );
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(" Issuer     : {}", disc.issuer);
+                    println!(" JWKS URI   : {}", disc.jwks_uri);
+                    if let Some(ref a) = disc.authorization_endpoint {
+                        println!(" Authorize  : {a}");
+                    }
+                    if let Some(ref t) = disc.token_endpoint {
+                        println!(" Token      : {t}");
+                    }
+                    if let Some(ref algs) = disc.id_token_signing_alg_values_supported {
+                        println!(" ID algs    : {}", algs.join(", "));
+                    }
+                    if fetch_jwks {
+                        println!(
+                            "[gate] JWKS cached -> {} (keys~{})",
+                            jwks_out.display(),
+                            jwks_keys.unwrap_or(0)
+                        );
+                    }
+                    println!(
+                        " Serve hint : cyberztna serve --oidc-issuer {} ...",
+                        disc.issuer
                     );
                 }
-                println!(
-                    " Serve hint : cyberztna serve --oidc-issuer {} ...",
-                    disc.issuer
-                );
             }
             JwtCmd::Mint {
                 user,
@@ -1626,6 +1790,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 issuer,
                 client_id,
                 timeout_secs,
+                json,
             } => {
                 let base = issuer.trim_end_matches('/');
                 let client = reqwest::Client::builder()
@@ -1638,11 +1803,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .send()
                     .await?;
                 if !start.status().is_success() {
-                    eprintln!(
-                        "[gate] device_authorization failed: {} {}",
-                        start.status(),
-                        start.text().await.unwrap_or_default()
-                    );
+                    let err_body = start.text().await.unwrap_or_default();
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "oauth-device",
+                                "error": format!("device_authorization failed: {err_body}"),
+                                "issuer": base,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[gate] device_authorization failed: {err_body}");
+                    }
                     std::process::exit(1);
                 }
                 let body: serde_json::Value = start.json().await?;
@@ -1653,29 +1827,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or("")
                     .to_string();
                 let interval = body["interval"].as_u64().unwrap_or(2).max(1);
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(
-                    "{}",
-                    "      OAuth device login                               "
-                        .bold()
-                        .green()
-                );
-                println!(
-                    "{}",
-                    "=========================================================".cyan()
-                );
-                println!(" User code : {}", user_code.yellow().bold());
-                println!(" Open      : {verify_uri}");
-                println!(" Or run    : cyberztna oauth approve {user_code} --issuer {base}");
-                println!(" Polling token endpoint...");
+                if !json {
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(
+                        "{}",
+                        "      OAuth device login                               "
+                            .bold()
+                            .green()
+                    );
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(" User code : {}", user_code.yellow().bold());
+                    println!(" Open      : {verify_uri}");
+                    println!(" Or run    : cyberztna oauth approve {user_code} --issuer {base}");
+                    println!(" Polling token endpoint...");
+                }
                 let deadline =
                     std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                 loop {
                     if std::time::Instant::now() > deadline {
-                        eprintln!("[gate] device login timed out");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "oauth-device",
+                                    "error": "device login timed out",
+                                    "user_code": user_code,
+                                    "verification_uri": verify_uri,
+                                    "issuer": base,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[gate] device login timed out");
+                        }
                         std::process::exit(1);
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
@@ -1693,26 +1883,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let v: serde_json::Value =
                             serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
                         let access = v["access_token"].as_str().unwrap_or("");
-                        println!(
-                            "{}",
-                            format!("[gate] access_token issued (sub={:?})", v.get("sub"))
-                                .green()
-                                .bold()
-                        );
-                        println!("{access}");
-                        println!(" Header : Authorization: Bearer <token>");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "oauth-device",
+                                    "issuer": base,
+                                    "user_code": user_code,
+                                    "verification_uri": verify_uri,
+                                    "access_token": access,
+                                    "token": v,
+                                }))?
+                            );
+                        } else {
+                            println!(
+                                "{}",
+                                format!("[gate] access_token issued (sub={:?})", v.get("sub"))
+                                    .green()
+                                    .bold()
+                            );
+                            println!("{access}");
+                            println!(" Header : Authorization: Bearer <token>");
+                        }
                         break;
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                         let err = v["error"].as_str().unwrap_or("");
                         if err == "authorization_pending" {
-                            eprint!(".");
+                            if !json {
+                                eprint!(".");
+                            }
                             continue;
                         }
-                        eprintln!("\n[gate] token error: {text}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "oauth-device",
+                                    "error": text,
+                                    "user_code": user_code,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("\n[gate] token error: {text}");
+                        }
                         std::process::exit(1);
                     }
-                    eprintln!("\n[gate] token HTTP {status}: {text}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "oauth-device",
+                                "error": format!("token HTTP {status}: {text}"),
+                            }))?
+                        );
+                    } else {
+                        eprintln!("\n[gate] token HTTP {status}: {text}");
+                    }
                     std::process::exit(1);
                 }
             }
@@ -1720,22 +1950,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 user_code,
                 user,
                 issuer,
+                json,
             } => {
                 let base = issuer.trim_end_matches('/');
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(15))
                     .build()?;
-                let res = client
+                let res = match client
                     .post(format!("{base}/oauth/device_approve"))
                     .json(&serde_json::json!({
                         "user_code": user_code,
                         "user": user,
                     }))
                     .send()
-                    .await?;
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "oauth-approve",
+                                    "error": e.to_string(),
+                                    "user_code": user_code,
+                                    "user": user,
+                                    "issuer": base,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[gate] approve request failed: {e}");
+                        }
+                        std::process::exit(1);
+                    }
+                };
                 let status = res.status();
                 let body = res.text().await.unwrap_or_default();
-                if status.is_success() {
+                let ok = status.is_success();
+                if json {
+                    let body_json: serde_json::Value =
+                        serde_json::from_str(&body).unwrap_or(serde_json::json!(body));
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": ok,
+                            "action": "oauth-approve",
+                            "user_code": user_code,
+                            "user": user,
+                            "issuer": base,
+                            "status": status.as_u16(),
+                            "body": body_json,
+                        }))?
+                    );
+                } else if ok {
                     println!(
                         "{}",
                         format!("[gate] approved user_code={user_code} user={user}")
@@ -1744,6 +2012,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 } else {
                     eprintln!("[gate] approve failed {status}: {body}");
+                }
+                if !ok {
                     std::process::exit(1);
                 }
             }
@@ -1755,40 +2025,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state,
                 url_only,
                 code,
+                json,
             } => {
                 let base = issuer.trim_end_matches('/');
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(20))
                     .build()?;
+                let auth_url = format!(
+                    "{base}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid%20profile&user={}&auto_approve=1",
+                    urlencoding_form(&client_id),
+                    urlencoding_form(&redirect_uri),
+                    urlencoding_form(&state),
+                    urlencoding_form(&user),
+                );
                 let auth_code = if let Some(c) = code {
                     c
                 } else {
-                    let auth_url = format!(
-                        "{base}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid%20profile&user={}&auto_approve=1",
-                        urlencoding_form(&client_id),
-                        urlencoding_form(&redirect_uri),
-                        urlencoding_form(&state),
-                        urlencoding_form(&user),
-                    );
-                    println!(" Authorize URL : {auth_url}");
+                    if !json {
+                        println!(" Authorize URL : {auth_url}");
+                    }
                     if url_only {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "oauth-code",
+                                    "url_only": true,
+                                    "authorize_url": auth_url,
+                                    "issuer": base,
+                                    "client_id": client_id,
+                                    "user": user,
+                                }))?
+                            );
+                        }
                         return Ok(());
                     }
                     let res = client.get(&auth_url).send().await?;
                     let status = res.status();
                     let text = res.text().await.unwrap_or_default();
                     if !status.is_success() {
-                        eprintln!("[gate] authorize failed {status}: {text}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "oauth-code",
+                                    "error": format!("authorize failed {status}: {text}"),
+                                    "authorize_url": auth_url,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[gate] authorize failed {status}: {text}");
+                        }
                         std::process::exit(1);
                     }
                     let v: serde_json::Value =
                         serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
                     let c = v["code"].as_str().unwrap_or("").to_string();
                     if c.is_empty() {
-                        eprintln!("[gate] no code in authorize response: {text}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "oauth-code",
+                                    "error": format!("no code in authorize response: {text}"),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[gate] no code in authorize response: {text}");
+                        }
                         std::process::exit(1);
                     }
-                    println!(" Code         : {}", c.yellow());
+                    if !json {
+                        println!(" Code         : {}", c.yellow());
+                    }
                     c
                 };
                 let tok = client
@@ -1805,23 +2117,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let status = tok.status();
                 let text = tok.text().await.unwrap_or_default();
                 if !status.is_success() {
-                    eprintln!("[gate] token exchange failed {status}: {text}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "oauth-code",
+                                "error": format!("token exchange failed {status}: {text}"),
+                                "code": auth_code,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[gate] token exchange failed {status}: {text}");
+                    }
                     std::process::exit(1);
                 }
                 let v: serde_json::Value =
                     serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
                 let access = v["access_token"].as_str().unwrap_or("");
-                println!(
-                    "{}",
-                    format!(
-                        "[gate] authorization_code OK sub={:?}",
-                        v.get("sub")
-                    )
-                    .green()
-                    .bold()
-                );
-                println!("{access}");
-                println!(" Header : Authorization: Bearer <token>");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "oauth-code",
+                            "issuer": base,
+                            "code": auth_code,
+                            "access_token": access,
+                            "token": v,
+                            "authorize_url": auth_url,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(
+                            "[gate] authorization_code OK sub={:?}",
+                            v.get("sub")
+                        )
+                        .green()
+                        .bold()
+                    );
+                    println!("{access}");
+                    println!(" Header : Authorization: Bearer <token>");
+                }
             }
         },
         Commands::Serve {
