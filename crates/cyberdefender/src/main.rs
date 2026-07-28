@@ -74,6 +74,11 @@ enum Commands {
     },
     /// Write / refresh local rules + yara-lite + YARA-X seed
     UpdateDefs,
+    /// List / export local name+hash rules
+    Rules {
+        #[command(subcommand)]
+        command: RulesCmd,
+    },
     /// Manage / inspect yara-lite patterns
     Patterns {
         #[command(subcommand)]
@@ -118,6 +123,23 @@ enum Commands {
     },
     Realtime {
         action: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RulesCmd {
+    /// Print local hash + name rules
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export rules as json or csv
+    Export {
+        /// json | csv
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -798,7 +820,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!(
                 " Implemented       : {}",
-                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + doctor + Defender"
+                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + rules list/export + doctor"
                     .green()
             );
             println!(
@@ -1050,6 +1072,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        Commands::Rules { command } => match command {
+            RulesCmd::List { json } => {
+                let rules = load_rules(&cli.rules);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": cli.rules.display().to_string(),
+                            "version": rules.version,
+                            "blocked_hashes": rules.blocked_hashes,
+                            "blocked_name_substrings": rules.blocked_name_substrings,
+                            "hash_count": rules.blocked_hashes.len(),
+                            "name_count": rules.blocked_name_substrings.len(),
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(
+                        "{}",
+                        "      CyberDefender local rules                        "
+                            .bold()
+                            .green()
+                    );
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(" Path    : {}", cli.rules.display());
+                    println!(" Version : {}", rules.version);
+                    println!("-- name substrings ({}) --", rules.blocked_name_substrings.len());
+                    for n in &rules.blocked_name_substrings {
+                        println!("  {n}");
+                    }
+                    println!("-- hashes ({}) --", rules.blocked_hashes.len());
+                    for h in &rules.blocked_hashes {
+                        println!("  {h}");
+                    }
+                    if rules.blocked_hashes.is_empty() && rules.blocked_name_substrings.is_empty() {
+                        println!("(empty — run: cyberdefender update-defs)");
+                    }
+                }
+            }
+            RulesCmd::Export { format, out } => {
+                let rules = load_rules(&cli.rules);
+                let text = if format.eq_ignore_ascii_case("csv") {
+                    let mut s = String::from("kind,value\n");
+                    for n in &rules.blocked_name_substrings {
+                        s.push_str(&format!("name,{}\n", n.replace(',', " ")));
+                    }
+                    for h in &rules.blocked_hashes {
+                        s.push_str(&format!("hash,{h}\n"));
+                    }
+                    s
+                } else {
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "path": cli.rules.display().to_string(),
+                        "version": rules.version,
+                        "blocked_hashes": rules.blocked_hashes,
+                        "blocked_name_substrings": rules.blocked_name_substrings,
+                    }))?
+                };
+                if let Some(path) = out {
+                    if let Some(p) = path.parent() {
+                        fs::create_dir_all(p)?;
+                    }
+                    fs::write(&path, &text)?;
+                    println!(
+                        "{}",
+                        format!(
+                            "[cyberdefender] exported rules → {} (hashes={} names={})",
+                            path.display(),
+                            rules.blocked_hashes.len(),
+                            rules.blocked_name_substrings.len()
+                        )
+                        .green()
+                        .bold()
+                    );
+                } else {
+                    print!("{text}");
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
+                }
+            }
+        },
         Commands::UpdateDefs => {
             let mut rules = load_rules(&cli.rules);
             if rules.version.is_empty() {

@@ -127,6 +127,9 @@
 - `aegis fleet export` roster (json/csv + stale annotation)
 - `aegis playbook run --json` hit summary for automation
 - Windows: raise default stack to 8 MiB (`.cargo/config.toml`) for large clap CLIs
+- `aegis policy plan` — describe apply steps without mutating host
+- CyberDefender `rules list|export` for local hash/name signatures
+- `aegis cleanup` hygiene: IOC age prune + DNS blocklist dedupe (dry-run/`--apply`)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

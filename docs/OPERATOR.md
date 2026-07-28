@@ -10,7 +10,12 @@ cargo run -p aegis-cli -- status
 cargo run -p aegis-cli -- report
 cargo run -p aegis-cli -- report --json --out .aegis/report.json
 cargo run -p aegis-cli -- policy validate policies/examples/edge-pack.json
+cargo run -p aegis-cli -- policy plan policies/examples/edge-pack.json
 cargo run -p aegis-cli -- policy apply policies/examples/edge-pack.json
+cargo run -p cyberdefender -- rules list
+cargo run -p cyberdefender -- rules export --format csv --out .aegis/defender-rules.csv
+cargo run -p aegis-cli -- cleanup                    # dry-run (+ IOC age + DNS dedupe)
+cargo run -p aegis-cli -- cleanup --apply
 # Managed Windows rules (prefix S2O-Aegis-*; elevate for live apply)
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-run
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
@@ -161,7 +166,7 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 |-----|---------|
 | Firewall | `cyberwall status\|doctor\|enable\|lock\|rules [--managed]\|apply` |
 | DNS | `cyberdns doctor\|check\|export\|dedupe\|resolve\|block\|allow\|serve\|system-dns` |
-| Defender | `cyberdefender doctor\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
+| Defender | `cyberdefender doctor\|rules\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
 | EDR | `cyberedr doctor\|export\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |
 | Linux | `scripts/s2o-aegisd.service` (systemd) |

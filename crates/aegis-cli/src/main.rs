@@ -155,7 +155,7 @@ enum Commands {
         #[arg(long, default_value_t = 40)]
         min_posture: u32,
     },
-    /// Housekeeping: session GC, optional fleet prune, event log rotate check
+    /// Housekeeping: session GC, fleet prune, event rotate, optional IOC/DNS hygiene
     Cleanup {
         #[arg(long, default_value = ".aegis/sessions.json")]
         sessions: PathBuf,
@@ -163,12 +163,22 @@ enum Commands {
         fleet: PathBuf,
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        #[arg(long, default_value = ".aegis/ioc-store.json")]
+        ioc_store: PathBuf,
+        #[arg(long, default_value = ".aegis/dns-blocklist.txt")]
+        dns_blocklist: PathBuf,
         /// Fleet stale window minutes (0 = skip fleet prune)
         #[arg(long, default_value_t = 10080)]
         fleet_stale_minutes: i64,
         /// Rotate event log if over this many bytes (0 = skip)
         #[arg(long, default_value_t = 10 * 1024 * 1024)]
         rotate_max_bytes: u64,
+        /// Prune IOC entries older than N days (0 = skip)
+        #[arg(long, default_value_t = 90)]
+        ioc_older_days: i64,
+        /// Rewrite DNS blocklist without duplicates
+        #[arg(long, default_value_t = true)]
+        dns_dedupe: bool,
         /// Actually mutate stores (default dry-run)
         #[arg(long)]
         apply: bool,
@@ -423,6 +433,12 @@ enum PolicyCmd {
     },
     /// Validate a policy pack JSON without applying (shape + soft path checks)
     Validate {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Describe planned apply steps without mutating the host
+    Plan {
         path: PathBuf,
         #[arg(long)]
         json: bool,
@@ -2163,6 +2179,154 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(3);
                 }
             }
+            PolicyCmd::Plan { path, json } => {
+                if !path.exists() {
+                    eprintln!("[aegis] missing policy file {}", path.display());
+                    std::process::exit(2);
+                }
+                let doc = load_policy_file(&path)?;
+                let mut steps: Vec<String> = Vec::new();
+                if let Some(ref fw) = doc.firewall {
+                    if let Some(en) = fw.enabled {
+                        steps.push(format!("firewall.set_enabled({en})"));
+                    }
+                    if let Some(ob) = fw.outbound_block {
+                        steps.push(format!("firewall.set_outbound_block({ob})"));
+                    }
+                    if !fw.rules.is_empty() {
+                        steps.push(format!(
+                            "firewall.apply_rules(n={}, prefix=S2O-Aegis-*)",
+                            fw.rules.len()
+                        ));
+                        for r in fw.rules.iter().take(8) {
+                            steps.push(format!(
+                                "  rule name={} action={} dir={} port={:?}",
+                                r.name, r.action, r.direction, r.local_port
+                            ));
+                        }
+                        if fw.rules.len() > 8 {
+                            steps.push(format!("  … +{} more rules", fw.rules.len() - 8));
+                        }
+                    }
+                } else {
+                    steps.push("firewall: (no fragment — skip)".into());
+                }
+                if let Some(ref dns) = doc.dns {
+                    let bl = dns
+                        .blocklist_path
+                        .as_deref()
+                        .unwrap_or(".aegis/dns-blocklist.txt");
+                    if !dns.block_domains.is_empty() {
+                        steps.push(format!(
+                            "dns.blocklist_add({} domains) → {bl}",
+                            dns.block_domains.len()
+                        ));
+                    }
+                    if !dns.unblock_domains.is_empty() {
+                        steps.push(format!(
+                            "dns.blocklist_remove({} domains)",
+                            dns.unblock_domains.len()
+                        ));
+                    }
+                    if !dns.allow_domains.is_empty() {
+                        steps.push(format!(
+                            "dns.allowlist_add({} domains)",
+                            dns.allow_domains.len()
+                        ));
+                    }
+                    if !dns.unallow_domains.is_empty() {
+                        steps.push(format!(
+                            "dns.allowlist_remove({} domains)",
+                            dns.unallow_domains.len()
+                        ));
+                    }
+                    if dns.block_domains.is_empty()
+                        && dns.unblock_domains.is_empty()
+                        && dns.allow_domains.is_empty()
+                        && dns.unallow_domains.is_empty()
+                    {
+                        steps.push("dns: fragment present but empty ops".into());
+                    }
+                } else {
+                    steps.push("dns: (no fragment — skip)".into());
+                }
+                if let Some(ref intel) = doc.intel {
+                    if intel.sync_blocklist {
+                        let bl = intel
+                            .blocklist_path
+                            .as_deref()
+                            .unwrap_or(".aegis/dns-blocklist.txt");
+                        let ioc = intel
+                            .ioc_store_path
+                            .as_deref()
+                            .unwrap_or(".aegis/ioc-store.json");
+                        steps.push(format!("intel.sync_blocklist {bl} → {ioc}"));
+                    } else {
+                        steps.push("intel: sync_blocklist=false".into());
+                    }
+                } else {
+                    steps.push("intel: (no fragment — skip)".into());
+                }
+                if let Some(ref p) = doc.posture {
+                    if let Some(ms) = p.min_score {
+                        steps.push(format!("posture.gate min_score={ms} (record/check only)"));
+                    }
+                } else {
+                    steps.push("posture: (no fragment — skip)".into());
+                }
+                if let Some(ref g) = doc.gate {
+                    let mut bits = Vec::new();
+                    if let Some(ms) = g.min_score {
+                        bits.push(format!("min_score={ms}"));
+                    }
+                    if let Some(rs) = g.require_session {
+                        bits.push(format!("require_session={rs}"));
+                    }
+                    if let Some(rl) = g.rate_limit_per_minute {
+                        bits.push(format!("rate_limit={rl}/min"));
+                    }
+                    if !g.allow_ips.is_empty() {
+                        bits.push(format!("allow_ips={}", g.allow_ips.len()));
+                    }
+                    let cp = g
+                        .config_path
+                        .as_deref()
+                        .unwrap_or(".aegis/gate-routes.json");
+                    steps.push(format!("gate.update_config({}) [{}]", cp, bits.join(" ")));
+                } else {
+                    steps.push("gate: (no fragment — skip)".into());
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": path.display().to_string(),
+                            "name": doc.name,
+                            "schema_version": doc.schema_version,
+                            "description": doc.description,
+                            "steps": steps,
+                            "note": "plan only — no host mutation",
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "[aegis] policy plan {} name={}",
+                        path.display(),
+                        doc.name
+                    );
+                    if let Some(ref d) = doc.description {
+                        println!("  desc: {d}");
+                    }
+                    println!("  (no host changes — dry plan)");
+                    for s in &steps {
+                        println!("  → {s}");
+                    }
+                    println!(
+                        "  apply with: aegis policy apply {}",
+                        path.display()
+                    );
+                }
+            }
             PolicyCmd::Apply { path, event_log } => {
                 let doc = load_policy_file(&path)?;
                 let store = Arc::new(EventStore::open(&event_log)?);
@@ -3092,8 +3256,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sessions,
             fleet,
             event_log,
+            ioc_store,
+            dns_blocklist,
             fleet_stale_minutes,
             rotate_max_bytes,
+            ioc_older_days,
+            dns_dedupe,
             apply,
         } => {
             use s2o_session::SessionStore;
@@ -3176,6 +3344,92 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             } else {
                 println!("  events   : missing {}", event_log.display());
+            }
+
+            // IOC age prune
+            if ioc_older_days > 0 {
+                if ioc_store.exists() {
+                    match s2o_ioc::IocStore::load(&ioc_store) {
+                        Ok(mut store) => {
+                            let before = store.entries.len();
+                            let n = store.prune_older_than(ioc_older_days);
+                            if apply && n > 0 {
+                                store.save(&ioc_store)?;
+                            }
+                            println!(
+                                "  ioc      : would/did remove {n} of {before} (older>{ioc_older_days}d) → {}",
+                                ioc_store.display()
+                            );
+                        }
+                        Err(e) => println!("  ioc      : load error {e}"),
+                    }
+                } else {
+                    println!("  ioc      : missing {}", ioc_store.display());
+                }
+            } else {
+                println!("  ioc      : skipped (--ioc-older-days 0)");
+            }
+
+            // DNS blocklist dedupe
+            if dns_dedupe {
+                if dns_blocklist.exists() {
+                    let text = std::fs::read_to_string(&dns_blocklist).unwrap_or_default();
+                    let mut seen = std::collections::BTreeSet::new();
+                    let mut raw = 0usize;
+                    let mut dups = 0usize;
+                    let mut unique_lines: Vec<String> = Vec::new();
+                    let mut header: Vec<String> = Vec::new();
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() || trimmed.starts_with('#') {
+                            if unique_lines.is_empty() && header.len() < 5 {
+                                header.push(line.to_string());
+                            }
+                            continue;
+                        }
+                        raw += 1;
+                        let domain = trimmed
+                            .split('#')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .trim_end_matches('.')
+                            .to_ascii_lowercase();
+                        if domain.is_empty() {
+                            continue;
+                        }
+                        if !seen.insert(domain.clone()) {
+                            dups += 1;
+                        } else {
+                            unique_lines.push(domain);
+                        }
+                    }
+                    if apply && dups > 0 {
+                        let mut out = String::new();
+                        if header.is_empty() {
+                            out.push_str("# S2O CyberDNS local blocklist\n");
+                        } else {
+                            for h in &header {
+                                out.push_str(h);
+                                out.push('\n');
+                            }
+                        }
+                        for d in &unique_lines {
+                            out.push_str(d);
+                            out.push('\n');
+                        }
+                        std::fs::write(&dns_blocklist, out)?;
+                    }
+                    println!(
+                        "  dns      : raw={raw} unique={} dups={dups} → {}",
+                        unique_lines.len(),
+                        dns_blocklist.display()
+                    );
+                } else {
+                    println!("  dns      : missing {}", dns_blocklist.display());
+                }
+            } else {
+                println!("  dns      : skipped (--no-dns-dedupe)");
             }
 
             if apply {
