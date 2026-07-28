@@ -109,6 +109,13 @@ enum Commands {
         #[command(subcommand)]
         command: QuarantineCmd,
     },
+    /// Validate rules / yara / quarantine health (read-only)
+    Doctor {
+        #[arg(long, default_value = ".aegis/quarantine")]
+        quarantine_dir: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     Realtime {
         action: String,
     },
@@ -791,7 +798,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!(
                 " Implemented       : {}",
-                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine list/restore + Defender"
+                "SHA-256 + name + yara-lite + YARA-X + IOC + quarantine + doctor + Defender"
                     .green()
             );
             println!(
@@ -820,6 +827,228 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
                 None,
             );
+        }
+        Commands::Doctor {
+            quarantine_dir,
+            json,
+        } => {
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+            let mut notes: Vec<serde_json::Value> = Vec::new();
+            let mut check = |label: &str, good: bool, soft: bool, detail: &str| {
+                notes.push(serde_json::json!({
+                    "label": label,
+                    "ok": good,
+                    "warn": soft && !good,
+                    "detail": detail,
+                }));
+                if good {
+                    ok += 1;
+                    if !json {
+                        println!("  {} {} — {}", "OK".green().bold(), label, detail);
+                    }
+                } else if soft {
+                    warn += 1;
+                    if !json {
+                        println!("  {} {} — {}", "WARN".yellow().bold(), label, detail);
+                    }
+                } else {
+                    fail += 1;
+                    if !json {
+                        println!("  {} {} — {}", "FAIL".red().bold(), label, detail);
+                    }
+                }
+            };
+
+            if !json {
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O CyberDefender doctor                           "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+
+            let is_active = tokio::task::spawn_blocking(|| {
+                s2o_net_lib::defender::DefenderController::is_defender_active()
+            })
+            .await
+            .unwrap_or(false);
+            check(
+                "windefend",
+                is_active,
+                true,
+                if is_active {
+                    "Running"
+                } else {
+                    "Not running / query failed (WARN)"
+                },
+            );
+
+            let rules_present = cli.rules.exists();
+            let rules = load_rules(&cli.rules);
+            check(
+                "rules file",
+                rules_present,
+                true,
+                &if rules_present {
+                    format!(
+                        "{} (hashes={} names={})",
+                        cli.rules.display(),
+                        rules.blocked_hashes.len(),
+                        rules.blocked_name_substrings.len()
+                    )
+                } else {
+                    format!("{} missing (run: cyberdefender update-defs)", cli.rules.display())
+                },
+            );
+            check(
+                "local signatures",
+                !rules.blocked_hashes.is_empty() || !rules.blocked_name_substrings.is_empty(),
+                true,
+                &format!(
+                    "{} hash + {} name rules",
+                    rules.blocked_hashes.len(),
+                    rules.blocked_name_substrings.len()
+                ),
+            );
+
+            let (patterns, perrs) = load_patterns(&cli.patterns);
+            check(
+                "yara-lite",
+                cli.patterns.exists() && !patterns.is_empty(),
+                true,
+                &format!(
+                    "{} patterns, {} parse errors ({})",
+                    patterns.len(),
+                    perrs.len(),
+                    cli.patterns.display()
+                ),
+            );
+            if !perrs.is_empty() {
+                check(
+                    "yara-lite parse",
+                    false,
+                    true,
+                    &format!("{} pattern error(s)", perrs.len()),
+                );
+            }
+
+            let yara_files = yara_x_engine::collect_rule_files(&cli.yara_dir);
+            let yara_eng = try_load_yara(&cli.yara_dir, false);
+            let yara_ok = yara_eng.is_some();
+            check(
+                "yara-x dir",
+                cli.yara_dir.is_dir() || yara_files.is_empty(),
+                true,
+                &format!(
+                    "{} ({} .yar files)",
+                    cli.yara_dir.display(),
+                    yara_files.len()
+                ),
+            );
+            if !yara_files.is_empty() {
+                check(
+                    "yara-x compile",
+                    yara_ok,
+                    false,
+                    &match &yara_eng {
+                        Some(e) => format!("{} rules compiled", e.rule_count),
+                        None => "compile failed".into(),
+                    },
+                );
+            } else {
+                check(
+                    "yara-x rules",
+                    false,
+                    true,
+                    "none (run: cyberdefender yara init)",
+                );
+            }
+
+            let ioc_hashes = IocStore::load(&cli.ioc_store)
+                .map(|s| s.count_by_kind(s2o_ioc::IocKind::Hash))
+                .unwrap_or(0);
+            check(
+                "ioc hashes",
+                cli.ioc_store.exists(),
+                true,
+                &format!(
+                    "{} ({} hash IOCs)",
+                    cli.ioc_store.display(),
+                    ioc_hashes
+                ),
+            );
+
+            let q_entries = list_quarantine_entries(&quarantine_dir);
+            check(
+                "quarantine dir",
+                quarantine_dir.is_dir() || q_entries.is_empty(),
+                true,
+                &if quarantine_dir.is_dir() {
+                    format!("{} ({} files)", quarantine_dir.display(), q_entries.len())
+                } else {
+                    format!("{} missing (ok if unused)", quarantine_dir.display())
+                },
+            );
+
+            check(
+                "event log",
+                cli.event_log.exists(),
+                true,
+                &format!("{}", cli.event_log.display()),
+            );
+
+            check(
+                "realtime minifilter",
+                false,
+                true,
+                "not implemented (scan/watch are userspace)",
+            );
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": fail == 0,
+                        "ok_count": ok,
+                        "warn_count": warn,
+                        "fail_count": fail,
+                        "windefend": is_active,
+                        "hash_rules": rules.blocked_hashes.len(),
+                        "name_rules": rules.blocked_name_substrings.len(),
+                        "yara_lite_patterns": patterns.len(),
+                        "yara_x_files": yara_files.len(),
+                        "yara_x_rules": yara_eng.as_ref().map(|e| e.rule_count).unwrap_or(0),
+                        "ioc_hashes": ioc_hashes,
+                        "quarantine_files": q_entries.len(),
+                        "checks": notes,
+                    }))?
+                );
+            } else {
+                println!(
+                    " Summary: {} ok, {} warn, {} fail",
+                    ok.to_string().green(),
+                    warn.to_string().yellow(),
+                    fail.to_string().red()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+            }
+            if fail > 0 {
+                std::process::exit(1);
+            }
         }
         Commands::UpdateDefs => {
             let mut rules = load_rules(&cli.rules);

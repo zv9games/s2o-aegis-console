@@ -105,6 +105,9 @@
 - CyberDNS `doctor` (lists/overlap/IOC/DoH) + `check` (deny-path diagnosis without resolve)
 - CyberEDR `doctor` (process/TCP/baseline userspace health)
 - `aegis playbook list` + `validate` (known actions, webhook/ioc_add shape)
+- Cyberwall `doctor` (enabled/profiles/managed `S2O-Aegis-*` rules, read-only)
+- CyberDefender `doctor` (rules, yara-lite/YARA-X, quarantine, IOC hashes)
+- `aegis events` filters: `--product`, `--severity`, `--since`, `--text`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

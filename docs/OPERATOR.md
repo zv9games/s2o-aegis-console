@@ -15,6 +15,10 @@ cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json --dry-r
 cargo run -p cyberwall -- apply policies/examples/wall-rules-engine.json
 cargo run -p aegis-cli -- policy apply policies/examples/wall-rules-lab.json
 cargo run -p aegis-cli -- events --limit 20
+cargo run -p aegis-cli -- events --since 1h --product dns --text
+cargo run -p aegis-cli -- events --severity high --limit 10 --text
+cargo run -p cyberwall -- doctor
+cargo run -p cyberdefender -- doctor
 cargo run -p aegis-cli -- watch
 # emit locally and/or to aegisd bus
 cargo run -p aegis-cli -- emit "lab alert" --severity high --product wall
@@ -126,9 +130,9 @@ cargo run -p aegis-cli -- playbook watch --apply  # live responses
 
 | Job | Command |
 |-----|---------|
-| Firewall | `cyberwall status\|enable\|lock\|rules\|apply` |
+| Firewall | `cyberwall status\|doctor\|enable\|lock\|rules\|apply` |
 | DNS | `cyberdns [--doh URL] resolve\|block\|allow\|serve\|system-dns` |
-| Defender | `cyberdefender scan\|yara [pull]\|quarantine\|patterns\|watch` |
+| Defender | `cyberdefender doctor\|scan\|yara [pull]\|quarantine\|patterns\|watch` |
 | EDR | `cyberedr doctor\|processes\|ps\|listen\|net-watch\|baseline\|drift\|alerts\|watch` |
 | DNS | `cyberdns doctor\|check\|resolve\|block\|allow\|serve\|system-dns` |
 | Service | `aegis service install\|start\|stop\|status` (Windows) |

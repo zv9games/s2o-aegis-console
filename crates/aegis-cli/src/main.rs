@@ -57,6 +57,16 @@ enum Commands {
         event_log: PathBuf,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        #[arg(long)]
+        product: Option<String>,
+        #[arg(long)]
+        severity: Option<String>,
+        /// Time lower bound: relative (`15m`, `1h`, `24h`, `7d`) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+        /// Pretty text instead of JSON
+        #[arg(long)]
+        text: bool,
     },
     /// Emit an event to the local store and/or aegisd HTTP/UDP bus
     Emit {
@@ -692,6 +702,42 @@ fn known_playbook_actions() -> &'static [&'static str] {
         "ioc_add",
         "ioc_add_attr",
     ]
+}
+
+/// Parse relative duration (`15m`, `1h`, `24h`, `7d`) or RFC3339 into a UTC lower bound.
+fn parse_since(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty --since value".into());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc));
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 {
+        return Err(format!(
+            "invalid --since '{s}' (use 15m, 1h, 24h, 7d, or RFC3339)"
+        ));
+    }
+    let unit = *bytes.last().unwrap() as char;
+    let num_str = &s[..s.len() - 1];
+    let n: i64 = num_str.parse().map_err(|_| {
+        format!("invalid --since '{s}' (use 15m, 1h, 24h, 7d, or RFC3339)")
+    })?;
+    if n <= 0 {
+        return Err("--since duration must be positive".into());
+    }
+    let now = chrono::Utc::now();
+    match unit {
+        's' | 'S' => Ok(now - chrono::Duration::seconds(n)),
+        'm' | 'M' => Ok(now - chrono::Duration::minutes(n)),
+        'h' | 'H' => Ok(now - chrono::Duration::hours(n)),
+        'd' | 'D' => Ok(now - chrono::Duration::days(n)),
+        'w' | 'W' => Ok(now - chrono::Duration::weeks(n)),
+        _ => Err(format!(
+            "invalid --since unit in '{s}' (use s/m/h/d/w or RFC3339)"
+        )),
+    }
 }
 
 fn parse_ioc_kind(s: &str) -> Option<s2o_ioc::IocKind> {
@@ -1588,14 +1634,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Commands::Events { event_log, limit } => {
+        Commands::Events {
+            event_log,
+            limit,
+            product,
+            severity,
+            since,
+            text,
+        } => {
             if !event_log.exists() {
                 eprintln!("[aegis] no event log at {}", event_log.display());
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
-            let events = store.recent(limit)?;
-            println!("{}", serde_json::to_string_pretty(&events)?);
+            let over = if since.is_some() || product.is_some() || severity.is_some() {
+                limit.saturating_mul(50).max(limit * 5)
+            } else {
+                limit
+            };
+            let mut events = store.recent(over)?;
+            if let Some(ref s) = since {
+                let bound = match parse_since(s) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("[aegis] {e}");
+                        std::process::exit(2);
+                    }
+                };
+                events.retain(|e| e.ts >= bound);
+            }
+            if let Some(ref p) = product {
+                let pf = p.to_ascii_lowercase();
+                events.retain(|e| {
+                    let id = e.product.as_str();
+                    let name = format!("{:?}", e.product).to_ascii_lowercase();
+                    id == pf || name.contains(&pf) || e.product.display_name().to_ascii_lowercase().contains(&pf)
+                });
+            }
+            if let Some(ref s) = severity {
+                events.retain(|e| format!("{:?}", e.severity).eq_ignore_ascii_case(s));
+            }
+            if events.len() > limit {
+                events = events.split_off(events.len() - limit);
+            }
+            if text {
+                if events.is_empty() {
+                    println!("[aegis] no matching events");
+                }
+                for ev in &events {
+                    println!(
+                        "[{}] {:?} {:?} / {:?} | {}",
+                        ev.ts.to_rfc3339(),
+                        ev.severity,
+                        ev.product,
+                        ev.action,
+                        ev.message
+                    );
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&events)?);
+            }
         }
         Commands::Rotate { event_log, keep } => {
             let store = EventStore::open_with_rotation(&event_log, 0, keep)?;
