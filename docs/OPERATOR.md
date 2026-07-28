@@ -6,6 +6,9 @@
 cargo run -p aegis-cli -- setup
 cargo run -p aegis-cli -- setup --policy suite --enroll-fleet --json
 cargo run -p aegis-cli -- setup --policy edge --no-policy
+# Custom data root (also set AEGIS_DATA_DIR for posture/doctors that default to .aegis):
+#   $env:AEGIS_DATA_DIR = "D:\aegis-data"
+#   cargo run -p aegis-cli -- setup --data-dir D:\aegis-data --policy suite --enroll-fleet --json
 # Windows service (requires Administrator):
 #   cargo run -p aegis-cli -- service install --json
 #   cargo run -p aegis-cli -- service start --json

@@ -1526,7 +1526,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     rebased = s2o_kernel::rebase_policy_paths_report(&mut doc, dd);
                 }
                 let store = Arc::new(EventStore::open(&event_log)?);
-                let result = apply_policy(&doc, &fw, Some(store)).await?;
+                let result = s2o_kernel::apply_policy_at(
+                    &doc,
+                    &fw,
+                    Some(store),
+                    data_dir.as_deref(),
+                )
+                .await?;
                 if json {
                     println!(
                         "{}",

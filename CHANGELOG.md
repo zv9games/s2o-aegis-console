@@ -191,6 +191,8 @@
 - Windows `sc create` via `cmd /C` (service install + install-aegis-service.ps1)
 - Policy path rebase: `policy apply --data-dir` / setup rewrites `.aegis/...` pack paths onto data root
 - CI: `s2o-kernel` tests + validate suite-lab/mesh-seed packs on Ubuntu
+- Posture suite signals honor `AEGIS_DATA_DIR` / `compute_posture_score_at` / `apply_policy_at`
+- Setup seeds `fleet-policy.json` (rebased pack) for local fleet distribution
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

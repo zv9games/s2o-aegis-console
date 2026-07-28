@@ -170,11 +170,21 @@ mod tests {
     }
 }
 
-/// Apply policy through the kernel: firewall fragment (v0) with per-world events.
+/// Apply policy through the kernel (uses [`crate::default_data_dir`] for posture signals).
 pub async fn apply_policy(
     doc: &PolicyDocument,
     fw: &FirewallEngineHandle,
     store: Option<Arc<EventStore>>,
+) -> KernelResult<PolicyApplyResult> {
+    apply_policy_at(doc, fw, store, None).await
+}
+
+/// Apply policy; when `data_dir` is set, posture suite signals resolve under that root.
+pub async fn apply_policy_at(
+    doc: &PolicyDocument,
+    fw: &FirewallEngineHandle,
+    store: Option<Arc<EventStore>>,
+    data_dir: Option<&Path>,
 ) -> KernelResult<PolicyApplyResult> {
     use crate::wall::{wall_set_enabled, wall_set_outbound_block};
 
@@ -182,6 +192,8 @@ pub async fn apply_policy(
     let mut skipped = Vec::new();
     let mut errors = Vec::new();
     let store_ref = store.as_ref().map(|s| s.as_ref());
+    let default_dd = crate::default_data_dir();
+    let posture_dd = data_dir.unwrap_or(default_dd.as_path());
 
     if let Some(fw_intent) = &doc.firewall {
         if let Some(enabled) = fw_intent.enabled {
@@ -233,7 +245,14 @@ pub async fn apply_policy(
     }
 
     if let Some(posture_intent) = &doc.posture {
-        match crate::posture_policy::apply_posture_intent(posture_intent, fw, store_ref).await {
+        match crate::posture_policy::apply_posture_intent_at(
+            posture_intent,
+            fw,
+            store_ref,
+            posture_dd,
+        )
+        .await
+        {
             Ok(lines) => applied.extend(lines),
             Err(e) => errors.push(format!("posture: {e}")),
         }

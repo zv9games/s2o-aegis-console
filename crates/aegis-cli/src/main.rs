@@ -2656,7 +2656,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 let store = Arc::new(EventStore::open(&event_log)?);
-                let result = apply_policy(&doc, &fw, Some(store)).await?;
+                let result = s2o_kernel::apply_policy_at(
+                    &doc,
+                    &fw,
+                    Some(store),
+                    data_dir.as_deref(),
+                )
+                .await?;
                 if json {
                     println!(
                         "{}",
@@ -4159,9 +4165,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     let store = Arc::new(EventStore::open(&event_log)?);
-                    let result = s2o_kernel::apply_policy(&doc, &fw, Some(store)).await?;
+                    let result = s2o_kernel::apply_policy_at(
+                        &doc,
+                        &fw,
+                        Some(store),
+                        Some(data_dir.as_path()),
+                    )
+                    .await?;
                     policy_ok = Some(result.ok);
                     policy_applied_lines = result.applied.clone();
+                    // Seed fleet policy distribution bundle for lab agents
+                    let fleet_pol = data_dir.join("fleet-policy.json");
+                    if let Ok(raw) = std::fs::read_to_string(&path) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            let prev = s2o_fleet::FleetPolicyBundle::load(&fleet_pol);
+                            let mut doc_val = val;
+                            // rebase document paths inside fleet bundle copy for agents on this host
+                            if let Ok(mut pd) = serde_json::from_value::<PolicyDocument>(doc_val.clone())
+                            {
+                                let _ = s2o_kernel::rebase_policy_paths(&mut pd, &data_dir);
+                                if let Ok(v) = serde_json::to_value(&pd) {
+                                    doc_val = v;
+                                }
+                            }
+                            let bundle =
+                                s2o_fleet::FleetPolicyBundle::from_document(doc_val, prev.as_ref());
+                            if bundle.save(&fleet_pol).is_ok() {
+                                if !json {
+                                    println!(
+                                        "[aegis] fleet policy seeded v{} → {}",
+                                        bundle.version,
+                                        fleet_pol.display()
+                                    );
+                                }
+                                policy_applied_lines.push(format!(
+                                    "fleet.policy_version={}",
+                                    bundle.version
+                                ));
+                                policy_applied_lines
+                                    .push(format!("fleet.policy={}", fleet_pol.display()));
+                            }
+                        }
+                    }
                     if !json {
                         if result.ok {
                             println!("{}", "[aegis] policy OK".green().bold());
