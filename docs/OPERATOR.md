@@ -150,11 +150,17 @@ cargo run -p aegis-cli -- selftest
 cargo run -p aegis-cli -- config show --json
 cargo run -p aegis-cli -- config get min_posture --json
 cargo run -p aegis-cli -- config set min_posture 40 --json
+cargo run -p aegis-cli -- config init --json
 cargo run -p aegis-cli -- playbook enable emit-on-high-block --json
 cargo run -p aegis-cli -- playbook disable emit-on-high-block --json
 cargo run -p cyberdefender -- quarantine purge --json
 cargo run -p cyberintel -- import-file iocs.txt --dry-run --json
+cargo run -p cyberintel -- sync --json
 cargo run -p cyberwall -- enable --json
+cargo run -p cyberdns -- system-dns backup --json
+cargo run -p aegis-cli -- fleet policy set policies/examples/posture-pack.json --json
+cargo run -p aegis-cli -- fleet policy show --json
+cargo run -p aegis-cli -- service status --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json

@@ -171,6 +171,8 @@
 - `aegis config get|set --json`; playbook `enable|disable|remove --json`
 - Defender `quarantine restore|purge --json`; ThreatGrid `import-file --json`
 - Cyberwall `enable|disable|lock|unlock --json` (status after mutator)
+- Fleet `policy set|show|apply|push|pull --json`; `aegis restore --json`; `config init --json`
+- CyberDNS `system-dns backup|set|restore --json`; ThreatGrid `sync --json`; `service status --json`
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

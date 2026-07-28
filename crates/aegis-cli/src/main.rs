@@ -158,6 +158,8 @@ enum Commands {
         /// Allow overwriting existing files
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Non-interactive self-test (exit 1 on failure)
     Selftest {
@@ -365,11 +367,15 @@ enum FleetPolicyCmd {
         path: PathBuf,
         #[arg(long, default_value = ".aegis/fleet-policy.json")]
         policy: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Show current fleet policy bundle
     Show {
         #[arg(long, default_value = ".aegis/fleet-policy.json")]
         policy: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Apply local fleet policy through the kernel
     Apply {
@@ -380,12 +386,16 @@ enum FleetPolicyCmd {
         /// Record applied version onto this host in fleet.json
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Upload policy pack to aegisd (POST /fleet/policy)
     Push {
         path: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:9090/fleet/policy")]
         url: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Download policy from aegisd; optional --apply
     Pull {
@@ -399,6 +409,8 @@ enum FleetPolicyCmd {
         event_log: PathBuf,
         #[arg(long, default_value = ".aegis/fleet.json")]
         fleet: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -408,6 +420,8 @@ enum ServiceCmd {
     Status {
         #[arg(long, default_value = "S2OAegisd")]
         name: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Register Windows Service (requires Administrator)
     Install {
@@ -464,6 +478,8 @@ enum ConfigCmd {
     Init {
         #[arg(long, default_value = ".aegis/config.json")]
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Get one config key
     Get {
@@ -3378,13 +3394,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            ConfigCmd::Init { path } => {
+            ConfigCmd::Init { path, json } => {
                 let cfg = SuiteConfig::default();
                 cfg.save(&path)?;
-                println!(
-                    "{}",
-                    format!("[aegis] wrote {}", path.display()).green().bold()
-                );
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "path": path.display().to_string(),
+                            "config": cfg,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[aegis] wrote {}", path.display()).green().bold()
+                    );
+                }
             }
             ConfigCmd::Get { key, path, json } => {
                 let cfg = SuiteConfig::load(&path);
@@ -3734,22 +3761,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             zip,
             data_dir,
             force,
+            json,
         } => {
             if !zip.exists() {
-                eprintln!("[aegis] zip missing: {}", zip.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("zip missing: {}", zip.display()),
+                        }))?
+                    );
+                } else {
+                    eprintln!("[aegis] zip missing: {}", zip.display());
+                }
                 std::process::exit(1);
             }
             std::fs::create_dir_all(&data_dir)?;
             let n = unzip_to(&zip, &data_dir, force)?;
-            println!(
-                "{}",
-                format!(
-                    "[aegis] restored {n} files into {} (force={force})",
-                    data_dir.display()
-                )
-                .green()
-                .bold()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "zip": zip.display().to_string(),
+                        "data_dir": data_dir.display().to_string(),
+                        "files": n,
+                        "force": force,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[aegis] restored {n} files into {} (force={force})",
+                        data_dir.display()
+                    )
+                    .green()
+                    .bold()
+                );
+            }
         }
         Commands::Selftest { min_posture, json } => {
             let mut failed = 0u32;
@@ -4804,72 +4855,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             FleetCmd::Policy { command } => match command {
-                FleetPolicyCmd::Set { path, policy } => {
+                FleetPolicyCmd::Set { path, policy, json } => {
                     let text = std::fs::read_to_string(&path)?;
                     let doc: serde_json::Value = serde_json::from_str(&text)?;
                     let prev = FleetPolicyBundle::load(&policy);
                     let bundle = FleetPolicyBundle::from_document(doc, prev.as_ref());
                     bundle.save(&policy)?;
-                    println!(
-                        "{}",
-                        format!(
-                            "[aegis] fleet policy set name={} version={} -> {}",
-                            bundle.name,
-                            bundle.version,
-                            policy.display()
-                        )
-                        .green()
-                        .bold()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "set",
+                                "source": path.display().to_string(),
+                                "policy": policy.display().to_string(),
+                                "name": bundle.name,
+                                "version": bundle.version,
+                                "updated_at": bundle.updated_at,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format!(
+                                "[aegis] fleet policy set name={} version={} -> {}",
+                                bundle.name,
+                                bundle.version,
+                                policy.display()
+                            )
+                            .green()
+                            .bold()
+                        );
+                    }
                 }
-                FleetPolicyCmd::Show { policy } => match FleetPolicyBundle::load(&policy) {
+                FleetPolicyCmd::Show { policy, json } => match FleetPolicyBundle::load(&policy) {
                     Some(b) => {
-                        println!("version     : {}", b.version);
-                        println!("name        : {}", b.name);
-                        println!("updated_at  : {}", b.updated_at);
-                        println!("document    :");
-                        println!("{}", serde_json::to_string_pretty(&b.document)?);
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "present": true,
+                                    "path": policy.display().to_string(),
+                                    "version": b.version,
+                                    "name": b.name,
+                                    "updated_at": b.updated_at,
+                                    "document": b.document,
+                                }))?
+                            );
+                        } else {
+                            println!("version     : {}", b.version);
+                            println!("name        : {}", b.name);
+                            println!("updated_at  : {}", b.updated_at);
+                            println!("document    :");
+                            println!("{}", serde_json::to_string_pretty(&b.document)?);
+                        }
                     }
                     None => {
-                        println!("[aegis] no fleet policy at {}", policy.display());
-                        println!("  set with: aegis fleet policy set policies/examples/gate-pack.json");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "present": false,
+                                    "path": policy.display().to_string(),
+                                }))?
+                            );
+                        } else {
+                            println!("[aegis] no fleet policy at {}", policy.display());
+                            println!("  set with: aegis fleet policy set policies/examples/gate-pack.json");
+                        }
                     }
                 },
                 FleetPolicyCmd::Apply {
                     policy,
                     event_log,
                     fleet,
+                    json,
                 } => {
                     let Some(bundle) = FleetPolicyBundle::load(&policy) else {
-                        eprintln!("[aegis] missing {}", policy.display());
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": format!("missing {}", policy.display()),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[aegis] missing {}", policy.display());
+                        }
                         std::process::exit(2);
                     };
                     let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
                     let store = Arc::new(EventStore::open(&event_log)?);
                     let result = apply_policy(&doc, &fw, Some(store)).await?;
-                    if result.ok {
-                        println!(
-                            "{}",
-                            format!(
-                                "[aegis] fleet policy applied v{} name={}",
-                                bundle.version, result.policy_name
-                            )
-                            .green()
-                            .bold()
-                        );
-                    } else {
-                        println!(
-                            "{}",
-                            format!("[aegis] fleet policy incomplete: {}", result.policy_name)
-                                .yellow()
-                        );
-                    }
-                    for a in &result.applied {
-                        println!("  applied : {}", a.green());
-                    }
-                    for e in &result.errors {
-                        println!("  error   : {}", e.red());
-                    }
                     // stamp host policy_version
                     let mut roster = FleetStore::load(&fleet);
                     let hb = build_local_heartbeat(
@@ -4882,11 +4962,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                     roster.upsert_heartbeat(hb);
                     roster.save(&fleet)?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": result.ok,
+                                "version": bundle.version,
+                                "result": result,
+                                "policy": policy.display().to_string(),
+                            }))?
+                        );
+                    } else if result.ok {
+                        println!(
+                            "{}",
+                            format!(
+                                "[aegis] fleet policy applied v{} name={}",
+                                bundle.version, result.policy_name
+                            )
+                            .green()
+                            .bold()
+                        );
+                        for a in &result.applied {
+                            println!("  applied : {}", a.green());
+                        }
+                    } else {
+                        println!(
+                            "{}",
+                            format!("[aegis] fleet policy incomplete: {}", result.policy_name)
+                                .yellow()
+                        );
+                        for a in &result.applied {
+                            println!("  applied : {}", a.green());
+                        }
+                        for e in &result.errors {
+                            println!("  error   : {}", e.red());
+                        }
+                    }
                     if !result.ok {
                         std::process::exit(1);
                     }
                 }
-                FleetPolicyCmd::Push { path, url } => {
+                FleetPolicyCmd::Push { path, url, json } => {
                     let text = std::fs::read_to_string(&path)?;
                     let doc: serde_json::Value = serde_json::from_str(&text)?;
                     let client = reqwest::Client::builder()
@@ -4895,8 +5011,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let res = client.post(&url).json(&doc).send().await?;
                     let status = res.status();
                     let body = res.text().await.unwrap_or_default();
-                    println!("[aegis] fleet policy push {url} -> {status}");
-                    println!("{body}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": status.is_success(),
+                                "url": url,
+                                "status": status.as_u16(),
+                                "body": body,
+                                "source": path.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!("[aegis] fleet policy push {url} -> {status}");
+                        println!("{body}");
+                    }
                     if !status.is_success() {
                         std::process::exit(1);
                     }
@@ -4907,32 +5036,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     apply,
                     event_log,
                     fleet,
+                    json,
                 } => {
                     let client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(15))
                         .build()?;
                     let res = client.get(&url).send().await?;
                     if !res.status().is_success() {
-                        eprintln!("[aegis] pull failed: {}", res.status());
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": format!("pull failed: {}", res.status()),
+                                    "status": res.status().as_u16(),
+                                    "url": url,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[aegis] pull failed: {}", res.status());
+                        }
                         std::process::exit(1);
                     }
                     let bundle: FleetPolicyBundle = res.json().await?;
                     bundle.save(&policy)?;
-                    println!(
-                        "[aegis] fleet policy pulled v{} name={} -> {}",
-                        bundle.version,
-                        bundle.name,
-                        policy.display()
-                    );
+                    let mut apply_result: Option<s2o_schema::PolicyApplyResult> = None;
                     if apply {
                         let doc: PolicyDocument = serde_json::from_value(bundle.document.clone())?;
                         let store = Arc::new(EventStore::open(&event_log)?);
                         let result = apply_policy(&doc, &fw, Some(store)).await?;
-                        println!(
-                            "[aegis] apply ok={} applied={}",
-                            result.ok,
-                            result.applied.len()
-                        );
                         let mut roster = FleetStore::load(&fleet);
                         let hb = build_local_heartbeat(
                             &fw,
@@ -4945,7 +5077,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         roster.upsert_heartbeat(hb);
                         roster.save(&fleet)?;
                         if !result.ok {
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": false,
+                                        "pulled": true,
+                                        "version": bundle.version,
+                                        "name": bundle.name,
+                                        "policy": policy.display().to_string(),
+                                        "apply": true,
+                                        "result": result,
+                                    }))?
+                                );
+                            } else {
+                                println!(
+                                    "[aegis] apply ok={} applied={}",
+                                    result.ok,
+                                    result.applied.len()
+                                );
+                            }
                             std::process::exit(1);
+                        }
+                        apply_result = Some(result);
+                    }
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "url": url,
+                                "version": bundle.version,
+                                "name": bundle.name,
+                                "policy": policy.display().to_string(),
+                                "apply": apply,
+                                "result": apply_result,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "[aegis] fleet policy pulled v{} name={} -> {}",
+                            bundle.version,
+                            bundle.name,
+                            policy.display()
+                        );
+                        if let Some(ref result) = apply_result {
+                            println!(
+                                "[aegis] apply ok={} applied={}",
+                                result.ok,
+                                result.applied.len()
+                            );
                         }
                     }
                 }
@@ -4957,37 +5138,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(2);
             }
             match command {
-                ServiceCmd::Status { name } => {
-                    println!("{}", "Aegis service status".bold().green());
-                    println!(" Service name : {name}");
-                    match sc_query(&name) {
-                        Some(text) => {
-                            for line in text.lines().take(12) {
-                                println!("  {line}");
-                            }
-                            let running = text.to_ascii_uppercase().contains("RUNNING");
-                            println!(
-                                " Summary      : {}",
-                                if running {
-                                    "RUNNING".green().bold().to_string()
-                                } else {
-                                    "installed (not running or stopped)".yellow().to_string()
-                                }
-                            );
-                        }
-                        None => {
-                            println!(" SCM          : {}", "not installed".yellow());
-                        }
-                    }
-                    // Scheduled task probe
+                ServiceCmd::Status { name, json } => {
+                    let scm = sc_query(&name);
+                    let running = scm
+                        .as_ref()
+                        .map(|t| t.to_ascii_uppercase().contains("RUNNING"))
+                        .unwrap_or(false);
+                    let installed = scm.is_some();
                     let task = Command::new("schtasks")
                         .args(["/Query", "/TN", "S2O-Aegisd", "/FO", "LIST"])
                         .output();
-                    match task {
-                        Ok(o) if o.status.success() => {
-                            println!(" Task S2O-Aegisd: {}", "registered".green());
+                    let task_registered = matches!(task, Ok(ref o) if o.status.success());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "name": name,
+                                "scm_installed": installed,
+                                "running": running,
+                                "scm_preview": scm.as_ref().map(|t| t.lines().take(12).collect::<Vec<_>>()),
+                                "task_s2o_aegisd": task_registered,
+                            }))?
+                        );
+                    } else {
+                        println!("{}", "Aegis service status".bold().green());
+                        println!(" Service name : {name}");
+                        match scm {
+                            Some(text) => {
+                                for line in text.lines().take(12) {
+                                    println!("  {line}");
+                                }
+                                println!(
+                                    " Summary      : {}",
+                                    if running {
+                                        "RUNNING".green().bold().to_string()
+                                    } else {
+                                        "installed (not running or stopped)".yellow().to_string()
+                                    }
+                                );
+                            }
+                            None => {
+                                println!(" SCM          : {}", "not installed".yellow());
+                            }
                         }
-                        _ => println!(" Task S2O-Aegisd: {}", "not registered".dimmed()),
+                        if task_registered {
+                            println!(" Task S2O-Aegisd: {}", "registered".green());
+                        } else {
+                            println!(" Task S2O-Aegisd: {}", "not registered".dimmed());
+                        }
                     }
                 }
                 ServiceCmd::Install {

@@ -80,6 +80,8 @@ enum Commands {
         /// Extra feed URLs (repeatable); combined with --online / --feed-url
         #[arg(long = "feed")]
         feeds: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// List IOCs (optional kind filter)
     List {
@@ -601,9 +603,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             online,
             max_import,
             feeds,
+            json,
         } => {
             let mut store = IocStore::load(&cli.store)?;
             let mut imported = store.import_domain_list(&blocklist, "dns-blocklist")?;
+            let mut feed_results: Vec<serde_json::Value> = Vec::new();
 
             // Build feed URL list: --feed-url, --feed*, and --online defaults.
             let mut urls: Vec<(String, String)> = Vec::new();
@@ -631,9 +635,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .user_agent("S2O-ThreatGrid/0.3 (+local IOC multi-feed sync)")
                     .build()?;
                 for (url, source) in urls {
-                println!(
-                    "[threatgrid] fetching feed {url} source={source} (max_import={max_import})..."
-                );
+                if !json {
+                    println!(
+                        "[threatgrid] fetching feed {url} source={source} (max_import={max_import})..."
+                    );
+                }
                 match client.get(&url).send().await {
                     Ok(res) if res.status().is_success() => {
                         let text = res.text().await?;
@@ -643,16 +649,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let n = store.import_domain_list(&tmp, &source)?;
                         imported += n;
                         let _ = std::fs::remove_file(&tmp);
-                        println!("[threatgrid] feed {source} imported +{n}");
+                        feed_results.push(serde_json::json!({
+                            "source": source,
+                            "url": url,
+                            "ok": true,
+                            "imported": n,
+                        }));
+                        if !json {
+                            println!("[threatgrid] feed {source} imported +{n}");
+                        }
                     }
                     Ok(res) => {
-                        eprintln!(
-                            "[threatgrid] feed {source} HTTP {} — continuing",
-                            res.status()
-                        );
+                        feed_results.push(serde_json::json!({
+                            "source": source,
+                            "url": url,
+                            "ok": false,
+                            "status": res.status().as_u16(),
+                        }));
+                        if !json {
+                            eprintln!(
+                                "[threatgrid] feed {source} HTTP {} — continuing",
+                                res.status()
+                            );
+                        }
                     }
                     Err(e) => {
-                        eprintln!("[threatgrid] feed {source} fetch failed ({e}) — continuing");
+                        feed_results.push(serde_json::json!({
+                            "source": source,
+                            "url": url,
+                            "ok": false,
+                            "error": e.to_string(),
+                        }));
+                        if !json {
+                            eprintln!("[threatgrid] feed {source} fetch failed ({e}) — continuing");
+                        }
                     }
                 }
                 } // for each feed url
@@ -671,15 +701,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 imported += 1;
             }
             store.save(&cli.store)?;
-            println!(
-                "{}",
-                format!(
-                    "[threatgrid] sync ok: +{imported} new, total {}",
-                    store.entries.len()
-                )
-                .green()
-                .bold()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "imported": imported,
+                        "total": store.entries.len(),
+                        "blocklist": blocklist.display().to_string(),
+                        "online": online,
+                        "feeds": feed_results,
+                        "store": cli.store.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "[threatgrid] sync ok: +{imported} new, total {}",
+                        store.entries.len()
+                    )
+                    .green()
+                    .bold()
+                );
+            }
             emit(
                 &cli.event_log,
                 EventAction::Observed,

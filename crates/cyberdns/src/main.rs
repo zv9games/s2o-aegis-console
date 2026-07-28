@@ -233,16 +233,22 @@ enum SystemDnsCmd {
         interface: Option<String>,
         #[arg(long, default_value = ".aegis/dns-system-backup.json")]
         backup: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Restore DNS from backup file
     Restore {
         #[arg(long, default_value = ".aegis/dns-system-backup.json")]
         backup: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Only write backup without changing DNS
     Backup {
         #[arg(long, default_value = ".aegis/dns-system-backup.json")]
         backup: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1232,17 +1238,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            SystemDnsCmd::Backup { backup } => match system_dns::backup_current(&backup) {
+            SystemDnsCmd::Backup { backup, json } => match system_dns::backup_current(&backup) {
                 Ok(b) => {
-                    println!(
-                        "[cyberdns] backup wrote {} ({} server(s), {} iface(s))",
-                        backup.display(),
-                        b.servers.len(),
-                        b.interfaces.len()
-                    );
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "path": backup.display().to_string(),
+                                "servers": b.servers.len(),
+                                "interfaces": b.interfaces.len(),
+                                "backup": b,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "[cyberdns] backup wrote {} ({} server(s), {} iface(s))",
+                            backup.display(),
+                            b.servers.len(),
+                            b.interfaces.len()
+                        );
+                    }
                 }
                 Err(e) => {
-                    eprintln!("[cyberdns] {e}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "error": e,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdns] {e}");
+                    }
                     std::process::exit(1);
                 }
             },
@@ -1250,17 +1279,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 server,
                 interface,
                 backup,
+                json,
             } => {
-                println!(
-                    "{}",
-                    "[cyberdns] system-dns set requires elevation on Windows (Admin) / root on Linux"
-                        .yellow()
-                );
+                if !json {
+                    println!(
+                        "{}",
+                        "[cyberdns] system-dns set requires elevation on Windows (Admin) / root on Linux"
+                            .yellow()
+                    );
+                }
                 match system_dns::set_system_dns(&server, interface.as_deref(), &backup) {
                     Ok(msg) => {
-                        println!("{}", format!("[cyberdns] {msg}").green().bold());
-                        println!("Start proxy: cyberdns serve --listen 127.0.0.1:53  (or map 53→53553)");
-                        println!("Note: many OS stacks need port 53; serve on 53553 + portproxy if needed.");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "set",
+                                    "server": server,
+                                    "interface": interface,
+                                    "backup": backup.display().to_string(),
+                                    "message": msg,
+                                }))?
+                            );
+                        } else {
+                            println!("{}", format!("[cyberdns] {msg}").green().bold());
+                            println!("Start proxy: cyberdns serve --listen 127.0.0.1:53  (or map 53→53553)");
+                            println!("Note: many OS stacks need port 53; serve on 53553 + portproxy if needed.");
+                        }
                         emit(
                             &cli.event_log,
                             EventAction::Observed,
@@ -1270,14 +1316,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(e) => {
-                        eprintln!("[cyberdns] {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "set",
+                                    "error": e,
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[cyberdns] {e}");
+                        }
                         std::process::exit(1);
                     }
                 }
             }
-            SystemDnsCmd::Restore { backup } => match system_dns::restore_system_dns(&backup) {
+            SystemDnsCmd::Restore { backup, json } => match system_dns::restore_system_dns(&backup) {
                 Ok(msg) => {
-                    println!("{}", format!("[cyberdns] {msg}").green().bold());
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": true,
+                                "action": "restore",
+                                "backup": backup.display().to_string(),
+                                "message": msg,
+                            }))?
+                        );
+                    } else {
+                        println!("{}", format!("[cyberdns] {msg}").green().bold());
+                    }
                     emit(
                         &cli.event_log,
                         EventAction::Observed,
@@ -1287,7 +1356,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 Err(e) => {
-                    eprintln!("[cyberdns] {e}");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "restore",
+                                "error": e,
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberdns] {e}");
+                    }
                     std::process::exit(1);
                 }
             },
