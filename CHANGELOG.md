@@ -178,6 +178,9 @@
 - Mesh `show|up|down --json`; peers `set|live|publish|pull --json`
 - Gate `init --json`; mTLS `init|probe --json`; JWT `keygen|fetch-jwks|oidc-discover --json`
 - Gate OAuth `device|approve|code --json`
+- `aegisd policy apply|example|reload --json`; `aegis events|watch --json`
+- CyberLog `collect|follow --json` (+ `--max-events` seed/live envelopes)
+- EDR `trace|watch|net-watch --json`; Defender `realtime --json` (honest not-implemented)
 
 ### Known gaps (intentionally later)
 - Kernel ETW/eBPF hooks, realtime FS minifilter, commercial YARA feed

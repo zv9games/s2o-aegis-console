@@ -110,6 +110,8 @@ enum Commands {
         /// Capture command line + parent PID on start (WMI/ps)
         #[arg(long)]
         rich: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Poll TCP table for new ESTABLISHED connections (userspace; not ETW)
     NetWatch {
@@ -127,6 +129,8 @@ enum Commands {
         /// Emit events to JSONL
         #[arg(long, default_value_t = true)]
         emit_event: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Validate userspace telemetry + baseline health (no ETW claim)
     Doctor {
@@ -147,7 +151,10 @@ enum Commands {
         out: Option<PathBuf>,
     },
     /// Placeholder for true ETW/eBPF (use `watch --rich` / `net-watch` for userspace poll)
-    Trace,
+    Trace {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1305,16 +1312,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_events,
             closes,
             emit_event,
+            json,
         } => {
             let ignore: BTreeSet<String> = ignore_remote
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            println!(
-                "[cyberedr] net-watch interval={}ms closes={} (poll TCP table, not ETW)",
-                interval_ms, closes
-            );
+            if !json {
+                println!(
+                    "[cyberedr] net-watch interval={}ms closes={} (poll TCP table, not ETW)",
+                    interval_ms, closes
+                );
+            }
             let seed = tokio::task::spawn_blocking(|| {
                 s2o_net_lib::telemetry::get_active_tcp_connections()
             })
@@ -1331,11 +1341,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|c| !ignore.contains(&c.remote_addr))
                 .map(conn_key)
                 .collect();
-            println!(
-                "[cyberedr] seed {} established (ignoring remotes: {})",
-                known.len(),
-                ignore_remote
-            );
+            if !json {
+                println!(
+                    "[cyberedr] seed {} established (ignoring remotes: {})",
+                    known.len(),
+                    ignore_remote
+                );
+            }
+            // JSON snapshot of current seed (no wait) when max_events=0
+            if json && max_events == 0 {
+                let rows: Vec<_> = seed
+                    .iter()
+                    .filter(|c| c.state.eq_ignore_ascii_case("ESTABLISHED"))
+                    .filter(|c| !ignore.contains(&c.remote_addr))
+                    .map(|c| {
+                        serde_json::json!({
+                            "local": format!("{}:{}", c.local_addr, c.local_port),
+                            "remote": format!("{}:{}", c.remote_addr, c.remote_port),
+                            "pid": c.pid,
+                            "state": c.state,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "net-watch",
+                        "mode": "seed_snapshot",
+                        "interval_ms": interval_ms,
+                        "seed": known.len(),
+                        "ignore_remote": ignore_remote,
+                        "connections": rows,
+                        "note": "pass --max-events N to poll until N new connections",
+                    }))?
+                );
+                return Ok(());
+            }
             if emit_event {
                 emit(
                     &cli.event_log,
@@ -1351,6 +1393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             let mut new_events = 0u32;
+            let mut seen = Vec::new();
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(500))).await;
                 let live = tokio::task::spawn_blocking(|| {
@@ -1368,15 +1411,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let k = conn_key(c);
                     live_keys.insert(k.clone());
                     if !known.contains(&k) {
-                        println!(
-                            "{} pid={} {}:{} → {}:{}",
-                            " NEW ".cyan().bold(),
-                            c.pid,
-                            c.local_addr,
-                            c.local_port,
-                            c.remote_addr,
-                            c.remote_port
-                        );
+                        let row = serde_json::json!({
+                            "kind": "new",
+                            "local": format!("{}:{}", c.local_addr, c.local_port),
+                            "remote": format!("{}:{}", c.remote_addr, c.remote_port),
+                            "pid": c.pid,
+                        });
+                        if json {
+                            if max_events > 0 {
+                                seen.push(row);
+                            } else {
+                                println!("{}", serde_json::to_string(&row)?);
+                            }
+                        } else {
+                            println!(
+                                "{} pid={} {}:{} → {}:{}",
+                                " NEW ".cyan().bold(),
+                                c.pid,
+                                c.local_addr,
+                                c.local_port,
+                                c.remote_addr,
+                                c.remote_port
+                            );
+                        }
                         if emit_event {
                             emit(
                                 &cli.event_log,
@@ -1397,14 +1454,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         new_events += 1;
                         if max_events > 0 && new_events >= max_events {
-                            println!("[cyberedr] net-watch max_events={max_events} reached");
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": true,
+                                        "action": "net-watch",
+                                        "mode": "max_events",
+                                        "max_events": max_events,
+                                        "seed": known.len(),
+                                        "events": seen,
+                                    }))?
+                                );
+                            } else {
+                                println!("[cyberedr] net-watch max_events={max_events} reached");
+                            }
                             return Ok(());
                         }
                     }
                 }
                 if closes {
                     for k in known.difference(&live_keys) {
-                        println!("{} {}", " CLOSE ".yellow().bold(), k);
+                        if !json {
+                            println!("{} {}", " CLOSE ".yellow().bold(), k);
+                        }
                         if emit_event {
                             emit(
                                 &cli.event_log,
@@ -1426,15 +1499,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exits,
             max_events,
             rich,
+            json,
         } => {
-            println!(
-                "[cyberedr] watch interval={}ms limit={} rich={} (poll, not kernel ETW)",
-                interval_ms, limit, rich
-            );
+            if !json {
+                println!(
+                    "[cyberedr] watch interval={}ms limit={} rich={} (poll, not kernel ETW)",
+                    interval_ms, limit, rich
+                );
+            }
             let seed = list_processes(limit, rich);
             let mut known: BTreeMap<u32, ProcessInfo> =
                 seed.into_iter().map(|p| (p.pid, p)).collect();
-            println!("[cyberedr] seed {} processes", known.len());
+            if !json {
+                println!("[cyberedr] seed {} processes", known.len());
+            }
+            if json && max_events == 0 {
+                let rows: Vec<_> = known
+                    .values()
+                    .map(|p| {
+                        serde_json::json!({
+                            "pid": p.pid,
+                            "name": p.name,
+                            "ppid": p.ppid,
+                            "cmdline": p.cmdline,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "watch",
+                        "mode": "seed_snapshot",
+                        "interval_ms": interval_ms,
+                        "rich": rich,
+                        "seed": rows.len(),
+                        "processes": rows,
+                        "note": "pass --max-events N to poll until N new process starts",
+                    }))?
+                );
+                return Ok(());
+            }
             emit(
                 &cli.event_log,
                 EventKind::Process,
@@ -1448,6 +1553,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
             );
             let mut new_events = 0u32;
+            let mut seen = Vec::new();
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms.max(200))).await;
                 let live_list = list_processes(limit, rich);
@@ -1455,18 +1561,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     live_list.into_iter().map(|p| (p.pid, p)).collect();
                 for (pid, info) in &live {
                     if !known.contains_key(pid) {
-                        println!(
-                            "{} PID {pid:<6} PPID {} | {}{}",
-                            " START".green().bold(),
-                            info.ppid
-                                .map(|x| x.to_string())
-                                .unwrap_or_else(|| "-".into()),
-                            info.name,
-                            info.cmdline
-                                .as_ref()
-                                .map(|c| format!(" | {c}"))
-                                .unwrap_or_default()
-                        );
+                        let row = serde_json::json!({
+                            "kind": "start",
+                            "pid": pid,
+                            "name": info.name,
+                            "ppid": info.ppid,
+                            "cmdline": info.cmdline,
+                        });
+                        if json {
+                            if max_events > 0 {
+                                seen.push(row);
+                            } else {
+                                println!("{}", serde_json::to_string(&row)?);
+                            }
+                        } else {
+                            println!(
+                                "{} PID {pid:<6} PPID {} | {}{}",
+                                " START".green().bold(),
+                                info.ppid
+                                    .map(|x| x.to_string())
+                                    .unwrap_or_else(|| "-".into()),
+                                info.name,
+                                info.cmdline
+                                    .as_ref()
+                                    .map(|c| format!(" | {c}"))
+                                    .unwrap_or_default()
+                            );
+                        }
                         emit(
                             &cli.event_log,
                             EventKind::Process,
@@ -1490,7 +1611,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         new_events += 1;
                         if max_events > 0 && new_events >= max_events {
-                            println!("[cyberedr] watch max_events={max_events} reached");
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&serde_json::json!({
+                                        "ok": true,
+                                        "action": "watch",
+                                        "mode": "max_events",
+                                        "max_events": max_events,
+                                        "rich": rich,
+                                        "events": seen,
+                                    }))?
+                                );
+                            } else {
+                                println!("[cyberedr] watch max_events={max_events} reached");
+                            }
                             return Ok(());
                         }
                     }
@@ -1498,11 +1633,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if exits {
                     for (pid, info) in &known {
                         if !live.contains_key(pid) {
-                            println!(
-                                "{} PID {pid:<6} | {}",
-                                " EXIT ".yellow().bold(),
-                                info.name
-                            );
+                            if !json {
+                                println!(
+                                    "{} PID {pid:<6} | {}",
+                                    " EXIT ".yellow().bold(),
+                                    info.name
+                                );
+                            }
                             emit(
                                 &cli.event_log,
                                 EventKind::Process,
@@ -1521,9 +1658,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 known = live;
             }
         }
-        Commands::Trace => {
-            eprintln!("[cyberedr] kernel ETW/eBPF live trace not implemented.");
-            eprintln!("Use: cyberedr watch --rich | net-watch | listen | alerts");
+        Commands::Trace { json } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "trace",
+                        "error": "kernel ETW/eBPF live trace not implemented",
+                        "hint": "cyberedr watch --rich | net-watch | listen | alerts",
+                        "implemented": false,
+                    }))?
+                );
+            } else {
+                eprintln!("[cyberedr] kernel ETW/eBPF live trace not implemented.");
+                eprintln!("Use: cyberedr watch --rich | net-watch | listen | alerts");
+            }
             std::process::exit(2);
         }
     }

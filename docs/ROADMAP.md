@@ -214,6 +214,7 @@ See [PHASE1.md](./PHASE1.md) and [OS_MATRIX.md](./OS_MATRIX.md).
 - ✅ Fleet policy JSON + restore/config init + system-dns backup + intel sync + service status JSON  
 - ✅ Service lifecycle JSON + defender yara/patterns init + mesh show/up/down/peers mutator JSON  
 - ✅ Gate init/mTLS/JWT/OAuth mutator JSON (lab IdP automation surfaces)  
+- ✅ aegisd policy/reload + aegis events/watch + SIEM collect/follow + EDR watch/trace JSON  
 - ⏳ Kernel ETW / boringtun / prod browser IdP / commercial YARA feed (later)  
 - Selective T1 if needed for telemetry APIs
 

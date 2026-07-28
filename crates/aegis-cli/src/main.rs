@@ -89,6 +89,9 @@ enum Commands {
         /// Pretty text instead of JSON
         #[arg(long)]
         text: bool,
+        /// Machine-readable envelope (count + events); default without --text is raw array
+        #[arg(long)]
+        json: bool,
     },
     /// Emit an event to the local store and/or aegisd HTTP/UDP bus
     Emit {
@@ -133,6 +136,11 @@ enum Commands {
         interval_ms: u64,
         #[arg(long, default_value_t = 5)]
         from_recent: usize,
+        /// Exit after this many live events (0 = forever). Recent seed not counted.
+        #[arg(long, default_value_t = 0)]
+        max_events: u32,
+        #[arg(long)]
+        json: bool,
     },
     /// Run response playbooks against recent events (dry-run by default)
     Playbook {
@@ -2628,9 +2636,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             severity,
             since,
             text,
+            json,
         } => {
             if !event_log.exists() {
-                eprintln!("[aegis] no event log at {}", event_log.display());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": format!("no event log at {}", event_log.display()),
+                            "event_log": event_log.display().to_string(),
+                            "count": 0,
+                            "events": [],
+                        }))?
+                    );
+                } else {
+                    eprintln!("[aegis] no event log at {}", event_log.display());
+                }
                 std::process::exit(1);
             }
             let store = EventStore::open(&event_log)?;
@@ -2644,7 +2666,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let bound = match parse_since(s) {
                     Ok(b) => b,
                     Err(e) => {
-                        eprintln!("[aegis] {e}");
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": e.to_string(),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[aegis] {e}");
+                        }
                         std::process::exit(2);
                     }
                 };
@@ -2664,7 +2696,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if events.len() > limit {
                 events = events.split_off(events.len() - limit);
             }
-            if text {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "event_log": event_log.display().to_string(),
+                        "product": product,
+                        "severity": severity,
+                        "since": since,
+                        "limit": limit,
+                        "count": events.len(),
+                        "events": events,
+                    }))?
+                );
+            } else if text {
                 if events.is_empty() {
                     println!("[aegis] no matching events");
                 }
@@ -2716,38 +2762,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_log,
             interval_ms,
             from_recent,
+            max_events,
+            json,
         } => {
-            println!(
-                "[aegis] watching {} (Ctrl+C to stop)",
-                event_log.display()
-            );
+            if !json {
+                println!(
+                    "[aegis] watching {} (Ctrl+C to stop)",
+                    event_log.display()
+                );
+            }
             let store = EventStore::open(&event_log)?;
+            let mut seed: Vec<s2o_schema::AegisEvent> = Vec::new();
             if from_recent > 0 {
-                for ev in store.recent(from_recent)? {
-                    println!(
-                        "[{}] {:?} {:?} | {}",
-                        ev.ts.to_rfc3339().cyan(),
-                        ev.product,
-                        ev.action,
-                        ev.message
-                    );
+                seed = store.recent(from_recent)?;
+                if !json {
+                    for ev in &seed {
+                        println!(
+                            "[{}] {:?} {:?} | {}",
+                            ev.ts.to_rfc3339().cyan(),
+                            ev.product,
+                            ev.action,
+                            ev.message
+                        );
+                    }
+                    println!("{}", "---- live ----".dimmed());
                 }
-                println!("{}", "---- live ----".dimmed());
+            }
+            // With --json and max_events=0 and from_recent only: dump seed envelope and exit
+            if json && max_events == 0 && from_recent > 0 {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "watch",
+                        "mode": "seed_only",
+                        "event_log": event_log.display().to_string(),
+                        "from_recent": from_recent,
+                        "max_events": max_events,
+                        "seed_count": seed.len(),
+                        "live_count": 0,
+                        "seed": seed,
+                        "live": [],
+                    }))?
+                );
+                return Ok(());
             }
             let mut offset = store.byte_len().unwrap_or(0);
+            let mut live: Vec<s2o_schema::AegisEvent> = Vec::new();
+            let mut live_count = 0u32;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
                 let store = EventStore::open(&event_log)?;
                 let (next, events) = store.read_since(offset)?;
                 offset = next;
                 for ev in events {
-                    println!(
-                        "[{}] {:?} {:?} | {}",
-                        ev.ts.to_rfc3339().cyan(),
-                        ev.product,
-                        ev.action,
-                        ev.message
-                    );
+                    if json {
+                        if max_events > 0 {
+                            live.push(ev);
+                        } else {
+                            println!("{}", serde_json::to_string(&ev)?);
+                        }
+                    } else {
+                        println!(
+                            "[{}] {:?} {:?} | {}",
+                            ev.ts.to_rfc3339().cyan(),
+                            ev.product,
+                            ev.action,
+                            ev.message
+                        );
+                    }
+                    live_count += 1;
+                    if max_events > 0 && live_count >= max_events {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "watch",
+                                    "mode": "max_events",
+                                    "event_log": event_log.display().to_string(),
+                                    "from_recent": from_recent,
+                                    "max_events": max_events,
+                                    "seed_count": seed.len(),
+                                    "live_count": live_count,
+                                    "seed": seed,
+                                    "live": live,
+                                }))?
+                            );
+                        } else {
+                            println!("[aegis] max_events={max_events} reached");
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }

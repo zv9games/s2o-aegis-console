@@ -94,7 +94,10 @@ enum Commands {
         command: PolicyCmd,
     },
     /// Reload policy (placeholder — use `policy apply`)
-    Reload,
+    Reload {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -105,12 +108,16 @@ enum PolicyCmd {
         path: PathBuf,
         #[arg(long, default_value = ".aegis/events.jsonl")]
         event_log: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// Print an example policy document
     Example {
         /// wall | edge
         #[arg(long, default_value = "edge")]
         kind: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1464,26 +1471,81 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         Commands::Policy { command } => match command {
-            PolicyCmd::Example { kind } => {
+            PolicyCmd::Example { kind, json } => {
                 let doc = if kind.eq_ignore_ascii_case("wall") {
                     s2o_schema::PolicyDocument::example_wall_enable()
                 } else {
                     s2o_schema::PolicyDocument::example_edge_pack()
                 };
-                println!("{}", serde_json::to_string_pretty(&doc)?);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "kind": kind,
+                            "document": doc,
+                        }))?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&doc)?);
+                }
             }
-            PolicyCmd::Apply { path, event_log } => {
-                println!("[aegisd] loading policy {}", path.display());
-                let doc = load_policy_file(&path)?;
+            PolicyCmd::Apply {
+                path,
+                event_log,
+                json,
+            } => {
+                if !json {
+                    println!("[aegisd] loading policy {}", path.display());
+                }
+                let doc = match load_policy_file(&path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "action": "policy-apply",
+                                    "path": path.display().to_string(),
+                                    "error": e.to_string(),
+                                }))?
+                            );
+                        } else {
+                            eprintln!("[aegisd] load failed: {e}");
+                        }
+                        std::process::exit(2);
+                    }
+                };
                 let store = Arc::new(EventStore::open(&event_log)?);
                 let result = apply_policy(&doc, &fw, Some(store)).await?;
-                if result.ok {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": result.ok,
+                            "action": "policy-apply",
+                            "path": path.display().to_string(),
+                            "event_log": event_log.display().to_string(),
+                            "result": result,
+                        }))?
+                    );
+                } else if result.ok {
                     println!(
                         "{}",
                         format!("[aegisd] policy OK: {}", result.policy_name)
                             .green()
                             .bold()
                     );
+                    for a in &result.applied {
+                        println!("  applied : {}", a.green());
+                    }
+                    for s in &result.skipped {
+                        println!("  skipped : {}", s.dimmed());
+                    }
+                    for e in &result.errors {
+                        println!("  error   : {}", e.red());
+                    }
                 } else {
                     println!(
                         "{}",
@@ -1491,28 +1553,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .yellow()
                             .bold()
                     );
-                }
-                for a in &result.applied {
-                    println!("  applied : {}", a.green());
-                }
-                for s in &result.skipped {
-                    println!("  skipped : {}", s.dimmed());
-                }
-                for e in &result.errors {
-                    println!("  error   : {}", e.red());
+                    for a in &result.applied {
+                        println!("  applied : {}", a.green());
+                    }
+                    for s in &result.skipped {
+                        println!("  skipped : {}", s.dimmed());
+                    }
+                    for e in &result.errors {
+                        println!("  error   : {}", e.red());
+                    }
                 }
                 if !result.ok {
                     std::process::exit(1);
                 }
             }
         },
-        Commands::Reload => {
-            eprintln!(
-                "{}",
-                "[AEGISD] Reload: use `aegisd policy apply <file>` (no daemon-held policy file yet)."
-                    .yellow()
-                    .bold()
-            );
+        Commands::Reload { json } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "reload",
+                        "error": "use `aegisd policy apply <file>` (no daemon-held policy file yet)",
+                        "hint": "aegisd policy apply policies/examples/posture-pack.json --json",
+                    }))?
+                );
+            } else {
+                eprintln!(
+                    "{}",
+                    "[AEGISD] Reload: use `aegisd policy apply <file>` (no daemon-held policy file yet)."
+                        .yellow()
+                        .bold()
+                );
+            }
             std::process::exit(2);
         }
     }

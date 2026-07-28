@@ -131,6 +131,8 @@ enum Commands {
     },
     Realtime {
         action: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2705,11 +2707,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
-        Commands::Realtime { action } => {
-            eprintln!(
-                "[cyberdefender] kernel realtime shield not implemented (action={action})."
-            );
-            eprintln!("Use: cyberdefender watch <dir>  for userspace poll scan");
+        Commands::Realtime { action, json } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "action": "realtime",
+                        "requested": action,
+                        "error": "kernel realtime shield not implemented",
+                        "hint": "cyberdefender watch <dir> for userspace poll scan",
+                        "implemented": false,
+                    }))?
+                );
+            } else {
+                eprintln!(
+                    "[cyberdefender] kernel realtime shield not implemented (action={action})."
+                );
+                eprintln!("Use: cyberdefender watch <dir>  for userspace poll scan");
+            }
             std::process::exit(2);
         }
     }

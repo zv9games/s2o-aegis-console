@@ -175,6 +175,17 @@ cargo run -p cyberztna -- init --json
 cargo run -p cyberztna -- mtls init --json
 cargo run -p cyberztna -- jwt keygen --json
 cargo run -p cyberztna -- oauth code --url-only --json
+cargo run -p aegisd -- policy example --kind edge --json
+cargo run -p aegisd -- policy apply policies/examples/posture-pack.json --json
+cargo run -p aegisd -- reload --json
+cargo run -p aegis-cli -- events --json
+cargo run -p aegis-cli -- watch --from-recent 3 --json
+cargo run -p cybersiem -- collect --stdin-once --json
+cargo run -p cybersiem -- follow --from-recent 3 --json
+cargo run -p cyberedr -- trace --json
+cargo run -p cyberedr -- watch --json
+cargo run -p cyberedr -- net-watch --json
+cargo run -p cyberdefender -- realtime status --json
 cargo run -p aegis-cli -- policy apply policies/examples/dns-intel-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/posture-pack.json --json
 cargo run -p aegis-cli -- policy plan policies/examples/mesh-seed-pack.json --json

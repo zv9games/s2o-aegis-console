@@ -49,6 +49,8 @@ enum Commands {
         /// Also accept one line from stdin as a test inject then exit
         #[arg(long)]
         stdin_once: bool,
+        #[arg(long)]
+        json: bool,
     },
     Export {
         /// json | syslog
@@ -175,6 +177,11 @@ enum Commands {
         /// Print existing tail first
         #[arg(long, default_value_t = 5)]
         from_recent: usize,
+        /// Exit after this many live events (0 = forever). Seed not counted.
+        #[arg(long, default_value_t = 0)]
+        max_events: u32,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -641,6 +648,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             listen,
             max_events,
             stdin_once,
+            json,
         } => {
             if let Some(p) = event_log.parent() {
                 let _ = std::fs::create_dir_all(p);
@@ -653,32 +661,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 io::stdin().read_to_string(&mut buf)?;
                 let line = buf.lines().next().unwrap_or(buf.trim());
                 if line.is_empty() {
-                    eprintln!("[cyberlog] empty stdin");
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "ok": false,
+                                "action": "collect",
+                                "mode": "stdin_once",
+                                "error": "empty stdin",
+                            }))?
+                        );
+                    } else {
+                        eprintln!("[cyberlog] empty stdin");
+                    }
                     std::process::exit(2);
                 }
                 let ev = syslog_to_event(None, line);
                 store.append(&ev)?;
-                println!(
-                    "{}",
-                    format!("[cyberlog] ingested stdin → {}", event_log.display())
-                        .green()
-                        .bold()
-                );
-                println!("  {}", ev.message);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "action": "collect",
+                            "mode": "stdin_once",
+                            "event_log": event_log.display().to_string(),
+                            "ingested": 1,
+                            "event": ev,
+                        }))?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!("[cyberlog] ingested stdin → {}", event_log.display())
+                            .green()
+                            .bold()
+                    );
+                    println!("  {}", ev.message);
+                }
                 return Ok(());
             }
 
             let sock = tokio::net::UdpSocket::bind(&listen).await?;
-            println!(
-                "{}",
-                format!(
-                    "[cyberlog] collect UDP syslog on {listen} → {} (Ctrl+C to stop)",
-                    event_log.display()
-                )
-                .cyan()
-            );
+            if !json {
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberlog] collect UDP syslog on {listen} → {} (Ctrl+C to stop)",
+                        event_log.display()
+                    )
+                    .cyan()
+                );
+            }
             let mut buf = vec![0u8; 65535];
             let mut n = 0u64;
+            let mut ingested = Vec::new();
             loop {
                 let (len, peer) = sock.recv_from(&mut buf).await?;
                 let raw = String::from_utf8_lossy(&buf[..len]);
@@ -690,20 +727,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let ev = syslog_to_event(Some(peer), line);
                     store.append(&ev)?;
                     n += 1;
-                    println!(
-                        "[{}] {:?} from {} | {}",
-                        n.to_string().yellow(),
-                        ev.severity,
-                        peer,
-                        ev.message
-                    );
-                    if max_events > 0 && n >= max_events {
+                    if json {
+                        if max_events > 0 {
+                            ingested.push(ev);
+                        } else {
+                            println!("{}", serde_json::to_string(&ev)?);
+                        }
+                    } else {
                         println!(
-                            "{}",
-                            format!("[cyberlog] max_events={max_events} reached")
-                                .green()
-                                .bold()
+                            "[{}] {:?} from {} | {}",
+                            n.to_string().yellow(),
+                            ev.severity,
+                            peer,
+                            ev.message
                         );
+                    }
+                    if max_events > 0 && n >= max_events {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "collect",
+                                    "mode": "udp",
+                                    "listen": listen,
+                                    "event_log": event_log.display().to_string(),
+                                    "max_events": max_events,
+                                    "ingested": n,
+                                    "events": ingested,
+                                }))?
+                            );
+                        } else {
+                            println!(
+                                "{}",
+                                format!("[cyberlog] max_events={max_events} reached")
+                                    .green()
+                                    .bold()
+                            );
+                        }
                         return Ok(());
                     }
                 }
@@ -1297,38 +1358,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_log,
             interval_ms,
             from_recent,
+            max_events,
+            json,
         } => {
-            println!(
-                "[cyberlog] following {} (Ctrl+C to stop)",
-                event_log.display()
-            );
+            if !json {
+                println!(
+                    "[cyberlog] following {} (Ctrl+C to stop)",
+                    event_log.display()
+                );
+            }
             let store = EventStore::open(&event_log)?;
+            let mut seed = Vec::new();
             if from_recent > 0 {
-                for ev in store.recent(from_recent)? {
-                    println!(
-                        "[{}] {:?} {:?} | {}",
-                        ev.ts.to_rfc3339().cyan(),
-                        ev.product,
-                        ev.action,
-                        ev.message
-                    );
+                seed = store.recent(from_recent)?;
+                if !json {
+                    for ev in &seed {
+                        println!(
+                            "[{}] {:?} {:?} | {}",
+                            ev.ts.to_rfc3339().cyan(),
+                            ev.product,
+                            ev.action,
+                            ev.message
+                        );
+                    }
+                    println!("{}", "---- live ----".dimmed());
                 }
-                println!("{}", "---- live ----".dimmed());
+            }
+            if json && max_events == 0 && from_recent > 0 {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "action": "follow",
+                        "mode": "seed_only",
+                        "event_log": event_log.display().to_string(),
+                        "from_recent": from_recent,
+                        "max_events": max_events,
+                        "seed_count": seed.len(),
+                        "live_count": 0,
+                        "seed": seed,
+                        "live": [],
+                    }))?
+                );
+                return Ok(());
             }
             let mut offset = store.byte_len().unwrap_or(0);
+            let mut live = Vec::new();
+            let mut live_count = 0u32;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
                 let store = EventStore::open(&event_log)?;
                 let (next, events) = store.read_since(offset)?;
                 offset = next;
                 for ev in events {
-                    println!(
-                        "[{}] {:?} {:?} | {}",
-                        ev.ts.to_rfc3339().cyan(),
-                        ev.product,
-                        ev.action,
-                        ev.message
-                    );
+                    if json {
+                        if max_events > 0 {
+                            live.push(ev);
+                        } else {
+                            println!("{}", serde_json::to_string(&ev)?);
+                        }
+                    } else {
+                        println!(
+                            "[{}] {:?} {:?} | {}",
+                            ev.ts.to_rfc3339().cyan(),
+                            ev.product,
+                            ev.action,
+                            ev.message
+                        );
+                    }
+                    live_count += 1;
+                    if max_events > 0 && live_count >= max_events {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": true,
+                                    "action": "follow",
+                                    "mode": "max_events",
+                                    "event_log": event_log.display().to_string(),
+                                    "from_recent": from_recent,
+                                    "max_events": max_events,
+                                    "seed_count": seed.len(),
+                                    "live_count": live_count,
+                                    "seed": seed,
+                                    "live": live,
+                                }))?
+                            );
+                        } else {
+                            println!("[cyberlog] max_events={max_events} reached");
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }
