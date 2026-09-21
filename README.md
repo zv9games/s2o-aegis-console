@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/zv9games/s2o-aegis-console/main/assets/aegis_banner.png" alt="S2O Aegis Banner" width="100%" onerror="this.style.display='none'"/>
+  <img src="assets/aegis_poster.jpg" alt="S2O Aegis — The Universal Cyber-Ops Substrate" width="480"/>
 </p>
 
 # S2O AEGIS: The Universal Cyber-Ops Substrate
-### *Unbreakable Sovereignty for the Modern Operating System.*
+### *Post-Agent Era. Total Control.*
 
 [![Rust](https://img.shields.io/badge/Language-Pure%20Rust%202021-DEA584?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
 [![Substrate](https://img.shields.io/badge/Substrate-Tier--0%20Userspace%20Native-00E696?style=for-the-badge)](https://split2ops.com)
