@@ -154,8 +154,8 @@ Designed for **Managed Service Providers (MSPs), Financial Institutions, and Ent
 * Priority threat intelligence feeds and custom enterprise compliance modules.
 
 For commercial licensing and enterprise procurement inquiries:
-📧 **Email:** [enterprise@split2ops.com](mailto:enterprise@split2ops.com)  
-🌐 **Website:** [https://split2ops.com](https://split2ops.com)
+📧 **Email:** [enterprise@zv9games.org](mailto:enterprise@zv9games.org)  
+
 
 ---
 
