@@ -19,6 +19,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c71b1793ee61086797f5c80b6efa2b8ffa6d5dd703f118545808a7f2e27f7046"
 
 [[package]]
+name = "aegis-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "colored",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
+ "s2o-bus",
+ "s2o-schema",
+ "s2o_net_lib",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aegisd"
 version = "0.1.0"
 dependencies = [
@@ -27,8 +43,10 @@ dependencies = [
  "colored",
  "cyberwall-backend-windows",
  "cyberwall-core",
+ "s2o-bus",
  "s2o-schema",
  "s2o-store",
+ "s2o_net_lib",
  "serde",
  "serde_json",
  "tokio",
@@ -790,6 +808,8 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "s2o-schema",
+ "s2o-store",
  "s2o_net_lib",
  "serde",
  "serde_json",
@@ -814,6 +834,7 @@ dependencies = [
 name = "cyberintel"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "colored",
  "reqwest",
@@ -896,6 +917,8 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
  "serde",
  "serde_json",
  "tokio",
@@ -2853,9 +2876,14 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 name = "s2o-bus"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "parking_lot 0.12.3",
  "s2o-schema",
  "s2o-store",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4161,11 +4189,17 @@ dependencies = [
  "chrono",
  "crossbeam",
  "crossbeam-channel",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
  "eframe",
  "futures",
  "libc",
  "rand",
+ "s2o-bus",
+ "s2o-schema",
  "s2o_net_lib",
+ "serde",
+ "serde_json",
  "tokio",
  "winapi",
  "winit",

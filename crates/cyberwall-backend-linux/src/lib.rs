@@ -31,7 +31,19 @@ impl FirewallEngine for LinuxFirewallEngine {
             profile_domain: is_nft_active,
             platform: "Linux".to_string(),
             backend_driver: "Linux Kernel nftables / eBPF Engine".to_string(),
+            substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
         })
+    }
+
+    fn driver_capabilities(&self) -> cyberwall_core::DriverCapabilities {
+        cyberwall_core::DriverCapabilities {
+            substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
+            os: cyberwall_core::OperatingSystem::Linux,
+            supports_packet_injection: true,
+            supports_process_lineage: true,
+            supports_kernel_bypass: false,
+            driver_version: Some("nftables / ProcFS Userspace Substrate".to_string()),
+        }
     }
 
     async fn set_enabled(&self, enabled: bool) -> EngineResult<()> {
@@ -75,9 +87,21 @@ impl FirewallEngine for LinuxFirewallEngine {
                 action: RuleAction::Allow,
                 direction: RuleDirection::Inbound,
                 profile: ProfileType::All,
+                protocol: None,
+                local_ports: None,
+                remote_ports: None,
+                remote_addresses: None,
                 application: Some("/usr/local/bin/cyberwalld".to_string()),
             }
         ])
+    }
+
+    async fn add_rule(&self, _rule: &FirewallRule) -> EngineResult<()> {
+        Err(EngineError("Linux add_rule not yet implemented".into()))
+    }
+
+    async fn delete_rule(&self, _rule_name: &str) -> EngineResult<()> {
+        Err(EngineError("Linux delete_rule not yet implemented".into()))
     }
 
     async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {

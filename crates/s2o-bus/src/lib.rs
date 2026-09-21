@@ -1,7 +1,12 @@
 //! In-process Aegis event bus with optional durable store fan-out.
 //!
-//! Phase 0: broadcast channel via callbacks + optional JSONL store.
-//! Later: named pipe / gRPC for multi-process agents.
+//! Multi-OS Universal IPC: Named Pipes on Windows, Unix Domain Sockets on Linux/macOS.
+
+pub mod ipc;
+pub mod protocol;
+
+pub use ipc::{AegisIpcClient, AegisIpcServer, RequestHandler};
+pub use protocol::{IpcRequest, IpcResponse, AEGIS_PIPE_NAME, AEGIS_UNIX_SOCKET};
 
 use parking_lot::RwLock;
 use s2o_schema::AegisEvent;

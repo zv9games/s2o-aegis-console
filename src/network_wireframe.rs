@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use winapi::um::winsock2::{
     WSADATA, WSAStartup, WSACleanup, SOCKET, INVALID_SOCKET, SOCK_RAW, socket, WSAGetLastError,
     SOCKET_ERROR, bind, setsockopt, recv, select, timeval, fd_set,
@@ -143,15 +145,13 @@ where
     println!("Starting packet capture...");
 
     while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-        unsafe {
-            for fd in &mut readfds.fd_array {
-                *fd = 0;
-            }
-            readfds.fd_count = 0;
-            if readfds.fd_count < 64 {
-                readfds.fd_array[readfds.fd_count as usize] = socket;
-                readfds.fd_count += 1;
-            }
+        for fd in &mut readfds.fd_array {
+            *fd = 0;
+        }
+        readfds.fd_count = 0;
+        if readfds.fd_count < 64 {
+            readfds.fd_array[readfds.fd_count as usize] = socket;
+            readfds.fd_count += 1;
         }
 
         println!("Checking for packets...");

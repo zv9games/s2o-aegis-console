@@ -17,6 +17,7 @@ members = [
     "crates/cyberid",
     "crates/cyberztna",
     "crates/aegisd",
+    "crates/aegis-cli",
 ]
 
 [package]
@@ -38,6 +39,12 @@ s2o_net_lib = { path = "../net-lib" }
 futures = "0.3"
 winapi = { version = "0.3", features = ["winsock2", "ws2ipdef"] }
 libc = "0.2"
+cyberwall-core = { path = "crates/cyberwall-core" }
+cyberwall-backend-windows = { path = "crates/cyberwall-backend-windows" }
+s2o-bus = { path = "crates/s2o-bus" }
+s2o-schema = { path = "crates/s2o-schema" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 
 [[bin]]
@@ -67,6 +74,10 @@ path = "src/cyber_firewall.rs"
 [[bin]]
 name = "unblock_firewall"
 path = "src/unblock_firewall.rs"
+
+[[bin]]
+name = "aegis-gui"
+path = "src/aegis_gui.rs"
 
 
 

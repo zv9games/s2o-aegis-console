@@ -173,7 +173,12 @@ target\debug\cyberid.exe posture
 Split2ops Software provides enterprise licensing, custom kernel module development, and cloud management integration.
 
 - **Developer:** Split2ops Software
-- **Website:** [https://github.com/zv9games/s2o.xallfirewall](https://github.com/zv9games/s2o.xallfirewall)
-- **Contact:** `support@zv9games.org`
+- **Open Source License:** AGPL-3.0 (Community Edition)
+- **Commercial License:** S2O Aegis Enterprise Commercial License
+- **Enterprise Contact:** `enterprise@split2ops.com`
+
+### Dual-Licensing Model
+- **Community Edition (AGPLv3)**: Free and open-source for personal use, security research, and community contributions. All derivative network software must remain copyleft.
+- **Enterprise Commercial License**: For organizations seeking commercial distribution, proprietary integration, SLA support, enterprise fleet orchestration, or deployment without AGPLv3 copyleft reciprocity. Contact `enterprise@split2ops.com`.
 
 *Copyright © 2026 Split2ops Software. All rights reserved.*

@@ -213,7 +213,7 @@ fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     // Embed NotoSansJP-Bold font bytes from s2o_net_lib snl0.5
-    let font_bytes = include_bytes!("../../s2o.s2o_net_lib/snl0.5/NotoSansJP-Bold.ttf");
+    let font_bytes = include_bytes!("../../net-lib/snl0.5/NotoSansJP-Bold.ttf");
     fonts.font_data.insert(
         "NotoSansJP".to_owned(),
         egui::FontData::from_static(font_bytes),
