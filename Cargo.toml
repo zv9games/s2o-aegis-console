@@ -5,6 +5,8 @@ members = [
     "crates/s2o-platform",
     "crates/s2o-attest",
     "crates/aegis-fleet",
+    "crates/s2o-policy",
+    "crates/s2o-audit",
     "crates/s2o-store",
     "crates/s2o-bus",
     "crates/cyberwall-core",

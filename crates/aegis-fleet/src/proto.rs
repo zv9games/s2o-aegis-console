@@ -31,7 +31,30 @@ pub enum Request {
         posture: serde_json::Value,
         /// cyberid JWS; verified against the key pinned at enrollment.
         cyberid_token: String,
+        /// Highest policy bundle version the agent has processed.
+        #[serde(default)]
+        last_policy_version: u64,
+        /// Outcomes of bundles processed since the last heartbeat.
+        #[serde(default)]
+        policy_results: Vec<PolicyResult>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyStatus {
+    Applied,
+    /// Signature/quorum verified, but this action class is not implemented on the agent.
+    NotImplemented,
+    /// Verification failed (bad signature, quorum, rollback).
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyResult {
+    pub version: u64,
+    pub status: PolicyStatus,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +73,13 @@ pub enum Response {
     HeartbeatAck {
         agent_id: String,
         server_time_unix: i64,
+        /// Signed bundles newer than the agent's `last_policy_version`.
+        #[serde(default)]
+        bundles: Vec<s2o_policy::SignedBundle>,
+        /// Latest signed head of the server audit log (agents keep it to
+        /// detect later truncation/forks).
+        #[serde(default)]
+        audit_head: Option<s2o_audit::SignedHead>,
     },
     Error {
         message: String,

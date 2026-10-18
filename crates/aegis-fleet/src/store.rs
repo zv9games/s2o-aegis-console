@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS agents (
     last_posture TEXT,
     revoked INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS bundles (
+    version INTEGER PRIMARY KEY,
+    action TEXT NOT NULL,
+    json TEXT NOT NULL,
+    submitted_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS policy_results (
+    agent_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    reported_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, version)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -188,6 +202,64 @@ impl Store {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn max_bundle_version(&self) -> FleetResult<u64> {
+        let v: Option<i64> =
+            self.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT MAX(version) FROM bundles", [], |r| r.get(0))?;
+        Ok(v.unwrap_or(0) as u64)
+    }
+
+    pub fn add_bundle(&self, version: u64, action: &str, json: &str, now: i64) -> FleetResult<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO bundles (version, action, json, submitted_at) VALUES (?1, ?2, ?3, ?4)",
+            params![version as i64, action, json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Bundle JSON documents with version > `after`, oldest first.
+    pub fn bundles_after(&self, after: u64) -> FleetResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st =
+            conn.prepare("SELECT json FROM bundles WHERE version > ?1 ORDER BY version")?;
+        let rows = st
+            .query_map(params![after as i64], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn record_policy_result(
+        &self,
+        agent_id: &str,
+        version: u64,
+        status: &str,
+        detail: &str,
+        now: i64,
+    ) -> FleetResult<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO policy_results (agent_id, version, status, detail, reported_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![agent_id, version as i64, status, detail, now],
+        )?;
+        Ok(())
+    }
+
+    /// (agent_id, version, status, detail)
+    pub fn policy_results(&self) -> FleetResult<Vec<(String, u64, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT agent_id, version, status, detail FROM policy_results ORDER BY reported_at",
+        )?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Persisted `require_hardware_keys` setting (default false).
