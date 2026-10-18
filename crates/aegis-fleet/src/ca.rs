@@ -58,8 +58,15 @@ impl FleetCa {
 
     /// SHA-256 fingerprint (hex) of the CA certificate DER, for out-of-band pinning.
     pub fn fingerprint(&self) -> String {
+        // Hash the stored PEM's DER, not the in-memory issuer object, which
+        // is re-signed on load and therefore has different bytes.
         use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(self.cert.der()))
+        let der = rustls_pemfile::certs(&mut self.cert_pem.as_bytes())
+            .next()
+            .and_then(Result::ok)
+            .map(|c| c.to_vec())
+            .unwrap_or_default();
+        hex::encode(sha2::Sha256::digest(der))
     }
 
     pub fn save(&self, dir: &Path) -> FleetResult<()> {

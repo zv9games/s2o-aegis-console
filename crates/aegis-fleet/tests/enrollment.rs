@@ -275,6 +275,7 @@ async fn ca_reloaded_from_disk_issues_certs_that_chain_to_original() {
     original.save(&dir).unwrap();
     let reloaded = Arc::new(FleetCa::load(&dir).unwrap());
     assert_eq!(reloaded.cert_pem(), original.cert_pem());
+    assert_eq!(reloaded.fingerprint(), original.fingerprint());
 
     let store = Arc::new(Store::in_memory().unwrap());
     let (cert, key) = reloaded
