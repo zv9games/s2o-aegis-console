@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let conns = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::telemetry::get_active_tcp_connections()
+                s2o_platform::telemetry::get_active_tcp_connections()
             })
             .await?;
 
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Processes { filter, limit } => {
             let conns = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::telemetry::get_active_tcp_connections()
+                s2o_platform::telemetry::get_active_tcp_connections()
             })
             .await?;
 
@@ -178,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 let conns = tokio::task::spawn_blocking(|| {
-                    s2o_net_lib::telemetry::get_active_tcp_connections()
+                    s2o_platform::telemetry::get_active_tcp_connections()
                 })
                 .await?;
 

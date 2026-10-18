@@ -19,4 +19,4 @@ cyberwall-core = { path = "../cyberwall-core" }
 cyberwall-backend-windows = { path = "../cyberwall-backend-windows" }
 s2o-schema = { path = "../s2o-schema" }
 s2o-bus = { path = "../s2o-bus" }
-s2o_net_lib = { path = "../../../net-lib" }
+s2o-platform = { path = "../s2o-platform" }

@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let st = fw.get_status().await?;
 
             let conns = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::telemetry::get_active_tcp_connections()
+                s2o_platform::telemetry::get_active_tcp_connections()
             }).await.unwrap_or_default();
 
             #[derive(serde::Serialize)]

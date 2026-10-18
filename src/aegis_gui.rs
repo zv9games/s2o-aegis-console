@@ -759,7 +759,6 @@ pub fn run_gui() {
 
     // Spawn async background worker that manages live OS querying
     std::thread::spawn(move || {
-        let _com = unsafe { s2o_net_lib::util1::init_com() };
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async move {
@@ -911,7 +910,7 @@ pub fn run_gui() {
                     substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
                 });
 
-                let conns = s2o_net_lib::telemetry::get_active_tcp_connections();
+                let conns = s2o_platform::telemetry::get_active_tcp_connections();
 
                 // Read SIEM events
                 let mut events = Vec::new();

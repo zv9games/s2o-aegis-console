@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let is_service_active = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::defender::DefenderController::is_defender_active()
+                s2o_platform::defender::is_defender_active()
             })
             .await?;
 
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!(" S2O Known Signatures: {}", format!("{} indexed IOC hashes", KNOWN_THREAT_HASHES.len()).bold());
-            println!(" MpCmdRun Helper   : {}", match s2o_net_lib::defender::DefenderController::find_mp_cmd_run() {
+            println!(" MpCmdRun Helper   : {}", match s2o_platform::defender::find_mp_cmd_run() {
                 Some(p) => p.display().to_string().green(),
                 None => "Not found".yellow(),
             });
@@ -221,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::ScanNative => {
             println!("{}", "[cyberdefender] launching native Windows Defender scan via MpCmdRun...".cyan());
             tokio::task::spawn_blocking(|| {
-                s2o_net_lib::defender::DefenderController::run_scan_native()
+                s2o_platform::defender::run_scan_native()
             })
             .await?
             .map_err(|e| format!("Native scan execution error: {e}"))?;
@@ -230,7 +230,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::UpdateDefs => {
             println!("{}", "[cyberdefender] triggering Defender signature update...".cyan());
             tokio::task::spawn_blocking(|| {
-                s2o_net_lib::defender::DefenderController::update_defender_native()
+                s2o_platform::defender::update_defender_native()
             })
             .await?
             .map_err(|e| format!("Definition update error: {e}"))?;

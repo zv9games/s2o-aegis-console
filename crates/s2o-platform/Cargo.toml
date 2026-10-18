@@ -1,0 +1,17 @@
+[package]
+name = "s2o-platform"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "In-repo OS integration layer for S2O Aegis (firewall, Defender, socket telemetry, packet-capture port)"
+
+[features]
+default = []
+# Reserved port for a kernel packet driver (WinDivert today, a CA-signed
+# custom driver/DLL later). Off by default. Enabling it compiles the driver
+# backend slot, which currently reports itself as not yet implemented.
+packet-driver = []
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

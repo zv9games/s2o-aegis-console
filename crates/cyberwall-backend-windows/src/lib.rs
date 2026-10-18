@@ -22,20 +22,20 @@ impl Default for WindowsFirewallEngine {
 impl FirewallEngine for WindowsFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {
         let profiles = tokio::task::spawn_blocking(|| {
-            s2o_net_lib::firewall::FirewallController::get_profile_status()
+            s2o_platform::firewall::get_profile_status()
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?
         .map_err(|e| EngineError(format!("COM profile status: {e:?}")))?;
 
         let outbound_blocked = tokio::task::spawn_blocking(|| {
-            s2o_net_lib::firewall::FirewallController::is_outbound_blocked().unwrap_or(false)
+            s2o_platform::firewall::is_outbound_blocked().unwrap_or(false)
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?;
 
         let defender_active = tokio::task::spawn_blocking(|| {
-            s2o_net_lib::defender::DefenderController::is_defender_active()
+            s2o_platform::defender::is_defender_active()
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?;
@@ -48,7 +48,7 @@ impl FirewallEngine for WindowsFirewallEngine {
             profile_public: profiles.public,
             profile_domain: profiles.domain,
             platform: "Windows".to_string(),
-            backend_driver: "Win32 COM INetFwPolicy2 (netsh fallback on set)".to_string(),
+            backend_driver: "netsh advfirewall + PowerShell NetSecurity cmdlets".to_string(),
             substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
         })
     }
@@ -58,18 +58,18 @@ impl FirewallEngine for WindowsFirewallEngine {
             substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
             os: cyberwall_core::OperatingSystem::Windows,
             supports_packet_injection: false,
-            supports_process_lineage: true,
+            supports_process_lineage: false,
             supports_kernel_bypass: false,
-            driver_version: Some("Tier-0 WFP/COM Userspace Substrate".to_string()),
+            driver_version: Some("userspace (netsh / PowerShell), no kernel driver".to_string()),
         }
     }
 
     async fn set_enabled(&self, enabled: bool) -> EngineResult<()> {
         tokio::task::spawn_blocking(move || {
             if enabled {
-                s2o_net_lib::firewall::FirewallController::enable_firewall()
+                s2o_platform::firewall::enable_firewall()
             } else {
-                s2o_net_lib::firewall::FirewallController::disable_firewall()
+                s2o_platform::firewall::disable_firewall()
             }
         })
         .await
@@ -82,9 +82,9 @@ impl FirewallEngine for WindowsFirewallEngine {
     async fn set_outbound_block(&self, blocked: bool) -> EngineResult<()> {
         tokio::task::spawn_blocking(move || {
             if blocked {
-                s2o_net_lib::firewall::FirewallController::airplane_mode_enable()
+                s2o_platform::firewall::airplane_mode_enable()
             } else {
-                s2o_net_lib::firewall::FirewallController::airplane_mode_disable()
+                s2o_platform::firewall::airplane_mode_disable()
             }
         })
         .await
@@ -96,7 +96,7 @@ impl FirewallEngine for WindowsFirewallEngine {
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {
         let rules = tokio::task::spawn_blocking(|| {
-            s2o_net_lib::firewall::FirewallController::get_rules()
+            s2o_platform::firewall::get_rules()
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?
@@ -111,7 +111,11 @@ impl FirewallEngine for WindowsFirewallEngine {
                     "Block" => RuleAction::Block,
                     _ => RuleAction::Allow,
                 },
-                direction: RuleDirection::Inbound,
+                direction: if r.direction == "Outbound" {
+                    RuleDirection::Outbound
+                } else {
+                    RuleDirection::Inbound
+                },
                 profile: ProfileType::All,
                 protocol: None,
                 local_ports: None,
@@ -198,40 +202,8 @@ impl FirewallEngine for WindowsFirewallEngine {
     async fn delete_rule(&self, rule_name: &str) -> EngineResult<()> {
         let name = rule_name.to_string();
         tokio::task::spawn_blocking(move || {
-            // First try COM removal via s2o_net_lib
-            if let Ok(()) = s2o_net_lib::firewall::FirewallController::remove_firewall_rule_by_name(&name) {
-                return Ok(());
-            }
-
-            // Fallback to netsh
-            let mut cmd = std::process::Command::new("netsh");
-            cmd.args([
-                "advfirewall",
-                "firewall",
-                "delete",
-                "rule",
-                &format!("name={}", name),
-            ]);
-
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
-            }
-
-            let output = cmd.output().map_err(|e| {
-                EngineError(format!("Failed to execute netsh delete rule: {}", e))
-            })?;
-
-            if output.status.success() {
-                Ok(())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                Err(EngineError(format!(
-                    "netsh delete rule failed: {stderr} {stdout}"
-                )))
-            }
+            s2o_platform::firewall::remove_firewall_rule_by_name(&name)
+                .map_err(|e| EngineError(format!("delete rule '{name}' failed: {e}")))
         })
         .await
         .map_err(|e| EngineError(e.to_string()))?
