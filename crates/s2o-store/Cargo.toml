@@ -2,6 +2,7 @@
 name = "s2o-store"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
 authors = ["Split2ops Software <support@zv9games.org>"]
 description = "S2O Aegis local event store (JSONL append-only MVP)"
 
