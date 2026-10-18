@@ -2,7 +2,8 @@
 name = "cyberdns"
 version = "0.1.0"
 edition = "2021"
-authors = ["Split2ops Software"]
+license = "AGPL-3.0-only"
+authors = ["Split2ops Software <support@zv9games.org>"]
 
 [[bin]]
 name = "cyberdns"
@@ -14,4 +15,4 @@ tokio = { version = "1.0", features = ["full"] }
 colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }

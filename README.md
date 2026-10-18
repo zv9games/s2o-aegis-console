@@ -3,102 +3,80 @@
 </p>
 
 # S2O AEGIS: The Universal Cyber-Ops Substrate
-### *Post-Agent Era. Total Control.*
 
-[![Rust](https://img.shields.io/badge/Language-Pure%20Rust%202021-DEA584?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
-[![Substrate](https://img.shields.io/badge/Substrate-Tier--0%20Userspace%20Native-00E696?style=for-the-badge)](https://split2ops.com)
-[![Kernel Readiness](https://img.shields.io/badge/Kernel%20Driver-Standby%20Ready-64C8FF?style=for-the-badge)](https://split2ops.com)
-[![Footprint](https://img.shields.io/badge/Memory%20Footprint-%3C%2035%20MB-blueviolet?style=for-the-badge)](https://split2ops.com)
-[![License](https://img.shields.io/badge/License-Dual%20AGPLv3%20%2F%20Commercial-FF4B4B?style=for-the-badge)](LICENSE)
+[![Rust](https://img.shields.io/badge/Language-Rust%202021-DEA584?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+[![Status](https://img.shields.io/badge/Status-Pre--release-orange?style=for-the-badge)](#the-9-pillars-of-aegis)
+[![License](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20Commercial-FF4B4B?style=for-the-badge)](NOTICE)
+
+> **Status: pre-release.** Aegis is under active development. The table below
+> marks each pillar **Working**, **Partial** or **Planned** based on what the
+> code does today, not on the roadmap. Most features are Windows-first.
 
 ---
 
-## The Genesis: Why Aegis Exists
+## Why Aegis Exists
 
-The enterprise cybersecurity landscape is fractured, bloated, and perilous:
-* **The "CrowdStrike Paradox"**: Heavy, fragile kernel-mode drivers crash millions of endpoints worldwide, causing billions in downtime.
-* **The 7-Agent Tax**: Organizations deploy 5 to 7 disconnected agents eating 2–4 GB of RAM, causing lag, thermal throttling, and internal telemetry collision.
-* **The Black Box Lie**: Closed proprietary agents conceal vulnerabilities and leak system telemetry to third-party clouds.
+The enterprise endpoint-security landscape is fractured:
+* **Kernel-driver fragility**: heavy kernel-mode agents can take down whole fleets when they fail.
+* **The multi-agent tax**: organizations run 5 to 7 disconnected agents, each with its own console, telemetry and resource cost.
+* **Black-box agents**: closed agents are hard to audit and send telemetry to third-party clouds.
 
-**S2O Aegis is the cure.** Engineered from the gods in high-performance Rust, Aegis replaces fragmented legacy sprawl with a **single, unified, mathematical fortress**.
+**S2O Aegis aims to be a single, auditable, open-core agent and console for fleet security and observation**, engineered from the ground up in Rust. It runs in **userspace by default** (no paid driver-signing costs), using OS-native tools such as `netsh`/NetSecurity cmdlets, Microsoft Defender, `netstat`/procfs and Cloudflare DNS-over-HTTPS.
 
-Operating under a **Tier-0 Userspace Architecture ($0/year recurring driver fees)**, Aegis delivers 9 enterprise security disciplines through direct native OS calls (`INetFwPolicy2`, WFP User API, IP Helper, Cloudflare DoH, Curve25519) with a RAM footprint of **under 35 MB**.
-
-When your organization demands low-level packet ring-0 inspection, Aegis features a **pluggable driver abstraction layer** that connects to a Windows Kernel-Mode Callout Driver (`.sys`), Linux eBPF, or Apple NetworkExtension on demand without changing a single line of business logic.
+For deep packet inspection, Aegis has a **pluggable packet-backend port** (`PacketBackend` in `crates/s2o-platform`). The default build ships a `NoDriver` backend; an optional `packet-driver` feature reserves the slot for WinDivert or a future CA-signed custom driver. The driver binding itself is **Planned**.
 
 ---
 
 ## The 9 Pillars of Aegis
 
-Aegis consolidates an entire Security Operations Center (SOC) stack into a unified matrix:
+| # | Pillar | Crate / binary | Status | What works today | Not yet |
+| :---: | :--- | :--- | :---: | :--- | :--- |
+| I | **S2O Cyberwall** (firewall) | `cyberwall-*`, `cyberwall` | **Working** (Windows) / **Partial** (Linux) | Windows: enable/disable firewall, outbound "airplane" block, list/add/delete rules via `netsh` and NetSecurity cmdlets. Linux: status probe only. | Declarative `apply_policy` (all OSes); Linux rule control; macOS |
+| II | **S2O CyberMesh** (overlay VPN) | `cybermesh` | **Partial** | Real X25519 WireGuard keypairs; writes WireGuard config files; local peer list | Bringing tunnels up, peer exchange, any network control plane |
+| III | **S2O CyberDefender** (antivirus) | `cyberdefender` | **Working** (Windows) | On-demand recursive SHA-256 scan against a small built-in hash list; Microsoft Defender status, quick scan and signature update via MpCmdRun | Own real-time protection; large signature sets |
+| IV | **S2O CyberEDR** (process & socket telemetry) | `cyberedr` | **Working** | TCP socket table with owner PIDs (Windows `netstat -ano`, Linux `/proc`), suspicious-port flags, polling watcher that logs new sockets | Process lineage, kill policies, kernel telemetry |
+| V | **S2O CyberSIEM** (event log) | `cybersiem`, `s2o-store` | **Working** (local) | Append-only JSONL store at `.aegis/events.jsonl`; query/filter/tail/export | Central collection across a fleet; syslog forwarding |
+| VI | **S2O CyberIntel** (threat intel) | `cyberintel` | **Working** (on demand) | Pulls the Abuse.ch URLhaus recent feed into a local JSON DB; lookups | Scheduled sync, more feeds, sharing across hosts |
+| VII | **S2O CyberDNS** (DNS shield) | `cyberdns` | **Partial** | DoH lookups via Cloudflare; local blocklist; `cyberdns serve` UDP forwarder | Running as a system resolver/service; verified sinkholing of all host DNS |
+| VIII | **S2O CyberID** (device posture) | `cyberid` | **Working** (Windows) | 4-check posture score (firewall 30, Defender 30, UAC 20, SecureBoot 20); Ed25519-signed tokens with `verify` | Central authority / key distribution; FIDO2/IAM integration |
+| IX | **S2O CyberZTNA** (access gateway) | `cyberztna` | **Planned** | Stores route definitions; runs a local posture preflight | The proxy itself, mTLS, enforcement |
 
-```
-                      ┌─────────────────────────────────────────────────────────────┐
-                      │              S2O AEGIS COMMAND SUBSTRATE                    │
-                      │        (Unified Master CLI 'aegis' & Executive GUI)        │
-                      └──────────────────────────────┬──────────────────────────────┘
-                                                     │
-                             ┌───────────────────────┴───────────────────────┐
-                             ▼                                               ▼
-                  [ Universal IPC Bus ]                           [ 9 Pillar Matrix ]
-                  Named Pipe / Unix Sock                          Zero-Bloat Rust Engines
-                             │                                               │
-    ┌────────────────────────┴───────────────────────────────────────────────┴────────────────────────┐
-    │                                                                                                  │
-    ▼           ▼             ▼             ▼            ▼            ▼           ▼            ▼       ▼
- [CYBERWALL] [CYBERMESH] [CYBERDEFENDER] [CYBEREDR] [CYBERLOG] [THREATGRID] [CYBERDNS] [CYBERID] [CYBERZTNA]
-  Firewall    WireGuard   AV Scanner    Socket EDR   SIEM Stream   IOC Intel   DoH Sinkhole PAM Posture SASE Gate
-```
-
-| Pillar | Engine | Discipline | Technical Substrate |
-| :---: | :--- | :--- | :--- |
-| **I** | **S2O Cyberwall** | Stateful OS Firewall | Direct Win32 COM `INetFwPolicy2` rules orchestration, instant inbound/outbound isolation lockdown. |
-| **II** | **S2O CyberMesh** | Cryptographic Overlay Mesh | WireGuard peer-to-peer virtual private mesh network using Curve25519 & ChaCha20-Poly1305. |
-| **III** | **S2O CyberDefender** | Endpoint Antivirus | Recursive filesystem SHA-256 integrity scanner + live Windows Defender engine query via WMI. |
-| **IV** | **S2O CyberEDR** | Process & Socket Telemetry | Correlates live IP Helper network sockets with Windows PIDs & image paths. Backdoor port detector. |
-| **V** | **S2O CyberLog** | Enterprise SIEM | Lock-free high-throughput event ringbuffer logging structured JSONL telemetry to `.aegis/events.jsonl`. |
-| **VI** | **S2O ThreatGrid** | Threat Intelligence | Local high-speed IOC database synchronized in real-time with Abuse.ch URLhaus malware feeds. |
-| **VII** | **S2O CyberDNS** | DNS Shield & Sinkhole | Encrypted DNS-over-HTTPS (DoH) resolver + local malware/telemetry sinkhole proxy. |
-| **VIII** | **S2O CyberID** | Zero-Trust PAM / IAM | 5-Pillar endpoint posture auditor (Firewall, AV, UAC, SecureBoot, Isolation) with signed JSON tokens. |
-| **IX** | **S2O ZTNA Gateway** | Micro-Segmentation Proxy | Zero-Trust Network Access reverse proxy enforcing endpoint posture compliance preflight. |
+Supporting crates: `aegisd` (daemon: probes firewall/Defender/sockets, writes a health event, serves `ping`/`status` over local IPC; `reload` is not implemented), `aegis-cli` (`aegis` multiplexer), `s2o-bus` (IPC), `s2o-schema` (event schema), `s2o-platform` (OS integration + packet-backend port).
 
 ---
 
-## Architectural Breakthrough: The Universal Substrate
+## Architecture: The Universal Substrate
 
-Unlike legacy agents that tie their logic to OS idiosyncrasies, Aegis is built on the **Universal Security Substrate (USS)**:
-
-1. **Multi-OS Native by Design**:
-   * **Microsoft Windows**: Userspace COM/WFP/IPHelper today $\rightarrow$ Kernel Driver (`.sys`) tomorrow.
-   * **Linux**: `nftables`/`iptables`/ProcFS today $\rightarrow$ Kernel **eBPF (XDP + TC + LSM)** tomorrow.
-   * **macOS (Darwin)**: `pfctl`/`scutil` today $\rightarrow$ Apple **EndpointSecurity & NetworkExtension** tomorrow.
-2. **Universal Inter-Process Communication (IPC)**:
-   * **Windows**: High-speed Named Pipe (`\\.\pipe\s2o_aegis_ipc`).
-   * **Unix / Linux / macOS**: Non-blocking Unix Domain Socket (`/tmp/s2o_aegis.sock`).
-   * Unified JSON-RPC client-daemon protocol with zero disk wear.
-3. **Zero Kernel Crash Liability**:
-   * Operates completely in userspace with administrative privileges. It cannot trigger a Blue Screen of Death (BSOD) or kernel panic.
+1. **OS backends behind traits**:
+   * **Windows**: userspace `netsh` / PowerShell NetSecurity / Defender today → optional kernel packet driver later (**Planned**).
+   * **Linux**: firewall status probe and `/proc` socket telemetry today; nftables control and eBPF (**Planned**).
+   * **macOS**: **Planned** (no backend yet).
+2. **Local IPC**:
+   * **Windows**: Named Pipe (`\\.\pipe\s2o_aegis_ipc`).
+   * **Unix**: Unix Domain Socket (`/tmp/s2o_aegis.sock`).
+   * JSON request/response protocol between `aegis` and `aegisd`.
+3. **Userspace by default**: the default build loads no kernel driver of its own.
 
 ---
 
 ## Executive Command Center GUI
 
-Aegis includes an executive management dashboard written in GPU-accelerated **`egui`**:
+`aegis-gui` is an `egui` dashboard showing each pillar with its real status (LIVE / ON DEMAND / KEYS ONLY / NOT IMPLEMENTED), firewall rule management, Defender scan triggers, socket view and the local event stream. Several buttons currently shell out to `cargo run -p <crate>`, so the GUI is a **developer build** today.
 
-* **Auto-Maximized Fullscreen Console** (minimum 800x600 failsafe).
-* **Live 9-Pillar Operational Matrix** with real-time health indicators.
-* **Deep Customization Windows per Pillar**:
-  * Create, inject, and delete custom firewall rules on the fly.
-  * Generate and export WireGuard configuration profiles.
-  * Set backdoor alert thresholds and force-kill rogue PIDs.
-  * Block and unblock domains in the local DNS sinkhole.
-  * Enforce hardware UEFI SecureBoot and Windows UAC posture policies.
-* **Real-Time SIEM Event Stream** displaying live telemetry as it happens.
-
-Launch the Command Center:
 ```powershell
 cargo run --bin aegis-gui
 ```
+
+---
+
+## Building
+
+```sh
+cargo check --workspace          # builds on Windows and Linux; no system OpenSSL needed
+cargo test --workspace
+```
+
+Most runtime features need Windows and an elevated shell.
 
 ---
 
@@ -107,13 +85,13 @@ cargo run --bin aegis-gui
 Control every aspect of Aegis through a single master binary:
 
 ```powershell
-# Inspect the entire platform, active OS, and driver substrate
+# Platform, OS and firewall backend status
 aegis status
 
-# Deep 5-Pillar Zero-Trust Posture Audit
+# Zero-Trust posture audit (4 checks)
 aegis posture
 
-# Next-Gen Firewall Control
+# Firewall control (Windows)
 aegis firewall enable
 aegis firewall block-port 4444 --protocol TCP
 aegis firewall block-ip 198.51.100.1
@@ -122,8 +100,8 @@ aegis firewall list
 # Filesystem Malware & Integrity Scanning
 aegis scan C:\Windows\System32
 
-# Encrypted DNS Query & Threat Sinkhole
-aegis dns resolve split2ops.com
+# DNS-over-HTTPS lookup and local blocklist
+aegis dns resolve zv9games.org
 aegis dns block malicious-c2.com
 
 # EDR Process & Socket Telemetry
@@ -137,29 +115,23 @@ aegis daemon status
 
 ---
 
-## Commercial Dual-Licensing Model
+## Licensing
 
-S2O Aegis is released under an **Open-Core / Dual-License** strategy:
+S2O Aegis is **dual-licensed** by Split2ops Software:
 
-### 1. Community Edition (AGPLv3)
-* **Free and open-source** for security researchers, homelab enthusiasts, and individuals.
-* Source code is fully auditable to guarantee **zero telemetry backdoors**.
-* Copyleft protections prevent proprietary SaaS providers from re-hosting without contributing modifications back to the community.
+### 1. Community Edition: AGPL-3.0-only
+* Free and open source; full text in [LICENSE](LICENSE), copyright and terms in [NOTICE](NOTICE).
+* The source is auditable, so you can check for yourself what telemetry the agent sends.
+* Network-use copyleft: if you modify Aegis and offer it as a service, you share those modifications.
 
-### 2. Commercial Enterprise License
-Designed for **Managed Service Providers (MSPs), Financial Institutions, and Enterprise Fleets** needing:
-* Proprietary distribution rights without AGPLv3 copyleft reciprocity.
-* Closed-source commercial OEM / appliance embedding.
-* Dedicated SLA, custom Windows Kernel Driver (`.sys`) development, and cloud fleet orchestration.
-* Priority threat intelligence feeds and custom enterprise compliance modules.
+### 2. Commercial License
+For organizations that need to distribute or embed Aegis without AGPL obligations (MSPs, OEM/appliance vendors, enterprise fleets). Planned commercial offerings include an SLA, a signed custom packet driver and fleet orchestration; these are **not available yet**.
 
-For commercial licensing and enterprise procurement inquiries:
-📧 **Email:** [enterprise@zv9games.org](mailto:enterprise@zv9games.org)  
-
+📧 **Commercial inquiries:** [enterprise@zv9games.org](mailto:enterprise@zv9games.org)
 
 ---
 
 <p align="center">
-  <b>S2O Aegis — Unmatched Speed. Infinite Scalability. Absolute Security Sovereignty.</b><br/>
-  <i>Copyright © 2026 Split2ops Software. All rights reserved.</i>
+  <b>S2O Aegis</b> by Split2ops Software · <a href="https://zv9games.org">zv9games.org</a><br/>
+  <i>Copyright © 2026 Split2ops Software. Licensed under AGPL-3.0-only or a commercial license.</i>
 </p>

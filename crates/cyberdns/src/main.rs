@@ -12,7 +12,7 @@ const DEFAULT_BLOCKLIST_PATH: &str = ".aegis/dns_blocklist.txt";
 
 #[derive(Parser)]
 #[command(name = "cyberdns")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberDNS Guard: Encrypted DNS-over-HTTPS (DoH) Resolver & Category Web Filter", long_about = None)]
 struct Cli {
@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let blocklist = load_blocklist();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS CYBERDNS GUARD & SINKHOLE              ".bold().green());
+            println!("{}", "        S2O CYBERDNS GUARD & SINKHOLE              ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Primary Resolver  : {}", "https://cloudflare-dns.com/dns-query (DoH)".yellow());
             println!(" Secondary Engine  : {}", "Local UDP DNS Forwarder".green());
@@ -294,7 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let addr: SocketAddr = listen.parse()?;
             let socket = UdpSocket::bind(addr).await?;
             println!("{}", "=========================================================".cyan());
-            println!("{}", "    SPLIT2OPS CYBERDNS PROXY & SINKHOLE SERVICE ACTIVE   ".bold().green());
+            println!("{}", "    S2O CYBERDNS PROXY & SINKHOLE SERVICE ACTIVE   ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Listening on UDP : {}", addr);
             println!(" Upstream DoH     : Cloudflare DNS (1.1.1.1 encrypted)");

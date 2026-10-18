@@ -2,10 +2,11 @@
 name = "cyberwall-backend-windows"
 version = "0.1.0"
 edition = "2021"
-authors = ["Split2ops Software"]
+license = "AGPL-3.0-only"
+authors = ["Split2ops Software <support@zv9games.org>"]
 
 [dependencies]
 async-trait = "0.1"
 tokio = { version = "1.0", features = ["full"] }
 cyberwall-core = { path = "../cyberwall-core" }
-s2o_net_lib = { path = "../../../net-lib" }
+s2o-platform = { path = "../s2o-platform" }

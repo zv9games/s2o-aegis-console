@@ -12,9 +12,9 @@ const ZTNA_POLICY_PATH: &str = ".aegis/ztna_policy.json";
 
 #[derive(Parser)]
 #[command(name = "cyberztna")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
-#[command(about = "S2O Gate: Zero-Trust Application Access Gateway & Micro-Segmentation CLI", long_about = None)]
+#[command(about = "S2O CyberZTNA: route policy store + local posture preflight (proxy not implemented yet)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -126,11 +126,11 @@ async fn evaluate_local_posture() -> (u32, bool) {
         .output();
     let sb_pass = sb_output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1").unwrap_or(false);
 
-    let score = (if st.enabled && st.profile_private { 25 } else { 0 })
-        + (if st.defender_active { 25 } else { 0 })
+    // Same weights as cyberid (30/30/20/20); no unconditional points.
+    let score = (if st.enabled && st.profile_private && st.profile_public { 30 } else { 0 })
+        + (if st.defender_active { 30 } else { 0 })
         + (if uac_pass { 20 } else { 0 })
-        + (if sb_pass { 20 } else { 0 })
-        + 10;
+        + (if sb_pass { 20 } else { 0 });
 
     (score, sb_pass)
 }
@@ -143,11 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let routes = load_routes();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "       SPLIT2OPS ZERO-TRUST APP ACCESS GATEWAY           ".bold().green());
+            println!("{}", "       S2O ZERO-TRUST APP ACCESS GATEWAY           ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Gateway Mode      : {}", "Micro-Segmentation Proxy & Policy Engine".green());
+            println!(" Gateway Mode      : {}", "NOT IMPLEMENTED - routes are stored, no traffic is proxied".red());
             println!(" Protected Apps    : {}", format!("{} configured application tunnels", routes.len()).bold());
-            println!(" Gate Enforcement  : {}", "Continuous Device Posture Pre-Flight".bold());
+            println!(" Gate Enforcement  : {}", "On-demand local posture preflight (`connect`)".bold());
             println!(" Policy Storage    : {}", ZTNA_POLICY_PATH);
             println!("{}", "=========================================================".cyan());
         }
@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             routes.insert(key, route);
             save_routes(&routes)?;
-            println!("{}", format!("[cyberztna] OK: route for '{}' successfully established.", app).green().bold());
+            println!("{}", format!("[cyberztna] OK: route for '{}' saved to policy file (not enforced: no proxy yet).", app).green().bold());
         }
         Commands::Connect { app } => {
             let routes = load_routes();
@@ -199,13 +199,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if posture_ok && sb_ok {
                     println!("{}", "=========================================================".cyan());
-                    println!(" ACCESS STATUS : {}", "GRANTED (Zero-Trust Verified)".green().bold());
-                    println!(" Micro-Tunnel  : {}", format!("Tunnel open to {}", route.target).bold().green());
-                    println!(" Attestation   : Cryptographic Claims Verified");
+                    println!(" POSTURE CHECK : {}", "PASSED".green().bold());
+                    println!(" Tunnel        : {}", format!("NOT OPENED - the ZTNA proxy is not implemented yet (target {})", route.target).yellow());
                     println!("{}", "=========================================================".cyan());
                 } else {
                     println!("{}", "=========================================================".cyan());
-                    println!(" ACCESS STATUS : {}", "DENIED (Posture Non-Compliant)".red().bold());
+                    println!(" POSTURE CHECK : {}", "FAILED (posture non-compliant)".red().bold());
                     println!(" Remediation   : Device health score insufficient to access micro-segment.");
                     println!("{}", "=========================================================".cyan());
                     std::process::exit(1);

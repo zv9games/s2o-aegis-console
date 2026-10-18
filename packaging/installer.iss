@@ -4,7 +4,7 @@
 #define MyAppName "S2O Aegis Enterprise Security"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Split2ops Software"
-#define MyAppURL "https://split2ops.com"
+#define MyAppURL "https://zv9games.org"
 #define MyAppExeName "aegis-gui.exe"
 #define MyDaemonExeName "aegisd.exe"
 #define MyCliExeName "aegis.exe"

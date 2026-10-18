@@ -12,7 +12,7 @@ const SUSPICIOUS_PORTS: &[u16] = &[
 
 #[derive(Parser)]
 #[command(name = "cyberedr")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberEDR Agent: Kernel IP Telemetry & Behavioral Threat Detection CLI", long_about = None)]
 struct Cli {
@@ -90,14 +90,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let conns = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::telemetry::get_active_tcp_connections()
+                s2o_platform::telemetry::get_active_tcp_connections()
             })
             .await?;
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "          SPLIT2OPS CYBEREDR TELEMETRY ENGINE            ".bold().green());
+            println!("{}", "          S2O CYBEREDR TELEMETRY ENGINE            ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Driver Provider   : {}", "Windows IP Helper (GetExtendedTcpTable)".green());
+            println!(" Driver Provider   : {}", s2o_platform::telemetry::telemetry_source().green());
             println!(" Active Sockets    : {}", conns.len().to_string().bold());
             println!(" Monitored Protocols: {}", "IPv4 TCP / Owner PID Correlation".yellow());
             println!(" Threat Signatures : {}", format!("{} suspicious C2/backdoor ports monitored", SUSPICIOUS_PORTS.len()).bold());
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Processes { filter, limit } => {
             let conns = tokio::task::spawn_blocking(|| {
-                s2o_net_lib::telemetry::get_active_tcp_connections()
+                s2o_platform::telemetry::get_active_tcp_connections()
             })
             .await?;
 
@@ -178,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 let conns = tokio::task::spawn_blocking(|| {
-                    s2o_net_lib::telemetry::get_active_tcp_connections()
+                    s2o_platform::telemetry::get_active_tcp_connections()
                 })
                 .await?;
 

@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/s2o-schema",
+    "crates/s2o-platform",
     "crates/s2o-store",
     "crates/s2o-bus",
     "crates/cyberwall-core",
@@ -21,63 +22,23 @@ members = [
 ]
 
 [package]
-name = "xallfirewall"
+name = "s2o-aegis-gui"
 version = "0.7.2"
-authors = ["Gregory <gregor.whitelight@gmail.com>"]
+authors = ["Split2ops Software <support@zv9games.org>"]
 edition = "2021"
+license = "AGPL-3.0-only"
+description = "S2O Aegis Executive Command Center (egui dashboard)"
 
 [dependencies]
-
 eframe = { version = "0.17.0" }
 tokio = { version = "1.5", features = ["full"] }
-rand = "0.8"
 chrono = "0.4"
-winit = "0.26.1"
-crossbeam = "0.8.0"
-crossbeam-channel = "0.5.0"
-s2o_net_lib = { path = "../net-lib" }
-futures = "0.3"
-winapi = { version = "0.3", features = ["winsock2", "ws2ipdef"] }
-libc = "0.2"
-cyberwall-core = { path = "crates/cyberwall-core" }
-cyberwall-backend-windows = { path = "crates/cyberwall-backend-windows" }
-s2o-bus = { path = "crates/s2o-bus" }
-s2o-schema = { path = "crates/s2o-schema" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-
-[[bin]]
-name = "xallfirewall"
-path = "src/main.rs"
-
-[[bin]]
-name = "loader"
-path = "src/interface1.rs"
-
-[[bin]]
-name = "platform"
-path = "src/interface2.rs"
-
-[[bin]]
-name = "network"
-path = "src/interface3.rs"
-
-[[bin]]
-name = "security"
-path = "src/interface4.rs"
-
-[[bin]]
-name = "cyberfirewall"
-path = "src/cyber_firewall.rs"
-
-[[bin]]
-name = "unblock_firewall"
-path = "src/unblock_firewall.rs"
+cyberwall-core = { path = "crates/cyberwall-core" }
+cyberwall-backend-windows = { path = "crates/cyberwall-backend-windows" }
+s2o-platform = { path = "crates/s2o-platform" }
 
 [[bin]]
 name = "aegis-gui"
 path = "src/aegis_gui.rs"
-
-
-

@@ -5,7 +5,7 @@ use cyberwall_core::{FirewallEngine, RuleAction, RuleDirection, RuleProtocol, Fi
 
 #[derive(Parser)]
 #[command(name = "aegis")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.0.0")]
 #[command(about = "S2O Aegis Universal Master Security CLI - Unified Control Matrix", long_about = None)]
 struct Cli {
@@ -125,10 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(" Operating System : {:?}", caps.os);
                 println!(" Driver Substrate : {:?} [{}]", caps.substrate, if caps.substrate == cyberwall_core::DriverSubstrate::UserspaceNative { "Tier-0 Native ($0/yr)".green().bold() } else { "Kernel Mode Attached".cyan().bold() });
                 println!(" Substrate Engine : {}", caps.driver_version.unwrap_or_default());
-                println!(" OS Firewall      : {}", if st.enabled { "ONLINE (WFP Policy Active)".green().bold() } else { "DISABLED".red().bold() });
-                println!(" CyberDefender    : {}", if st.defender_active { "ONLINE (WinDefend Shield Active)".green().bold() } else { "INACTIVE".red().bold() });
+                println!(" OS Firewall      : {}", if st.enabled { "ENABLED".green().bold() } else { "DISABLED".red().bold() });
+                println!(" CyberDefender    : {}", if st.defender_active { "ACTIVE".green().bold() } else { "INACTIVE".red().bold() });
                 println!("{}", "---------------------------------------------------------".cyan());
-                println!(" Ready to orchestrate all 9 pillars via 'aegis <module> <command>'");
+                println!(" Modules: firewall, scan, dns, edr, posture, daemon (see README for per-pillar status)");
             }
         }
         Commands::Firewall { action } => match action {
@@ -240,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Commands::Posture => {
-            println!("[AEGIS] Running 5-Pillar Zero-Trust Endpoint Posture Audit...");
+            println!("[AEGIS] Running Zero-Trust Endpoint Posture Audit (4 checks)...");
             let _ = std::process::Command::new("cargo")
                 .args(["run", "-q", "-p", "cyberid", "--", "posture"])
                 .status()?;

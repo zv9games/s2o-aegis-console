@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use cyberwall_core::{
-    EngineError, EngineResult, FirewallEngine, FirewallPolicy, FirewallRule, FirewallStatus, ProfileType, RuleAction, RuleDirection,
+    EngineError, EngineResult, FirewallEngine, FirewallPolicy, FirewallRule, FirewallStatus,
 };
 
 pub struct LinuxFirewallEngine;
@@ -30,7 +30,7 @@ impl FirewallEngine for LinuxFirewallEngine {
             profile_public: is_nft_active,
             profile_domain: is_nft_active,
             platform: "Linux".to_string(),
-            backend_driver: "Linux Kernel nftables / eBPF Engine".to_string(),
+            backend_driver: "Linux nftables (read-only status; no eBPF)".to_string(),
             substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
         })
     }
@@ -46,54 +46,20 @@ impl FirewallEngine for LinuxFirewallEngine {
         }
     }
 
-    async fn set_enabled(&self, enabled: bool) -> EngineResult<()> {
-        let output = tokio::process::Command::new("nft")
-            .arg("flush")
-            .arg("ruleset")
-            .output()
-            .await
-            .map_err(|e| EngineError(format!("Failed to execute nft command: {}", e)))?;
-
-        if !output.status.success() {
-            let _ = tokio::process::Command::new("ufw")
-                .arg(if enabled { "enable" } else { "disable" })
-                .output()
-                .await;
-        }
-
-        Ok(())
+    // NOTE: the previous set_enabled ran `nft flush ruleset` regardless of the
+    // requested state (wiping the host firewall even when "enabling"), and
+    // set_outbound_block / list_rules ignored errors or returned a fabricated
+    // rule. They now fail loudly until a real nftables implementation exists.
+    async fn set_enabled(&self, _enabled: bool) -> EngineResult<()> {
+        Err(EngineError("Linux set_enabled not implemented yet".into()))
     }
 
-    async fn set_outbound_block(&self, blocked: bool) -> EngineResult<()> {
-        if blocked {
-            let _ = tokio::process::Command::new("iptables")
-                .args(&["-A", "OUTPUT", "-j", "DROP"])
-                .output()
-                .await;
-        } else {
-            let _ = tokio::process::Command::new("iptables")
-                .args(&["-D", "OUTPUT", "-j", "DROP"])
-                .output()
-                .await;
-        }
-        Ok(())
+    async fn set_outbound_block(&self, _blocked: bool) -> EngineResult<()> {
+        Err(EngineError("Linux set_outbound_block not implemented yet".into()))
     }
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {
-        Ok(vec![
-            FirewallRule {
-                name: "Split2ops Linux nftables Core Chain".to_string(),
-                enabled: true,
-                action: RuleAction::Allow,
-                direction: RuleDirection::Inbound,
-                profile: ProfileType::All,
-                protocol: None,
-                local_ports: None,
-                remote_ports: None,
-                remote_addresses: None,
-                application: Some("/usr/local/bin/cyberwalld".to_string()),
-            }
-        ])
+        Err(EngineError("Linux list_rules not implemented yet".into()))
     }
 
     async fn add_rule(&self, _rule: &FirewallRule) -> EngineResult<()> {
@@ -105,6 +71,6 @@ impl FirewallEngine for LinuxFirewallEngine {
     }
 
     async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {
-        Ok(())
+        Err(EngineError("Linux apply_policy not implemented yet".into()))
     }
 }

@@ -2,7 +2,8 @@
 name = "cyberid"
 version = "0.1.0"
 edition = "2021"
-authors = ["Split2ops Software"]
+license = "AGPL-3.0-only"
+authors = ["Split2ops Software <support@zv9games.org>"]
 
 [[bin]]
 name = "cyberid"
@@ -15,5 +16,8 @@ colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+base64 = "0.22"
 cyberwall-core = { path = "../cyberwall-core" }
 cyberwall-backend-windows = { path = "../cyberwall-backend-windows" }

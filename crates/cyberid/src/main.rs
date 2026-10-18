@@ -5,7 +5,7 @@ use cyberwall_core::FirewallEngine;
 
 #[derive(Parser)]
 #[command(name = "cyberid")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberID: Zero-Trust Endpoint Posture & Device Identity CLI", long_about = None)]
 struct Cli {
@@ -19,13 +19,24 @@ enum Commands {
     Status,
     /// Run deep Zero-Trust endpoint posture audit across 5 security pillars
     Posture,
-    /// Generate a cryptographically signed Zero-Trust Device Attestation Token
+    /// Generate an Ed25519-signed device posture token (JWS compact, alg EdDSA)
     Attest {
         /// Device name or identifier
         #[arg(long, default_value = "host-01")]
         device: String,
     },
+    /// Verify a token produced by `attest` against this host's key (or --pubkey)
+    Verify {
+        token: String,
+        /// Base64url Ed25519 public key; defaults to the local signing key
+        #[arg(long)]
+        pubkey: Option<String>,
+    },
+    /// Print this host's attestation public key (base64url)
+    Pubkey,
 }
+
+mod token;
 
 fn check_registry_dword(path: &str, name: &str) -> Option<u32> {
     let output = std::process::Command::new("powershell")
@@ -62,6 +73,38 @@ fn get_os_info() -> String {
     "Windows OS".to_string()
 }
 
+// Posture weights (sum = 100). The former "isolation ready" pillar awarded a
+// fixed 10 points without checking anything, so it was removed.
+const W_FIREWALL: u32 = 30;
+const W_DEFENDER: u32 = 30;
+const W_UAC: u32 = 20;
+const W_SECUREBOOT: u32 = 20;
+
+struct Posture {
+    firewall: bool,
+    defender: bool,
+    uac: bool,
+    secure_boot: bool,
+}
+
+impl Posture {
+    fn score(&self) -> u32 {
+        (if self.firewall { W_FIREWALL } else { 0 })
+            + (if self.defender { W_DEFENDER } else { 0 })
+            + (if self.uac { W_UAC } else { 0 })
+            + (if self.secure_boot { W_SECUREBOOT } else { 0 })
+    }
+}
+
+fn collect_posture(st: &cyberwall_core::FirewallStatus) -> Posture {
+    Posture {
+        firewall: st.enabled && st.profile_private && st.profile_public,
+        defender: st.defender_active,
+        uac: check_registry_dword("HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA") == Some(1),
+        secure_boot: check_registry_dword("HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State", "UEFISecureBootEnabled") == Some(1),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -69,9 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS CYBERID ZERO-TRUST IDENTITY            ".bold().green());
+            println!("{}", "        S2O CYBERID ZERO-TRUST IDENTITY            ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Posture Engine    : {}", "5-Pillar Endpoint Telemetry Audit".green());
+            println!(" Posture Engine    : {}", "4-check posture audit (firewall, Defender, UAC, SecureBoot)".green());
             println!(" Operating System  : {}", get_os_info().bold());
             println!(" Zero-Trust Model  : {}", "Continuous Verification (NIST SP 800-207)".bold());
             println!(" Identity Protocols: Device Attestation / FIDO2 / Token Claims");
@@ -80,58 +123,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Posture => {
             let fw = WindowsFirewallEngine::new();
             let st = fw.get_status().await?;
+            let p = collect_posture(&st);
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "      SPLIT2OPS CYBERID ZERO-TRUST POSTURE AUDIT         ".bold().green());
+            println!("{}", "      S2O CYBERID ZERO-TRUST POSTURE AUDIT         ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Host Environment : {}", get_os_info().cyan());
             println!("{}", "---------------------------------------------------------".cyan());
+            let line = |label: &str, pass: bool, pts: u32, ok: &str, bad: &str| {
+                if pass {
+                    println!(" {label}: {} ({pts}/{pts} pts)", ok.green().bold());
+                } else {
+                    println!(" {label}: {} (0/{pts} pts)", bad.red().bold());
+                }
+            };
+            line("[1/4] Firewall Protection   ", p.firewall, W_FIREWALL, "PASS - Private & Public profiles on", "FAIL - Profiles Disabled");
+            line("[2/4] Antivirus (Defender)  ", p.defender, W_DEFENDER, "PASS - Defender AntivirusEnabled", "FAIL - Defender Inactive / Unknown");
+            line("[3/4] User Access Ctrl (UAC)", p.uac, W_UAC, "PASS - EnableLUA = 1", "FAIL - UAC Disabled or Unreadable");
+            line("[4/4] UEFI SecureBoot State ", p.secure_boot, W_SECUREBOOT, "PASS - SecureBoot Enabled", "FAIL - SecureBoot Not Detected");
 
-            let mut total_score = 0u32;
-
-            // 1. Firewall Pillar (25 pts)
-            let fw_pass = st.enabled && st.profile_private && st.profile_public;
-            if fw_pass {
-                total_score += 25;
-                println!(" [1/5] Firewall Protection   : {} (25/25 pts)", "PASS - All Interactive Profiles Active".green().bold());
-            } else {
-                println!(" [1/5] Firewall Protection   : {} (0/25 pts)", "FAIL - Profiles Disabled".red().bold());
-            }
-
-            // 2. Antivirus & Shield Pillar (25 pts)
-            let av_pass = st.defender_active;
-            if av_pass {
-                total_score += 25;
-                println!(" [2/5] Real-Time AV Shield   : {} (25/25 pts)", "PASS - WinDefend Real-time Protection Running".green().bold());
-            } else {
-                println!(" [2/5] Real-Time AV Shield   : {} (0/25 pts)", "FAIL - Defender Inactive".red().bold());
-            }
-
-            // 3. User Account Control (UAC) Pillar (20 pts)
-            let uac_val = check_registry_dword("HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA");
-            let uac_pass = uac_val == Some(1);
-            if uac_pass {
-                total_score += 20;
-                println!(" [3/5] User Access Ctrl (UAC): {} (20/20 pts)", "PASS - EnableLUA Enforced".green().bold());
-            } else {
-                println!(" [3/5] User Access Ctrl (UAC): {} (0/20 pts)", "FAIL - UAC Disabled or Tampered".red().bold());
-            }
-
-            // 4. UEFI SecureBoot Pillar (20 pts)
-            let sb_val = check_registry_dword("HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State", "UEFISecureBootEnabled");
-            let sb_pass = sb_val == Some(1);
-            if sb_pass {
-                total_score += 20;
-                println!(" [4/5] UEFI SecureBoot State : {} (20/20 pts)", "PASS - SecureBoot Enabled & Locked".green().bold());
-            } else {
-                println!(" [4/5] UEFI SecureBoot State : {} (0/20 pts)", "WARN - SecureBoot Not Detected".yellow().bold());
-            }
-
-            // 5. Outbound Network Isolation / Lockdown Capability (10 pts)
-            let isolation_ready = true;
-            total_score += 10;
-            println!(" [5/5] Isolation Shield Ready: {} (10/10 pts)", "PASS - WFP Airplane Isolation Mode Ready".green().bold());
-
+            let total_score = p.score();
             println!("{}", "=========================================================".cyan());
             let score_display = if total_score >= 80 {
                 format!("{} / 100 [TRUSTED ENDPOINT]", total_score).green().bold()
@@ -146,34 +157,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Attest { device } => {
             let fw = WindowsFirewallEngine::new();
             let st = fw.get_status().await?;
-            let uac_pass = check_registry_dword("HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA") == Some(1);
-            let sb_pass = check_registry_dword("HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State", "UEFISecureBootEnabled") == Some(1);
-
-            let score = (if st.enabled { 25 } else { 0 })
-                + (if st.defender_active { 25 } else { 0 })
-                + (if uac_pass { 20 } else { 0 })
-                + (if sb_pass { 20 } else { 0 })
-                + 10;
-
-            let token = serde_json::json!({
-                "iss": "Split2ops-CyberID-Authority",
+            let p = collect_posture(&st);
+            let key = token::load_or_create_key()?;
+            let now = chrono::Utc::now().timestamp();
+            let claims = serde_json::json!({
+                "iss": "S2O-CyberID",
                 "sub": device,
-                "iat": chrono::Utc::now().timestamp(),
-                "exp": chrono::Utc::now().timestamp() + 3600,
-                "posture_score": score,
+                "iat": now,
+                "exp": now + 3600,
+                "posture_score": p.score(),
                 "claims": {
-                    "firewall_active": st.enabled,
-                    "defender_active": st.defender_active,
-                    "uac_enforced": uac_pass,
-                    "secure_boot": sb_pass,
+                    "firewall_active": p.firewall,
+                    "defender_active": p.defender,
+                    "uac_enforced": p.uac,
+                    "secure_boot": p.secure_boot,
                 }
             });
+            let jws = token::sign(&key, &claims)?;
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        CYBERID CRYPTOGRAPHIC ATTESTATION CLAIM          ".bold().green());
+            println!("{}", "        CYBERID SIGNED POSTURE TOKEN (Ed25519)           ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!("{}", serde_json::to_string_pretty(&token)?);
+            println!("{}", serde_json::to_string_pretty(&claims)?);
+            println!("{}", "---------------------------------------------------------".cyan());
+            println!(" Signing key : {} ({})", token::KEY_PATH, token::public_key_b64(&key));
+            println!(" Token       :\n{}", jws);
             println!("{}", "=========================================================".cyan());
+        }
+        Commands::Verify { token: jws, pubkey } => {
+            let vk = match pubkey {
+                Some(pk) => token::parse_public_key(&pk)?,
+                None => token::load_or_create_key()?.verifying_key(),
+            };
+            let claims = token::verify(&vk, &jws, chrono::Utc::now().timestamp())?;
+            println!("{}", "[cyberid] OK: signature valid and token not expired.".green().bold());
+            println!("{}", serde_json::to_string_pretty(&claims)?);
+        }
+        Commands::Pubkey => {
+            let key = token::load_or_create_key()?;
+            println!("{}", token::public_key_b64(&key));
         }
     }
 
