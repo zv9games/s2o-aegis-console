@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use colored::*;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -73,49 +72,49 @@ struct MeshState {
     peers: HashMap<String, MeshPeer>,
 }
 
+/// Generate a WireGuard keypair: a random X25519 static secret (clamped by
+/// x25519-dalek per RFC 7748) and its real Curve25519 public key, both in the
+/// standard 44-character base64 encoding used by `wg genkey` / `wg pubkey`.
 fn generate_clamped_wireguard_key() -> (String, String) {
-    let mut rng = rand::thread_rng();
-    let mut priv_bytes = [0u8; 32];
-    rng.fill(&mut priv_bytes);
-
-    // Curve25519 clamping
-    priv_bytes[0] &= 248;
-    priv_bytes[31] &= 127;
-    priv_bytes[31] |= 64;
-
-    // Derived pubkey representation (32 bytes standard WG encoding)
-    let mut pub_bytes = [0u8; 32];
-    for i in 0..32 {
-        pub_bytes[i] = priv_bytes[i] ^ 0xAA; // deterministic derived counterpart representation
-    }
-
-    (base64_encode(&priv_bytes), base64_encode(&pub_bytes))
+    let secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+    let public = x25519_dalek::PublicKey::from(&secret);
+    (encode_key(&secret.to_bytes()), encode_key(public.as_bytes()))
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut buf = String::new();
-    for chunk in bytes.chunks(3) {
-        let b = match chunk.len() {
-            3 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32),
-            2 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8),
-            1 => (chunk[0] as u32) << 16,
-            _ => 0,
-        };
-        buf.push(CHARS[((b >> 18) & 0x3F) as usize] as char);
-        buf.push(CHARS[((b >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            buf.push(CHARS[((b >> 6) & 0x3F) as usize] as char);
-        } else {
-            buf.push('=');
-        }
-        if chunk.len() > 2 {
-            buf.push(CHARS[(b & 0x3F) as usize] as char);
-        } else {
-            buf.push('=');
-        }
+fn encode_key(bytes: &[u8; 32]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn public_key_derives_from_private_key() {
+        let (privk, pubk) = generate_clamped_wireguard_key();
+        assert_eq!(privk.len(), 44);
+        assert_eq!(pubk.len(), 44);
+        let raw: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&privk).unwrap().try_into().unwrap();
+        let derived = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(raw));
+        assert_eq!(encode_key(derived.as_bytes()), pubk);
     }
-    buf
+
+    #[test]
+    fn rfc7748_vector() {
+        // RFC 7748 section 6.1, Alice's keypair
+        let sk: [u8; 32] = hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+        let pk = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sk));
+        assert_eq!(pk.as_bytes(), &hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"));
+    }
+
+    fn hex32(h: &str) -> [u8; 32] {
+        let mut o = [0u8; 32];
+        for i in 0..32 { o[i] = u8::from_str_radix(&h[i*2..i*2+2], 16).unwrap(); }
+        o
+    }
 }
 
 fn load_mesh_state() -> MeshState {
