@@ -36,7 +36,7 @@ enum Commands {
     Pubkey,
 }
 
-mod token;
+use s2o_attest as token;
 
 fn check_registry_dword(path: &str, name: &str) -> Option<u32> {
     let output = std::process::Command::new("powershell")
@@ -112,7 +112,7 @@ fn collect_posture(st: &cyberwall_core::FirewallStatus) -> Posture {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
     match cli.command {

@@ -12,7 +12,7 @@ use std::path::Path;
 
 pub const KEY_PATH: &str = ".aegis/cyberid_ed25519.key";
 
-type Res<T> = Result<T, Box<dyn std::error::Error>>;
+pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub fn load_or_create_key() -> Res<SigningKey> {
     load_or_create_key_at(Path::new(KEY_PATH))
