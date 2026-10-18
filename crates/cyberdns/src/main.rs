@@ -62,6 +62,7 @@ struct DohAnswer {
 #[allow(non_snake_case)]
 struct DohResponse {
     #[serde(default)]
+    #[allow(dead_code)]
     Status: u32,
     Answer: Option<Vec<DohAnswer>>,
 }
@@ -71,7 +72,7 @@ fn load_blocklist() -> HashSet<String> {
     let path = PathBuf::from(DEFAULT_BLOCKLIST_PATH);
     if let Ok(file) = File::open(&path) {
         let reader = BufReader::new(file);
-        for line in reader.lines().filter_map(|l| l.ok()) {
+        for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim().to_lowercase();
             if !trimmed.is_empty() && !trimmed.starts_with('#') {
                 set.insert(trimmed);

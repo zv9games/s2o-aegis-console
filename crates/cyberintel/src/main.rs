@@ -3,7 +3,7 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 const IOC_DATABASE_PATH: &str = ".aegis/threatgrid_iocs.json";

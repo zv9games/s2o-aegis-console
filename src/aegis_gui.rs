@@ -530,12 +530,12 @@ impl epi::App for AegisDashboardApp {
                     ui.horizontal(|ui| {
                         ui.label("Target Rule Name:");
                         ui.text_edit_singleline(&mut self.fw_delete_rule_name_input);
-                        if ui.button("🗑 Delete Rule").clicked() {
-                            if !self.fw_delete_rule_name_input.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::DeleteRuleByName(
-                                    self.fw_delete_rule_name_input.trim().into(),
-                                ));
-                            }
+                        if ui.button("🗑 Delete Rule").clicked()
+                            && !self.fw_delete_rule_name_input.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::DeleteRuleByName(
+                                self.fw_delete_rule_name_input.trim().into(),
+                            ));
                         }
                     });
 
@@ -781,12 +781,12 @@ impl epi::App for AegisDashboardApp {
                     ui.heading("Add Custom IOC Indicator (URL, IP, Domain)");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.intel_custom_ioc);
-                        if ui.button("➕ Inject IOC").clicked() {
-                            if !self.intel_custom_ioc.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::AddIoc(
-                                    self.intel_custom_ioc.trim().into(),
-                                ));
-                            }
+                        if ui.button("➕ Inject IOC").clicked()
+                            && !self.intel_custom_ioc.trim().is_empty()
+                        {
+                            let _ = self
+                                .cmd_tx
+                                .send(DashboardCmd::AddIoc(self.intel_custom_ioc.trim().into()));
                         }
                     });
 
@@ -832,24 +832,24 @@ impl epi::App for AegisDashboardApp {
                     ui.horizontal(|ui| {
                         ui.label("Block Domain:");
                         ui.text_edit_singleline(&mut self.dns_custom_block_domain);
-                        if ui.button("🚫 Block").clicked() {
-                            if !self.dns_custom_block_domain.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::BlockDomain(
-                                    self.dns_custom_block_domain.trim().into(),
-                                ));
-                            }
+                        if ui.button("🚫 Block").clicked()
+                            && !self.dns_custom_block_domain.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::BlockDomain(
+                                self.dns_custom_block_domain.trim().into(),
+                            ));
                         }
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Unblock Domain:");
                         ui.text_edit_singleline(&mut self.dns_unblock_domain);
-                        if ui.button("✅ Unblock").clicked() {
-                            if !self.dns_unblock_domain.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::UnblockDomain(
-                                    self.dns_unblock_domain.trim().into(),
-                                ));
-                            }
+                        if ui.button("✅ Unblock").clicked()
+                            && !self.dns_unblock_domain.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::UnblockDomain(
+                                self.dns_unblock_domain.trim().into(),
+                            ));
                         }
                     });
 
@@ -993,11 +993,12 @@ pub fn run_gui() {
                         DashboardCmd::GenMeshKey => {
                             tokio::task::spawn_blocking(|| {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cybermesh", "--", "gen-key"])
+                                    .args(["run", "-q", "-p", "cybermesh", "--", "genkey"])
                                     .status();
                             });
                         }
-                        DashboardCmd::ExportMeshConfig(ep, port, keepalive, ip) => {
+                        DashboardCmd::ExportMeshConfig(_ep, port, _keepalive, ip) => {
+                            // cybermesh gen-config has no endpoint/keepalive flags yet; those fields are ignored.
                             tokio::task::spawn_blocking(move || {
                                 let _ = std::process::Command::new("cargo")
                                     .args([
@@ -1007,14 +1008,10 @@ pub fn run_gui() {
                                         "cybermesh",
                                         "--",
                                         "gen-config",
-                                        "--peer-endpoint",
-                                        &ep,
-                                        "--listen-port",
-                                        &port.to_string(),
-                                        "--keepalive",
-                                        &keepalive.to_string(),
-                                        "--client-ip",
+                                        "--address",
                                         &ip,
+                                        "--port",
+                                        &port.to_string(),
                                     ])
                                     .status();
                             });
@@ -1036,7 +1033,7 @@ pub fn run_gui() {
                         DashboardCmd::AuditEdr => {
                             tokio::task::spawn_blocking(|| {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cyberedr", "--", "audit"])
+                                    .args(["run", "-q", "-p", "cyberedr", "--", "processes"])
                                     .status();
                             });
                         }
@@ -1087,7 +1084,7 @@ pub fn run_gui() {
                         DashboardCmd::TestDns(domain) => {
                             tokio::task::spawn_blocking(move || {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cyberdns", "--", "lookup", &domain])
+                                    .args(["run", "-q", "-p", "cyberdns", "--", "resolve", &domain])
                                     .status();
                             });
                         }
@@ -1155,10 +1152,9 @@ pub fn run_gui() {
                 if let Ok(file) = std::fs::File::open(".aegis/events.jsonl") {
                     use std::io::{BufRead, BufReader};
                     let reader = BufReader::new(file);
-                    for line in reader.lines().flatten().take(50) {
-                        events.push(line);
-                    }
-                    events.reverse(); // Newest first
+                    let all: Vec<String> = reader.lines().map_while(Result::ok).collect();
+                    // Last 50 lines, newest first
+                    events.extend(all.into_iter().rev().take(50));
                 }
 
                 // Sample recent rules summary
@@ -1251,10 +1247,12 @@ pub fn run_gui() {
         ztna_mutual_tls_enabled: true,
     };
 
-    let mut native_options = epi::NativeOptions::default();
-    native_options.initial_window_size = Some(egui::Vec2::new(1024.0, 700.0));
-    native_options.min_window_size = Some(egui::Vec2::new(800.0, 600.0));
-    native_options.maximized = true;
+    let native_options = epi::NativeOptions {
+        initial_window_size: Some(egui::Vec2::new(1024.0, 700.0)),
+        min_window_size: Some(egui::Vec2::new(800.0, 600.0)),
+        maximized: true,
+        ..Default::default()
+    };
     eframe::run_native(Box::new(app), native_options);
 }
 

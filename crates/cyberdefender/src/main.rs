@@ -65,6 +65,7 @@ enum Commands {
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
 struct MpStatusOutput {
+    #[allow(dead_code)]
     AntivirusEnabled: Option<bool>,
     RealTimeProtectionEnabled: Option<bool>,
     AntivirusSignatureVersion: Option<String>,
@@ -126,8 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let is_service_active =
-                tokio::task::spawn_blocking(|| s2o_platform::defender::is_defender_active())
-                    .await?;
+                tokio::task::spawn_blocking(s2o_platform::defender::is_defender_active).await?;
 
             let mp_info = tokio::task::spawn_blocking(query_mp_status).await?;
 
@@ -284,7 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "[cyberdefender] launching native Windows Defender scan via MpCmdRun...".cyan()
             );
-            tokio::task::spawn_blocking(|| s2o_platform::defender::run_scan_native())
+            tokio::task::spawn_blocking(s2o_platform::defender::run_scan_native)
                 .await?
                 .map_err(|e| format!("Native scan execution error: {e}"))?;
             println!(
@@ -299,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 "[cyberdefender] triggering Defender signature update...".cyan()
             );
-            tokio::task::spawn_blocking(|| s2o_platform::defender::update_defender_native())
+            tokio::task::spawn_blocking(s2o_platform::defender::update_defender_native)
                 .await?
                 .map_err(|e| format!("Definition update error: {e}"))?;
             println!(

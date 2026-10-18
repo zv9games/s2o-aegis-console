@@ -5,7 +5,7 @@ use cyberwall_core::FirewallEngine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 const ZTNA_POLICY_PATH: &str = ".aegis/ztna_policy.json";

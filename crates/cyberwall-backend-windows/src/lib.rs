@@ -21,7 +21,7 @@ impl Default for WindowsFirewallEngine {
 #[async_trait]
 impl FirewallEngine for WindowsFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {
-        let profiles = tokio::task::spawn_blocking(|| s2o_platform::firewall::get_profile_status())
+        let profiles = tokio::task::spawn_blocking(s2o_platform::firewall::get_profile_status)
             .await
             .map_err(|e| EngineError(e.to_string()))?
             .map_err(|e| EngineError(format!("COM profile status: {e:?}")))?;
@@ -33,7 +33,7 @@ impl FirewallEngine for WindowsFirewallEngine {
         .map_err(|e| EngineError(e.to_string()))?;
 
         let defender_active =
-            tokio::task::spawn_blocking(|| s2o_platform::defender::is_defender_active())
+            tokio::task::spawn_blocking(s2o_platform::defender::is_defender_active)
                 .await
                 .map_err(|e| EngineError(e.to_string()))?;
 
@@ -92,7 +92,7 @@ impl FirewallEngine for WindowsFirewallEngine {
     }
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {
-        let rules = tokio::task::spawn_blocking(|| s2o_platform::firewall::get_rules())
+        let rules = tokio::task::spawn_blocking(s2o_platform::firewall::get_rules)
             .await
             .map_err(|e| EngineError(e.to_string()))?
             .map_err(|e| EngineError(format!("list rules failed: {e:?}")))?;

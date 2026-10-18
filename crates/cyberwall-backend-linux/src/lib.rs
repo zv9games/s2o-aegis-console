@@ -11,6 +11,12 @@ impl LinuxFirewallEngine {
     }
 }
 
+impl Default for LinuxFirewallEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl FirewallEngine for LinuxFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {

@@ -3,7 +3,7 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 const MESH_CONFIG_PATH: &str = ".aegis/mesh_config.json";
@@ -87,46 +87,6 @@ fn generate_clamped_wireguard_key() -> (String, String) {
 fn encode_key(bytes: &[u8; 32]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use base64::Engine;
-
-    #[test]
-    fn public_key_derives_from_private_key() {
-        let (privk, pubk) = generate_clamped_wireguard_key();
-        assert_eq!(privk.len(), 44);
-        assert_eq!(pubk.len(), 44);
-        let raw: [u8; 32] = base64::engine::general_purpose::STANDARD
-            .decode(&privk)
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let derived = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(raw));
-        assert_eq!(encode_key(derived.as_bytes()), pubk);
-    }
-
-    #[test]
-    fn rfc7748_vector() {
-        // RFC 7748 section 6.1, Alice's keypair
-        let sk: [u8; 32] =
-            hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
-        let pk = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sk));
-        assert_eq!(
-            pk.as_bytes(),
-            &hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
-        );
-    }
-
-    fn hex32(h: &str) -> [u8; 32] {
-        let mut o = [0u8; 32];
-        for i in 0..32 {
-            o[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap();
-        }
-        o
-    }
 }
 
 fn load_mesh_state() -> MeshState {
@@ -250,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             conf.push_str(&format!("Address = {}\n", address));
             conf.push_str(&format!("ListenPort = {}\n\n", port));
 
-            for (_, p) in &state.peers {
+            for p in state.peers.values() {
                 conf.push_str(&format!("# Peer: {}\n", p.name));
                 conf.push_str("[Peer]\n");
                 conf.push_str(&format!("PublicKey = {}\n", p.pubkey));
@@ -328,4 +288,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn public_key_derives_from_private_key() {
+        let (privk, pubk) = generate_clamped_wireguard_key();
+        assert_eq!(privk.len(), 44);
+        assert_eq!(pubk.len(), 44);
+        let raw: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&privk)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let derived = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(raw));
+        assert_eq!(encode_key(derived.as_bytes()), pubk);
+    }
+
+    #[test]
+    fn rfc7748_vector() {
+        // RFC 7748 section 6.1, Alice's keypair
+        let sk: [u8; 32] =
+            hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+        let pk = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sk));
+        assert_eq!(
+            pk.as_bytes(),
+            &hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        );
+    }
+
+    fn hex32(h: &str) -> [u8; 32] {
+        let mut o = [0u8; 32];
+        for i in 0..32 {
+            o[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        o
+    }
 }

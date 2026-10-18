@@ -15,6 +15,8 @@ impl std::error::Error for EngineError {}
 
 pub type EngineResult<T> = Result<T, EngineError>;
 
+// async-trait adds #[must_use] to Result-returning methods.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait FirewallEngine: Send + Sync {
     /// Returns the current OS firewall status & profile states
