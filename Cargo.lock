@@ -74,18 +74,22 @@ dependencies = [
 name = "aegisd"
 version = "0.1.0"
 dependencies = [
+ "aegis-fleet",
  "chrono",
  "clap",
  "colored",
  "cyberwall-backend-windows",
  "cyberwall-core",
+ "s2o-attest",
  "s2o-bus",
  "s2o-platform",
+ "s2o-policy",
  "s2o-schema",
  "s2o-store",
  "serde",
  "serde_json",
  "tokio",
+ "windows-service",
 ]
 
 [[package]]
@@ -4204,7 +4208,7 @@ dependencies = [
  "ndk-glue 0.6.2",
  "url",
  "web-sys",
- "widestring",
+ "widestring 0.5.1",
  "winapi",
 ]
 
@@ -4219,6 +4223,12 @@ name = "widestring"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17882f045410753661207383517a6f62ec3dbeb6a4ed2acce01f0728238d1983"
+
+[[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "winapi"
@@ -4299,6 +4309,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d24d6bcc7f734a4091ecf8d7a64c5f7d7066f45585c1861eba06449909609c8a"
+dependencies = [
+ "bitflags 2.13.2",
+ "widestring 1.2.1",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

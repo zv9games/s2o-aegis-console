@@ -5,6 +5,10 @@
 //! The other pillars are separate CLIs that the daemon does not run or
 //! supervise; `status` says so instead of reporting them as ONLINE.
 
+mod agent_cmd;
+#[cfg(windows)]
+mod service;
+
 use clap::{Parser, Subcommand};
 use colored::*;
 use cyberwall_backend_windows::WindowsFirewallEngine;
@@ -38,6 +42,44 @@ enum Commands {
     },
     /// Reload policy (NOT IMPLEMENTED: there is no policy engine yet)
     Reload,
+    /// Enroll this host with a self-hosted aegis-fleet server
+    Enroll {
+        /// host:port of the fleet server
+        #[arg(long)]
+        server: String,
+        /// TLS name in the server certificate (as given to `aegis-fleet init --name`)
+        #[arg(long)]
+        server_name: String,
+        /// Fleet CA certificate (ca.pem from the server)
+        #[arg(long)]
+        ca: PathBuf,
+        /// Expected SHA-256 fingerprint of the CA (printed by `aegis-fleet token`)
+        #[arg(long)]
+        ca_fingerprint: String,
+        /// One-time enrollment token
+        #[arg(long)]
+        token: String,
+        /// Admin roster (public keys allowed to sign policy), delivered out of band
+        #[arg(long)]
+        roster: PathBuf,
+        #[arg(long, default_value_os_t = agent_cmd::default_dir())]
+        dir: PathBuf,
+    },
+    /// Run the fleet agent loop (renewal, heartbeat, signed policy)
+    Agent {
+        #[arg(long, default_value_os_t = agent_cmd::default_dir())]
+        dir: PathBuf,
+        /// Single heartbeat then exit
+        #[arg(long)]
+        once: bool,
+    },
+    /// Windows service management (install | uninstall | run)
+    #[cfg(windows)]
+    Service {
+        action: String,
+        #[arg(long, default_value_os_t = agent_cmd::default_dir())]
+        dir: PathBuf,
+    },
 }
 
 #[derive(serde::Serialize)]
@@ -317,6 +359,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Commands::Enroll {
+            server,
+            server_name,
+            ca,
+            ca_fingerprint,
+            token,
+            roster,
+            dir,
+        } => {
+            agent_cmd::enroll(agent_cmd::EnrollArgs {
+                dir,
+                server,
+                server_name,
+                ca,
+                ca_fingerprint,
+                token,
+                roster,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        Commands::Agent { dir, once } => {
+            let (_tx, rx) = tokio::sync::watch::channel(false);
+            agent_cmd::run(&dir, once, rx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(windows)]
+        Commands::Service { action, dir } => match action.as_str() {
+            "install" => service::install(dir)?,
+            "uninstall" => service::uninstall()?,
+            "run" => service::run(dir)?,
+            other => return Err(format!("unknown service action {other}").into()),
+        },
         Commands::Reload => {
             eprintln!(
                 "{}",

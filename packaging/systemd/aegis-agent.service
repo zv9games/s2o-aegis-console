@@ -1,0 +1,23 @@
+# S2O Aegis fleet agent (Linux). Enroll first:
+#   sudo aegisd enroll --server HOST:8443 --server-name HOST --ca ca.pem \
+#        --ca-fingerprint <sha256> --token <token> --roster roster.json
+[Unit]
+Description=S2O Aegis fleet agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aegisd agent --dir /var/lib/aegis-agent
+Restart=on-failure
+RestartSec=30
+StateDirectory=aegis-agent
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aegis-agent
+
+[Install]
+WantedBy=multi-user.target
