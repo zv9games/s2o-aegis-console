@@ -209,20 +209,20 @@ impl epi::App for AegisDashboardApp {
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::FirewallSettings;
                     }
-                    ui.label("COM INetFwPolicy2 Native Rules Engine");
+                    ui.label("netsh / NetSecurity cmdlets (userspace)");
                     ui.end_row();
 
                     // 2. Mesh
                     ui.label("2. Overlay Mesh");
                     ui.label("S2O CyberMesh");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label(egui::RichText::new("KEYS ONLY").color(egui::Color32::YELLOW).strong());
                     if ui.button("Regen Key").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::GenMeshKey);
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::MeshSettings;
                     }
-                    ui.label("WireGuard Cryptographic Mesh Profile");
+                    ui.label("X25519 keys + WireGuard config export (no tunnel mgmt)");
                     ui.end_row();
 
                     // 3. AV Defender
@@ -239,26 +239,26 @@ impl epi::App for AegisDashboardApp {
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::DefenderSettings;
                     }
-                    ui.label("SHA-256 Recursive Scanner & WinDefend");
+                    ui.label("On-demand SHA-256 scan + Defender status");
                     ui.end_row();
 
                     // 4. EDR
                     ui.label("4. Socket EDR");
                     ui.label("S2O CyberEDR");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label(egui::RichText::new("LIVE").color(egui::Color32::GREEN).strong());
                     if ui.button("Audit Sockets").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditEdr);
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::EdrSettings;
                     }
-                    ui.label(format!("Correlated IP Helper Table ({} active sockets)", self.active_connections_count));
+                    ui.label(format!("TCP socket table ({} active sockets)", self.active_connections_count));
                     ui.end_row();
 
                     // 5. SIEM
                     ui.label("5. Event SIEM");
-                    ui.label("S2O CyberLog");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label("S2O CyberSIEM");
+                    ui.label(egui::RichText::new("LOCAL LOG").color(egui::Color32::LIGHT_BLUE).strong());
                     if ui.button("Emit Test Alert").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::EmitSiemEvent("Manual alert triggered".into()));
                     }
@@ -270,54 +270,54 @@ impl epi::App for AegisDashboardApp {
 
                     // 6. Threat Intel
                     ui.label("6. Threat Intel");
-                    ui.label("S2O ThreatGrid");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label("S2O CyberIntel");
+                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
                     if ui.button("Sync URLhaus").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::SyncIntel);
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::IntelSettings;
                     }
-                    ui.label("Local Threat DB + URLhaus Real-time Feed");
+                    ui.label("Local IOC DB, URLhaus pulled on demand");
                     ui.end_row();
 
                     // 7. DNS Guard
                     ui.label("7. DNS Guard");
                     ui.label("S2O CyberDNS");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
                     if ui.button("DoH Resolve").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::TestDns("split2ops.com".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::DnsSettings;
                     }
-                    ui.label("Encrypted Cloudflare DoH & Sinkhole Proxy");
+                    ui.label("Cloudflare DoH lookups + local blocklist");
                     ui.end_row();
 
                     // 8. Zero-Trust ID
                     ui.label("8. Zero-Trust ID");
                     ui.label("S2O CyberID");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
                     if ui.button("Re-Audit").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditPosture);
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::IdSettings;
                     }
-                    ui.label("5-Pillar Endpoint Posture (Score: 100/100)");
+                    ui.label("4-check posture score + signed token");
                     ui.end_row();
 
                     // 9. App ZTNA
                     ui.label("9. App ZTNA");
-                    ui.label("S2O ZTNA Gateway");
-                    ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                    ui.label("S2O CyberZTNA");
+                    ui.label(egui::RichText::new("NOT IMPLEMENTED").color(egui::Color32::RED).strong());
                     if ui.button("Test Gateway").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::TestZtna("secure-crm".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::ZtnaSettings;
                     }
-                    ui.label("Micro-segmentation Reverse Proxy Gate");
+                    ui.label("Posture preflight only; no proxy yet");
                     ui.end_row();
                 });
 
@@ -707,7 +707,7 @@ impl epi::App for AegisDashboardApp {
                     });
 
                     ui.add_space(8.0);
-                    if ui.button("🛡 Execute Full 5-Pillar Posture Audit").clicked() {
+                    if ui.button("🛡 Run Posture Audit").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditPosture);
                     }
                 });
@@ -734,11 +734,11 @@ impl epi::App for AegisDashboardApp {
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("Upstream Gateway Proxy (Host:Port):");
+                        ui.label("Upstream (Host:Port, proxy not implemented):");
                         ui.text_edit_singleline(&mut self.ztna_upstream_proxy);
                     });
 
-                    ui.checkbox(&mut self.ztna_mutual_tls_enabled, "Enforce Mutual TLS (mTLS) Client Certificates");
+                    ui.checkbox(&mut self.ztna_mutual_tls_enabled, "Enforce Mutual TLS (not implemented yet)");
 
                     ui.add_space(8.0);
                     if ui.button("🚀 Test Posture Preflight Connection").clicked() {

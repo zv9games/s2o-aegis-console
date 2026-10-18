@@ -211,7 +211,7 @@ impl FirewallEngine for WindowsFirewallEngine {
 
     async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {
         Err(EngineError(
-            "apply_policy not implemented yet (Phase 1)".into(),
+            "Windows apply_policy not implemented yet: use add_rule/delete_rule individually".into(),
         ))
     }
 }

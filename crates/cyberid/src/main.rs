@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "=========================================================".cyan());
             println!("{}", "        SPLIT2OPS CYBERID ZERO-TRUST IDENTITY            ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Posture Engine    : {}", "5-Pillar Endpoint Telemetry Audit".green());
+            println!(" Posture Engine    : {}", "4-check posture audit (firewall, Defender, UAC, SecureBoot)".green());
             println!(" Operating System  : {}", get_os_info().bold());
             println!(" Zero-Trust Model  : {}", "Continuous Verification (NIST SP 800-207)".bold());
             println!(" Identity Protocols: Device Attestation / FIDO2 / Token Claims");

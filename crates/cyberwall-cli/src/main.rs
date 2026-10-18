@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Enable => {
-            println!("[cyberwall] enabling Windows Firewall (COM, netsh fallback)...");
+            println!("[cyberwall] enabling Windows Firewall (netsh)...");
             engine.set_enabled(true).await?;
             let status = engine.get_status().await?;
             if status.enabled {
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Disable => {
-            println!("[cyberwall] disabling Windows Firewall (COM, netsh fallback)...");
+            println!("[cyberwall] disabling Windows Firewall (netsh)...");
             engine.set_enabled(false).await?;
             let status = engine.get_status().await?;
             if !status.enabled {

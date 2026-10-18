@@ -1,6 +1,9 @@
-//! S2O Aegis master daemon — Phase 0 honesty:
-//! only Cyberwall is a real engine. Other products report NOT_IMPLEMENTED
-//! unless AEGIS_DEMO=1 is set (explicit demo mode).
+//! S2O Aegis master daemon.
+//!
+//! The daemon itself probes the OS firewall/Defender state and live TCP
+//! sockets, writes a health event, and serves `ping`/`status` over local IPC.
+//! The other pillars are separate CLIs that the daemon does not run or
+//! supervise; `status` says so instead of reporting them as ONLINE.
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -35,14 +38,95 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Reload policy (not yet implemented)
+    /// Reload policy (NOT IMPLEMENTED: there is no policy engine yet)
     Reload,
 }
 
-fn demo_mode() -> bool {
-    std::env::var("AEGIS_DEMO")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+#[derive(serde::Serialize)]
+struct ModuleStatus {
+    id: &'static str,
+    name: &'static str,
+    /// LIVE (probed by aegisd) | CLI (works via its own CLI, not supervised)
+    /// | PARTIAL | NOT_IMPLEMENTED | OFFLINE | WARNING
+    state: &'static str,
+    detail: String,
+}
+
+fn module_table(
+    st: &cyberwall_core::FirewallStatus,
+    conns: usize,
+) -> Vec<ModuleStatus> {
+    vec![
+        ModuleStatus {
+            id: "cyberwall",
+            name: "S2O Cyberwall",
+            state: if st.enabled { "LIVE" } else { "OFFLINE" },
+            detail: format!(
+                "OS firewall enabled={} private={} public={} domain={} via {}; declarative apply_policy not implemented",
+                st.enabled, st.profile_private, st.profile_public, st.profile_domain, st.backend_driver
+            ),
+        },
+        ModuleStatus {
+            id: "cybermesh",
+            name: "S2O CyberMesh",
+            state: "PARTIAL",
+            detail: "Generates X25519 keys and WireGuard config files; does not bring up tunnels or exchange peers".into(),
+        },
+        ModuleStatus {
+            id: "cyberdefender",
+            name: "S2O CyberDefender",
+            state: if st.defender_active { "LIVE" } else { "WARNING" },
+            detail: format!(
+                "Microsoft Defender AntivirusEnabled={}; SHA-256 hash scan is on demand (cyberdefender scan)",
+                st.defender_active
+            ),
+        },
+        ModuleStatus {
+            id: "cyberedr",
+            name: "S2O CyberEDR",
+            state: "LIVE",
+            detail: format!("{conns} TCP sockets via {}", s2o_platform::telemetry::telemetry_source()),
+        },
+        ModuleStatus {
+            id: "cybersiem",
+            name: "S2O CyberSIEM",
+            state: "CLI",
+            detail: "Local JSONL event store (.aegis/events.jsonl); query/follow via cybersiem".into(),
+        },
+        ModuleStatus {
+            id: "cyberintel",
+            name: "S2O CyberIntel",
+            state: "CLI",
+            detail: "URLhaus feed pulled on demand into a local JSON DB (cyberintel)".into(),
+        },
+        ModuleStatus {
+            id: "cyberdns",
+            name: "S2O CyberDNS",
+            state: "CLI",
+            detail: "DoH lookups + local blocklist; UDP forwarder only while `cyberdns serve` runs".into(),
+        },
+        ModuleStatus {
+            id: "cyberid",
+            name: "S2O CyberID",
+            state: "CLI",
+            detail: "4-check posture score + Ed25519-signed token on demand (cyberid posture / attest)".into(),
+        },
+        ModuleStatus {
+            id: "cyberztna",
+            name: "S2O CyberZTNA",
+            state: "NOT_IMPLEMENTED",
+            detail: "Stores route definitions only; no proxy or enforcement exists yet".into(),
+        },
+    ]
+}
+
+fn state_colored(state: &str) -> ColoredString {
+    match state {
+        "LIVE" => state.green().bold(),
+        "CLI" => state.cyan(),
+        "PARTIAL" | "WARNING" => state.yellow().bold(),
+        _ => state.red(),
+    }
 }
 
 #[tokio::main]
@@ -55,23 +139,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "     S2O AEGIS MASTER DAEMON  (Phase 0 spine)            ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Schema version    : {}", SCHEMA_VERSION);
-            println!(" Demo mode         : {}", if demo_mode() { "ON (AEGIS_DEMO)".yellow() } else { "OFF".green() });
-
             let store = EventStore::open(&event_log)?;
             println!(" Event store       : {}", store.path().display());
 
             let fw = WindowsFirewallEngine::new();
             let st = fw.get_status().await?;
 
-            println!("[AEGISD] [1/9] S2O Cyberwall ....... {}", if st.enabled { "ONLINE (WFP COM Policy Active)".green().bold() } else { "OFFLINE".red() });
-            println!("[AEGISD] [2/9] S2O CyberMesh ....... {}", "ONLINE (WireGuard Overlay Mesh Ready)".green().bold());
-            println!("[AEGISD] [3/9] S2O CyberDefender ... {}", if st.defender_active { "ONLINE (WinDefend Shield Active)".green().bold() } else { "INACTIVE".red() });
-            println!("[AEGISD] [4/9] S2O CyberEDR ........ {}", "ONLINE (IP Helper Process Telemetry)".green().bold());
-            println!("[AEGISD] [5/9] S2O CyberLog SIEM ... {}", "ONLINE (Durable JSONL/Syslog Stream)".green().bold());
-            println!("[AEGISD] [6/9] S2O ThreatGrid ...... {}", "ONLINE (Threat Database & IOC Feeds)".green().bold());
-            println!("[AEGISD] [7/9] S2O CyberDNS Guard .. {}", "ONLINE (Encrypted DoH + Threat Sinkhole)".green().bold());
-            println!("[AEGISD] [8/9] S2O CyberID ......... {}", "ONLINE (5-Pillar Zero-Trust Attestation)".green().bold());
-            println!("[AEGISD] [9/9] S2O ZTNA Gateway .... {}", "ONLINE (Micro-Segmentation Posture Gate)".green().bold());
+            let conns = tokio::task::spawn_blocking(s2o_platform::telemetry::get_active_tcp_connections)
+                .await
+                .unwrap_or_default();
+            for (idx, m) in module_table(&st, conns.len()).iter().enumerate() {
+                println!("[AEGISD] [{}/9] {:<18} {}  {}", idx + 1, m.name, state_colored(m.state), m.detail);
+            }
 
             let host_id = hostname();
             let ev = AegisEvent::new(
@@ -81,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 EventAction::Observed,
                 Severity::Info,
                 format!(
-                    "aegisd master orchestrator started: all 9 pillars live. Cyberwall enabled={}, Defender={}",
+                    "aegisd started. Cyberwall enabled={}, Defender={}",
                     st.enabled, st.defender_active
                 ),
             )
@@ -109,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s2o_bus::IpcResponse::ok(req.id, serde_json::to_value(&st).unwrap_or_default())
                     }
                     "ping" => s2o_bus::IpcResponse::ok(req.id, serde_json::json!({ "pong": true })),
-                    "reload" => s2o_bus::IpcResponse::ok(req.id, serde_json::json!({ "status": "reloaded" })),
+                    "reload" => s2o_bus::IpcResponse::err(req.id, "reload not implemented: no policy engine yet".to_string()),
                     unknown => s2o_bus::IpcResponse::err(req.id, format!("Unknown RPC method: {unknown}")),
                 }
             }));
@@ -139,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "=========================================================".cyan());
             println!(
                 "{}",
-                "  ALL 9 AEGIS SECURITY DISCIPLINES ACTIVE & SYNCHRONIZED"
+                "  aegisd running (IPC: ping, status). Other pillars run via their own CLIs."
                     .bold()
                     .green()
             );
@@ -156,77 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s2o_platform::telemetry::get_active_tcp_connections()
             }).await.unwrap_or_default();
 
-            #[derive(serde::Serialize)]
-            struct ModuleStatus {
-                id: &'static str,
-                name: &'static str,
-                state: &'static str,
-                detail: String,
-            }
-
-            let modules = vec![
-                ModuleStatus {
-                    id: "cyberwall",
-                    name: "S2O Cyberwall Engine",
-                    state: if st.enabled { "ONLINE" } else { "OFFLINE" },
-                    detail: format!(
-                        "enabled={} private={} public={} domain={} defender={}",
-                        st.enabled,
-                        st.profile_private,
-                        st.profile_public,
-                        st.profile_domain,
-                        st.defender_active
-                    ),
-                },
-                ModuleStatus {
-                    id: "cybermesh",
-                    name: "S2O CyberMesh VPN",
-                    state: "ONLINE",
-                    detail: "WireGuard overlay mesh network active (X25519 node keypair)".into(),
-                },
-                ModuleStatus {
-                    id: "cyberdefender",
-                    name: "S2O CyberDefender AV",
-                    state: if st.defender_active { "ONLINE" } else { "WARNING" },
-                    detail: format!("Real-time FS protection & SHA-256 scanner active (WinDefend={})", st.defender_active),
-                },
-                ModuleStatus {
-                    id: "cyberedr",
-                    name: "S2O CyberEDR Agent",
-                    state: "ONLINE",
-                    detail: format!("Tracking {} live network sockets correlated with Windows processes", conns.len()),
-                },
-                ModuleStatus {
-                    id: "cybersiem",
-                    name: "S2O CyberLog SIEM",
-                    state: "ONLINE",
-                    detail: "Durable .aegis/events.jsonl store & live stream follower active".into(),
-                },
-                ModuleStatus {
-                    id: "cyberintel",
-                    name: "S2O ThreatGrid Intel",
-                    state: "ONLINE",
-                    detail: "Local threat DB & Abuse.ch / URLhaus IOC feeds connected".into(),
-                },
-                ModuleStatus {
-                    id: "cyberdns",
-                    name: "S2O CyberDNS Guard",
-                    state: "ONLINE",
-                    detail: "Cloudflare Encrypted DoH resolver & active local threat sinkhole".into(),
-                },
-                ModuleStatus {
-                    id: "cyberid",
-                    name: "S2O CyberID PAM/IAM",
-                    state: "ONLINE",
-                    detail: "5-Pillar Zero-Trust endpoint posture (Score: 100/100 [TRUSTED])".into(),
-                },
-                ModuleStatus {
-                    id: "cyberztna",
-                    name: "S2O ZeroTrust Gateway",
-                    state: "ONLINE",
-                    detail: "Micro-segmentation reverse proxy enforcing posture pre-flight".into(),
-                },
-            ];
+            let modules = module_table(&st, conns.len());
 
             if json {
                 println!(
@@ -244,11 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", "       SPLIT2OPS AEGIS ENTERPRISE MATRIX STATUS          ".bold().green());
                 println!("{}", "=========================================================".cyan());
                 for (idx, m) in modules.iter().enumerate() {
-                    let state_col = match m.state {
-                        "ONLINE" => m.state.green().bold(),
-                        "WARNING" => m.state.yellow().bold(),
-                        _ => m.state.red(),
-                    };
+                    let state_col = state_colored(m.state);
                     println!(" [{}/9] {:<24} : {}", idx + 1, m.name.bold(), state_col);
                     println!("       Detail : {}", m.detail);
                     println!("{}", "---------------------------------------------------------".cyan());
@@ -256,28 +261,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Reload => {
-            println!("{}", "[AEGISD] Reloading security policies across all 9 engines...".cyan());
-            println!("{}", "[AEGISD] OK: policies reloaded and verified.".green().bold());
+            eprintln!("{}", "[AEGISD] reload: NOT IMPLEMENTED (there is no policy engine to reload yet)".red());
+            std::process::exit(2);
         }
     }
 
     Ok(())
-}
-
-fn stub_state() -> &'static str {
-    if demo_mode() {
-        "demo"
-    } else {
-        "not_implemented"
-    }
-}
-
-fn stub_label(phase: &str) -> ColoredString {
-    if demo_mode() {
-        format!("DEMO ONLINE ({phase})").yellow().bold()
-    } else {
-        format!("NOT IMPLEMENTED ({phase})").red()
-    }
 }
 
 fn hostname() -> String {

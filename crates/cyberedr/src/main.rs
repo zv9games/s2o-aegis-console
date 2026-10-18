@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "=========================================================".cyan());
             println!("{}", "          SPLIT2OPS CYBEREDR TELEMETRY ENGINE            ".bold().green());
             println!("{}", "=========================================================".cyan());
-            println!(" Driver Provider   : {}", "Windows IP Helper (GetExtendedTcpTable)".green());
+            println!(" Driver Provider   : {}", s2o_platform::telemetry::telemetry_source().green());
             println!(" Active Sockets    : {}", conns.len().to_string().bold());
             println!(" Monitored Protocols: {}", "IPv4 TCP / Owner PID Correlation".yellow());
             println!(" Threat Signatures : {}", format!("{} suspicious C2/backdoor ports monitored", SUSPICIOUS_PORTS.len()).bold());
