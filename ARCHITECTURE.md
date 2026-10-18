@@ -168,9 +168,16 @@ installs, physical attacks on TPMs, compromise of a quorum (M) of admins.
 | 7 Enforcement | Per-pillar enforcement, ZTNA proxy, packet driver | Each pillar has Windows test evidence and opt-in; external review |
 | 8 Release hardening | Reproducible builds, Sigstore-signed GitHub Releases, SBOM, fuzzing; external audit when funded | Reproducible build verified by a second builder; signatures verifiable with `cosign` / `gh attestation verify` |
 
-## 7. Open decisions
+## 7. Decisions
 
-Decided: self-hosted only, embedded SQLite, free GitHub-only infrastructure,
-keyless Sigstore / GitHub attestations for signing. Still open: whether TPM is
-required or software keys are allowed (and how that is shown to admins), the
-M-of-N defaults, and certificate/token lifetimes.
+Recorded 2026-10-18 (approved by the project owner):
+
+| # | Decision |
+| --- | --- |
+| D1 | **Self-hosted only**, embedded SQLite, free GitHub-only infrastructure; SaaS out of scope. Signing via Sigstore keyless / GitHub artifact attestations. |
+| D2 | **Software keys allowed**: agents without a usable TPM enroll with software keys and are flagged `hardware_backed = false` in inventory. A fleet setting (`require_tpm`) rejects them. Until TPM key attestation exists, the flag is self-reported. |
+| D3 | **Risky actions need 2 admin approvals by default** (isolate host, run script, uninstall, change pinned admin keys), configurable per action class. Approvals are counted per *distinct admin key*; when the approving keys are registered to the same admin identity, tooling must show a prominent warning ("approvals are not independent") and the audit log records it. |
+| D4 | **Lifetimes**: client certificates 24 h, renewed at 12 h over mTLS; enrollment tokens 24 h, single use; 7-day offline grace after certificate expiry during which an agent may renew with its enrolled key, after which it must re-enroll. |
+
+Still open: certificate/token rotation for the fleet CA itself, and the
+exact list of action classes that count as risky.
