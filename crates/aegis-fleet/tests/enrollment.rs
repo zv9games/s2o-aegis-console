@@ -1,6 +1,7 @@
-use aegis_fleet::agent::{enroll, heartbeat, FleetEndpoint};
+use aegis_fleet::agent::{enroll, heartbeat, renew, FleetEndpoint};
 use aegis_fleet::ca::FleetCa;
 use aegis_fleet::keystore::{AgentKeyStore, SoftwareKeyStore};
+use aegis_fleet::policy::FleetPolicy;
 use aegis_fleet::proto::Response;
 use aegis_fleet::server::FleetServer;
 use aegis_fleet::store::Store;
@@ -14,12 +15,14 @@ struct Fixture {
 }
 
 async fn start() -> Fixture {
+    start_with(FleetPolicy::default()).await
+}
+
+async fn start_with(policy: FleetPolicy) -> Fixture {
     let ca = Arc::new(FleetCa::generate("test").unwrap());
     let store = Arc::new(Store::in_memory().unwrap());
     let (cert, key) = ca.issue_server_cert(&["fleet.test".to_string()]).unwrap();
-    let srv = Arc::new(
-        FleetServer::new(ca.clone(), store.clone(), &cert, &key, Duration::hours(1)).unwrap(),
-    );
+    let srv = Arc::new(FleetServer::new(ca.clone(), store.clone(), &cert, &key, policy).unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     tokio::spawn(srv.serve(listener));
@@ -145,6 +148,7 @@ async fn expired_client_cert_is_rejected() {
             "agent-expired",
             "h",
             &s2o_attest::public_key_b64(&cid),
+            "",
             false,
             now(),
             now(),
@@ -184,6 +188,7 @@ async fn client_cert_from_wrong_ca_is_rejected() {
             "agent-rogue",
             "h",
             &s2o_attest::public_key_b64(&cid),
+            "",
             false,
             now(),
             now(),
@@ -287,7 +292,7 @@ async fn ca_reloaded_from_disk_issues_certs_that_chain_to_original() {
             store.clone(),
             &cert,
             &key,
-            Duration::hours(1),
+            FleetPolicy::default(),
         )
         .unwrap(),
     );
@@ -316,4 +321,132 @@ async fn ca_reloaded_from_disk_issues_certs_that_chain_to_original() {
     .unwrap();
     assert!(matches!(r, Response::HeartbeatAck { .. }), "{r:?}");
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// Simulate an agent whose cert expired `hours_ago` hours ago.
+fn backdate(f: &Fixture, agent_id: &str, hours_ago: i64) {
+    f.store
+        .set_cert_not_after(agent_id, now() - hours_ago * 3600)
+        .unwrap();
+}
+
+async fn enrolled(f: &Fixture) -> (SoftwareKeyStore, aegis_fleet::agent::Enrollment) {
+    let token = f.store.create_token(now(), 3600).unwrap();
+    let keys = SoftwareKeyStore::ephemeral().unwrap();
+    let e = enroll(
+        &f.ep,
+        &keys,
+        &token,
+        "h",
+        &s2o_attest::public_key_b64(&cyberid_key()),
+    )
+    .await
+    .unwrap();
+    (keys, e)
+}
+
+#[tokio::test]
+async fn tpm_required_rejects_software_keys_without_burning_token() {
+    let f = start().await;
+    f.store
+        .set_setting("require_hardware_keys", "true")
+        .unwrap();
+    let token = f.store.create_token(now(), 3600).unwrap();
+    let keys = SoftwareKeyStore::ephemeral().unwrap();
+    let err = enroll(
+        &f.ep,
+        &keys,
+        &token,
+        "h",
+        &s2o_attest::public_key_b64(&cyberid_key()),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(err.to_string().contains("hardware-backed"), "{err}");
+    assert!(f.store.consume_token(&token, now(), "x").unwrap().is_ok());
+
+    let f2 = start_with(FleetPolicy {
+        require_hardware_keys: true,
+        ..Default::default()
+    })
+    .await;
+    let t2 = f2.store.create_token(now(), 3600).unwrap();
+    assert!(enroll(
+        &f2.ep,
+        &keys,
+        &t2,
+        "h",
+        &s2o_attest::public_key_b64(&cyberid_key())
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn software_agents_are_flagged_in_inventory() {
+    let f = start().await;
+    enrolled(&f).await;
+    let a = &f.store.list_agents().unwrap()[0];
+    assert!(!a.hardware_backed);
+}
+
+#[tokio::test]
+async fn issued_cert_lifetime_is_24h() {
+    let f = start().await;
+    let (_, e) = enrolled(&f).await;
+    let remaining = e.not_after_unix - now();
+    assert!((23 * 3600..=24 * 3600).contains(&remaining), "{remaining}");
+    assert!(!FleetPolicy::default().needs_renewal(e.not_after_unix, now()));
+    assert!(FleetPolicy::default().needs_renewal(e.not_after_unix, now() + 12 * 3600));
+}
+
+#[tokio::test]
+async fn renew_over_mtls_keeps_identity() {
+    let f = start().await;
+    let (keys, e) = enrolled(&f).await;
+    let r = renew(&f.ep, &keys, &e.agent_id, Some(&e.cert_pem))
+        .await
+        .unwrap();
+    assert_eq!(r.agent_id, e.agent_id);
+    assert_ne!(r.cert_pem, e.cert_pem);
+}
+
+#[tokio::test]
+async fn renew_after_expiry_within_grace_succeeds() {
+    let f = start().await;
+    let (keys, e) = enrolled(&f).await;
+    backdate(&f, &e.agent_id, 6 * 24);
+    let r = renew(&f.ep, &keys, &e.agent_id, None).await.unwrap();
+    assert_eq!(r.agent_id, e.agent_id);
+}
+
+#[tokio::test]
+async fn renew_after_grace_requires_reenrollment() {
+    let f = start().await;
+    let (keys, e) = enrolled(&f).await;
+    backdate(&f, &e.agent_id, 8 * 24);
+    let err = renew(&f.ep, &keys, &e.agent_id, None).await.err().unwrap();
+    assert!(err.to_string().contains("grace"), "{err}");
+}
+
+#[tokio::test]
+async fn renew_with_different_key_is_rejected() {
+    let f = start().await;
+    let (_, e) = enrolled(&f).await;
+    let thief = SoftwareKeyStore::ephemeral().unwrap();
+    let err = renew(&f.ep, &thief, &e.agent_id, None).await.err().unwrap();
+    assert!(err.to_string().contains("does not match"), "{err}");
+}
+
+#[tokio::test]
+async fn revoked_agent_cannot_renew() {
+    let f = start().await;
+    let (keys, e) = enrolled(&f).await;
+    f.store.revoke(&e.agent_id).unwrap();
+    let err = renew(&f.ep, &keys, &e.agent_id, Some(&e.cert_pem))
+        .await
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("revoked"), "{err}");
 }

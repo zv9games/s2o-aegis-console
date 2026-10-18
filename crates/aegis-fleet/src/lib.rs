@@ -17,6 +17,7 @@
 pub mod agent;
 pub mod ca;
 pub mod keystore;
+pub mod policy;
 pub mod proto;
 pub mod server;
 pub mod store;

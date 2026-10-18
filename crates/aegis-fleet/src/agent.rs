@@ -45,9 +45,7 @@ pub async fn enroll(
     cyberid_pubkey: &str,
 ) -> FleetResult<Enrollment> {
     crate::init_crypto();
-    let csr_pem = rcgen::CertificateParams::new(Vec::<String>::new())?
-        .serialize_request(keys.key_pair())?
-        .pem()?;
+    let csr_pem = csr(keys)?;
     let cfg = rustls::ClientConfig::builder()
         .with_root_certificates(root_store(&ep.ca_pem)?)
         .with_no_client_auth();
@@ -60,6 +58,67 @@ pub async fn enroll(
     };
     match exchange(ep, cfg, &req).await? {
         Response::Enrolled {
+            agent_id,
+            cert_pem,
+            not_after_unix,
+        } => Ok(Enrollment {
+            agent_id,
+            cert_pem,
+            not_after_unix,
+        }),
+        Response::Error { message } => Err(FleetError::Rejected(message)),
+        other => Err(FleetError::Protocol(format!(
+            "unexpected response: {other:?}"
+        ))),
+    }
+}
+
+fn csr(keys: &dyn AgentKeyStore) -> FleetResult<String> {
+    Ok(rcgen::CertificateParams::new(Vec::<String>::new())?
+        .serialize_request(keys.key_pair())?
+        .pem()?)
+}
+
+fn mtls_config(
+    ep: &FleetEndpoint,
+    keys: &dyn AgentKeyStore,
+    cert_pem: &str,
+) -> FleetResult<rustls::ClientConfig> {
+    let der = keys.private_key_der().ok_or_else(|| {
+        FleetError::Protocol(
+            "key store cannot export key; hardware signer not implemented yet".into(),
+        )
+    })?;
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(root_store(&ep.ca_pem)?)
+        .with_client_auth_cert(
+            parse_certs(cert_pem)?,
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)),
+        )?)
+}
+
+/// Renew the client certificate with the same key. Pass the current cert
+/// while it is still valid (mTLS); pass `None` once it has expired, which is
+/// accepted only within the server's offline grace period.
+pub async fn renew(
+    ep: &FleetEndpoint,
+    keys: &dyn AgentKeyStore,
+    agent_id: &str,
+    current_cert_pem: Option<&str>,
+) -> FleetResult<Enrollment> {
+    crate::init_crypto();
+    let cfg = match current_cert_pem {
+        Some(c) => mtls_config(ep, keys, c)?,
+        None => rustls::ClientConfig::builder()
+            .with_root_certificates(root_store(&ep.ca_pem)?)
+            .with_no_client_auth(),
+    };
+    let req = Request::Renew {
+        agent_id: Some(agent_id.to_string()),
+        csr_pem: csr(keys)?,
+    };
+    match exchange(ep, cfg, &req).await? {
+        Response::Renewed {
             agent_id,
             cert_pem,
             not_after_unix,

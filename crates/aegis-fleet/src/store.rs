@@ -55,12 +55,17 @@ CREATE TABLE IF NOT EXISTS agents (
     agent_id TEXT PRIMARY KEY,
     hostname TEXT NOT NULL,
     cyberid_pubkey TEXT NOT NULL,
+    key_spki TEXT NOT NULL,
     hardware_backed INTEGER NOT NULL,
     enrolled_at INTEGER NOT NULL,
     cert_not_after INTEGER NOT NULL,
     last_seen INTEGER,
     last_posture TEXT,
     revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );";
 
 impl Store {
@@ -122,21 +127,72 @@ impl Store {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_agent(
         &self,
         agent_id: &str,
         hostname: &str,
         cyberid_pubkey: &str,
+        key_spki_hex: &str,
         hardware_backed: bool,
         now: i64,
         cert_not_after: i64,
     ) -> FleetResult<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO agents (agent_id, hostname, cyberid_pubkey, hardware_backed, enrolled_at, cert_not_after)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![agent_id, hostname, cyberid_pubkey, hardware_backed, now, cert_not_after],
+            "INSERT INTO agents (agent_id, hostname, cyberid_pubkey, key_spki, hardware_backed, enrolled_at, cert_not_after)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![agent_id, hostname, cyberid_pubkey, key_spki_hex, hardware_backed, now, cert_not_after],
         )?;
         Ok(())
+    }
+
+    /// (key_spki_hex, cert_not_after, revoked) for an agent.
+    pub fn agent_key(&self, agent_id: &str) -> FleetResult<Option<(String, i64, bool)>> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT key_spki, cert_not_after, revoked FROM agents WHERE agent_id = ?1",
+                params![agent_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn set_cert_not_after(&self, agent_id: &str, not_after: i64) -> FleetResult<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE agents SET cert_not_after = ?1 WHERE agent_id = ?2",
+            params![not_after, agent_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> FleetResult<Option<String>> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> FleetResult<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Persisted `require_hardware_keys` setting (default false).
+    pub fn require_hardware_keys(&self) -> FleetResult<bool> {
+        Ok(self.get_setting("require_hardware_keys")?.as_deref() == Some("true"))
     }
 
     /// (cyberid_pubkey, revoked) for an agent.

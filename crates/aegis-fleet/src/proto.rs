@@ -17,6 +17,15 @@ pub enum Request {
         cyberid_pubkey: String,
         hardware_backed: bool,
     },
+    /// Renew the client certificate, keeping the enrolled key.
+    /// Over mTLS (valid cert): `agent_id` is ignored, identity comes from the cert.
+    /// Without a client cert (cert expired while offline): `agent_id` is
+    /// required and the CSR, which is self-signed by the agent key, must match
+    /// the enrolled key and arrive within the offline grace period.
+    Renew {
+        agent_id: Option<String>,
+        csr_pem: String,
+    },
     Heartbeat {
         /// Free-form posture snapshot (informational; untrusted).
         posture: serde_json::Value,
@@ -29,6 +38,11 @@ pub enum Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Enrolled {
+        agent_id: String,
+        cert_pem: String,
+        not_after_unix: i64,
+    },
+    Renewed {
         agent_id: String,
         cert_pem: String,
         not_after_unix: i64,

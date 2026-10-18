@@ -29,8 +29,15 @@ enum Cmd {
     },
     /// Create a one-time enrollment token
     Token {
+        /// Token lifetime in hours (default 24, single use)
         #[arg(long, default_value_t = 24)]
         ttl_hours: i64,
+    },
+    /// Show or change fleet settings
+    Settings {
+        /// Require hardware-backed (TPM) agent keys for new enrollments
+        #[arg(long)]
+        require_tpm: Option<bool>,
     },
     /// Run the server
     Serve {
@@ -39,6 +46,9 @@ enum Cmd {
         /// Client certificate lifetime in hours
         #[arg(long, default_value_t = 24)]
         cert_ttl_hours: i64,
+        /// Offline grace period in days (renew with an expired cert)
+        #[arg(long, default_value_t = 7)]
+        grace_days: i64,
     },
     /// List enrolled agents
     Agents,
@@ -85,9 +95,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("expires in {ttl_hours} h, single use");
             println!("ca fingerprint: {}", ca.fingerprint());
         }
+        Cmd::Settings { require_tpm } => {
+            let store = Store::open(&dir.join("fleet.db"))?;
+            if let Some(v) = require_tpm {
+                store.set_setting("require_hardware_keys", if v { "true" } else { "false" })?;
+            }
+            println!("require_tpm: {}", store.require_hardware_keys()?);
+        }
         Cmd::Serve {
             listen,
             cert_ttl_hours,
+            grace_days,
         } => {
             let ca = Arc::new(FleetCa::load(&dir)?);
             let store = Arc::new(Store::open(&dir.join("fleet.db"))?);
@@ -96,7 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 store,
                 &std::fs::read_to_string(dir.join("server.pem"))?,
                 &std::fs::read_to_string(dir.join("server.key"))?,
-                time::Duration::hours(cert_ttl_hours),
+                aegis_fleet::policy::FleetPolicy {
+                    cert_ttl: time::Duration::hours(cert_ttl_hours),
+                    renew_after: time::Duration::hours(cert_ttl_hours) / 2,
+                    offline_grace: time::Duration::days(grace_days),
+                    ..Default::default()
+                },
             )?);
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             println!("aegis-fleet listening on {listen} (mTLS)");
@@ -104,7 +127,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Cmd::Agents => {
             let store = Store::open(&dir.join("fleet.db"))?;
-            println!("{}", serde_json::to_string_pretty(&store.list_agents()?)?);
+            let agents = store.list_agents()?;
+            let software = agents.iter().filter(|a| !a.hardware_backed).count();
+            println!("{}", serde_json::to_string_pretty(&agents)?);
+            if software > 0 {
+                eprintln!("WARNING: {software} agent(s) use software keys (not TPM-backed)");
+            }
         }
         Cmd::Revoke { agent_id } => {
             let store = Store::open(&dir.join("fleet.db"))?;

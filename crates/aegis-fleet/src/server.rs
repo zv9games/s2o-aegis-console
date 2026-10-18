@@ -1,6 +1,7 @@
 //! mTLS fleet server.
 
 use crate::ca::FleetCa;
+use crate::policy::FleetPolicy;
 use crate::proto::{read_frame, write_frame, Request, Response};
 use crate::store::Store;
 use crate::{FleetError, FleetResult};
@@ -13,8 +14,7 @@ use tokio_rustls::TlsAcceptor;
 pub struct FleetServer {
     pub ca: Arc<FleetCa>,
     pub store: Arc<Store>,
-    /// Lifetime of issued client certificates.
-    pub cert_ttl: time::Duration,
+    pub policy: FleetPolicy,
     acceptor: TlsAcceptor,
 }
 
@@ -50,6 +50,20 @@ fn agent_id_from_cert(der: &CertificateDer<'_>) -> Option<String> {
     Some(cn)
 }
 
+/// Verify a CSR's self-signature (proof of key possession) and return its
+/// SubjectPublicKeyInfo as hex.
+fn csr_spki_hex(csr_pem: &str) -> FleetResult<String> {
+    use x509_parser::prelude::FromDer;
+    let (_, pem) = x509_parser::pem::parse_x509_pem(csr_pem.as_bytes())
+        .map_err(|e| FleetError::Rejected(format!("bad CSR PEM: {e}")))?;
+    let (_, csr) =
+        x509_parser::certification_request::X509CertificationRequest::from_der(&pem.contents)
+            .map_err(|e| FleetError::Rejected(format!("bad CSR: {e}")))?;
+    csr.verify_signature()
+        .map_err(|_| FleetError::Rejected("CSR signature invalid".into()))?;
+    Ok(hex::encode(csr.certification_request_info.subject_pki.raw))
+}
+
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -60,7 +74,7 @@ impl FleetServer {
         store: Arc<Store>,
         server_cert_pem: &str,
         server_key_pem: &str,
-        cert_ttl: time::Duration,
+        policy: FleetPolicy,
     ) -> FleetResult<Self> {
         crate::init_crypto();
         // Client certs are optional at the TLS layer (enrollment has none yet),
@@ -76,7 +90,7 @@ impl FleetServer {
         Ok(Self {
             ca,
             store,
-            cert_ttl,
+            policy,
             acceptor: TlsAcceptor::from(Arc::new(cfg)),
         })
     }
@@ -123,6 +137,15 @@ impl FleetServer {
                 cyberid_pubkey,
                 hardware_backed,
             } => {
+                if !hardware_backed
+                    && (self.policy.require_hardware_keys || self.store.require_hardware_keys()?)
+                {
+                    // Checked before the token is consumed so it is not wasted.
+                    return Err(FleetError::Rejected(
+                        "this fleet requires hardware-backed (TPM) agent keys".into(),
+                    ));
+                }
+                let spki = csr_spki_hex(&csr_pem)?;
                 s2o_attest::parse_public_key(&cyberid_pubkey)
                     .map_err(|e| FleetError::Rejected(format!("bad cyberid_pubkey: {e}")))?;
                 let agent_id = {
@@ -136,11 +159,12 @@ impl FleetServer {
                 }
                 let (cert_pem, not_after) =
                     self.ca
-                        .issue_client_cert(&csr_pem, &agent_id, self.cert_ttl)?;
+                        .issue_client_cert(&csr_pem, &agent_id, self.policy.cert_ttl)?;
                 self.store.add_agent(
                     &agent_id,
                     &hostname,
                     &cyberid_pubkey,
+                    &spki,
                     hardware_backed,
                     now(),
                     not_after,
@@ -149,6 +173,43 @@ impl FleetServer {
                     agent_id,
                     cert_pem,
                     not_after_unix: not_after,
+                })
+            }
+            Request::Renew { agent_id, csr_pem } => {
+                let (agent_id, via_mtls) = match (peer_agent, agent_id) {
+                    (Some(id), _) => (id, true),
+                    (None, Some(id)) => (id, false),
+                    (None, None) => {
+                        return Err(FleetError::Rejected(
+                            "renew needs a client cert or agent_id".into(),
+                        ))
+                    }
+                };
+                let (spki, not_after, revoked) = self
+                    .store
+                    .agent_key(&agent_id)?
+                    .ok_or_else(|| FleetError::Rejected("unknown agent".into()))?;
+                if revoked {
+                    return Err(FleetError::Rejected("agent revoked".into()));
+                }
+                if csr_spki_hex(&csr_pem)? != spki {
+                    return Err(FleetError::Rejected(
+                        "CSR key does not match the enrolled key".into(),
+                    ));
+                }
+                if !via_mtls && !self.policy.within_grace(not_after, now()) {
+                    return Err(FleetError::Rejected(
+                        "offline grace period exceeded; re-enroll with a new token".into(),
+                    ));
+                }
+                let (cert_pem, na) =
+                    self.ca
+                        .issue_client_cert(&csr_pem, &agent_id, self.policy.cert_ttl)?;
+                self.store.set_cert_not_after(&agent_id, na)?;
+                Ok(Response::Renewed {
+                    agent_id,
+                    cert_pem,
+                    not_after_unix: na,
                 })
             }
             Request::Heartbeat {
