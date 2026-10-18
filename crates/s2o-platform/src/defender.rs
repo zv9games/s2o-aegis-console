@@ -41,8 +41,8 @@ fn mpcmdrun(args: &[&str]) -> PlatformResult<()> {
     if !cfg!(windows) {
         return windows_only("MpCmdRun");
     }
-    let exe = find_mp_cmd_run()
-        .ok_or_else(|| PlatformError::Command("MpCmdRun.exe not found".into()))?;
+    let exe =
+        find_mp_cmd_run().ok_or_else(|| PlatformError::Command("MpCmdRun.exe not found".into()))?;
     cmd::run(&exe.to_string_lossy(), args).map(|_| ())
 }
 

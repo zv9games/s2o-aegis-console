@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use cyberwall_backend_windows::WindowsFirewallEngine;
-use cyberwall_core::{FirewallEngine, RuleAction, RuleDirection, RuleProtocol, FirewallRule, ProfileType};
+use cyberwall_core::{
+    FirewallEngine, FirewallRule, ProfileType, RuleAction, RuleDirection, RuleProtocol,
+};
 
 #[derive(Parser)]
 #[command(name = "aegis")]
@@ -68,9 +70,7 @@ enum FirewallCommands {
         protocol: String,
     },
     /// Block a specific remote IP address
-    BlockIp {
-        ip: String,
-    },
+    BlockIp { ip: String },
     /// List active firewall rules
     List,
 }
@@ -78,13 +78,9 @@ enum FirewallCommands {
 #[derive(Subcommand)]
 enum DnsCommands {
     /// Resolve domain via Encrypted DNS-over-HTTPS (DoH)
-    Resolve {
-        domain: String,
-    },
+    Resolve { domain: String },
     /// Add domain to local sinkhole blocklist
-    Block {
-        domain: String,
-    },
+    Block { domain: String },
 }
 
 #[derive(Subcommand)]
@@ -106,28 +102,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let caps = fw.driver_capabilities();
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "platform": st.platform,
-                    "enabled": st.enabled,
-                    "defender_active": st.defender_active,
-                    "substrate": caps.substrate,
-                    "driver_version": caps.driver_version,
-                    "profiles": {
-                        "private": st.profile_private,
-                        "public": st.profile_public,
-                        "domain": st.profile_domain,
-                    }
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "platform": st.platform,
+                        "enabled": st.enabled,
+                        "defender_active": st.defender_active,
+                        "substrate": caps.substrate,
+                        "driver_version": caps.driver_version,
+                        "profiles": {
+                            "private": st.profile_private,
+                            "public": st.profile_public,
+                            "domain": st.profile_domain,
+                        }
+                    }))?
+                );
             } else {
-                println!("{}", "=========================================================".cyan());
-                println!("{}", "      S2O AEGIS UNIVERSAL MASTER CONTROL CLI             ".bold().green());
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "      S2O AEGIS UNIVERSAL MASTER CONTROL CLI             "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
                 println!(" Operating System : {:?}", caps.os);
-                println!(" Driver Substrate : {:?} [{}]", caps.substrate, if caps.substrate == cyberwall_core::DriverSubstrate::UserspaceNative { "Tier-0 Native ($0/yr)".green().bold() } else { "Kernel Mode Attached".cyan().bold() });
-                println!(" Substrate Engine : {}", caps.driver_version.unwrap_or_default());
-                println!(" OS Firewall      : {}", if st.enabled { "ENABLED".green().bold() } else { "DISABLED".red().bold() });
-                println!(" CyberDefender    : {}", if st.defender_active { "ACTIVE".green().bold() } else { "INACTIVE".red().bold() });
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    " Driver Substrate : {:?} [{}]",
+                    caps.substrate,
+                    if caps.substrate == cyberwall_core::DriverSubstrate::UserspaceNative {
+                        "Tier-0 Native ($0/yr)".green().bold()
+                    } else {
+                        "Kernel Mode Attached".cyan().bold()
+                    }
+                );
+                println!(
+                    " Substrate Engine : {}",
+                    caps.driver_version.unwrap_or_default()
+                );
+                println!(
+                    " OS Firewall      : {}",
+                    if st.enabled {
+                        "ENABLED".green().bold()
+                    } else {
+                        "DISABLED".red().bold()
+                    }
+                );
+                println!(
+                    " CyberDefender    : {}",
+                    if st.defender_active {
+                        "ACTIVE".green().bold()
+                    } else {
+                        "INACTIVE".red().bold()
+                    }
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
                 println!(" Modules: firewall, scan, dns, edr, posture, daemon (see README for per-pillar status)");
             }
         }
@@ -143,38 +181,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", "[AEGIS] WARNING: Firewall disabled.".yellow().bold());
             }
             FirewallCommands::BlockPort { port, protocol } => {
-                println!("[AEGIS] Adding block rule for port {}/{}...", port, protocol);
+                println!(
+                    "[AEGIS] Adding block rule for port {}/{}...",
+                    port, protocol
+                );
                 let rule = FirewallRule {
                     name: format!("S2O-Aegis-Block-Port-{}", port),
                     enabled: true,
                     action: RuleAction::Block,
                     direction: RuleDirection::Inbound,
                     profile: ProfileType::All,
-                    protocol: Some(if protocol.eq_ignore_ascii_case("UDP") { RuleProtocol::Udp } else { RuleProtocol::Tcp }),
+                    protocol: Some(if protocol.eq_ignore_ascii_case("UDP") {
+                        RuleProtocol::Udp
+                    } else {
+                        RuleProtocol::Tcp
+                    }),
                     local_ports: Some(port.to_string()),
                     remote_ports: None,
                     remote_addresses: None,
                     application: None,
                 };
                 fw.add_rule(&rule).await?;
-                println!("{}", format!("[AEGIS] OK: Block rule created for port {}", port).green().bold());
+                println!(
+                    "{}",
+                    format!("[AEGIS] OK: Block rule created for port {}", port)
+                        .green()
+                        .bold()
+                );
             }
             FirewallCommands::AllowPort { port, protocol } => {
-                println!("[AEGIS] Adding allow rule for port {}/{}...", port, protocol);
+                println!(
+                    "[AEGIS] Adding allow rule for port {}/{}...",
+                    port, protocol
+                );
                 let rule = FirewallRule {
                     name: format!("S2O-Aegis-Allow-Port-{}", port),
                     enabled: true,
                     action: RuleAction::Allow,
                     direction: RuleDirection::Inbound,
                     profile: ProfileType::All,
-                    protocol: Some(if protocol.eq_ignore_ascii_case("UDP") { RuleProtocol::Udp } else { RuleProtocol::Tcp }),
+                    protocol: Some(if protocol.eq_ignore_ascii_case("UDP") {
+                        RuleProtocol::Udp
+                    } else {
+                        RuleProtocol::Tcp
+                    }),
                     local_ports: Some(port.to_string()),
                     remote_ports: None,
                     remote_addresses: None,
                     application: None,
                 };
                 fw.add_rule(&rule).await?;
-                println!("{}", format!("[AEGIS] OK: Allow rule created for port {}", port).green().bold());
+                println!(
+                    "{}",
+                    format!("[AEGIS] OK: Allow rule created for port {}", port)
+                        .green()
+                        .bold()
+                );
             }
             FirewallCommands::BlockIp { ip } => {
                 println!("[AEGIS] Blocking IP {}...", ip);
@@ -191,11 +253,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     application: None,
                 };
                 fw.add_rule(&rule).await?;
-                println!("{}", format!("[AEGIS] OK: Inbound traffic from {} blocked.", ip).green().bold());
+                println!(
+                    "{}",
+                    format!("[AEGIS] OK: Inbound traffic from {} blocked.", ip)
+                        .green()
+                        .bold()
+                );
             }
             FirewallCommands::List => {
                 let rules = fw.list_rules().await?;
-                println!("{}", format!("[AEGIS] Active Firewall Rules ({} total):", rules.len()).cyan());
+                println!(
+                    "{}",
+                    format!("[AEGIS] Active Firewall Rules ({} total):", rules.len()).cyan()
+                );
                 for r in rules.iter().take(20) {
                     println!("  - {:<40} [{:?}] [{:?}]", r.name, r.direction, r.action);
                 }
@@ -205,7 +275,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Commands::Scan { path } => {
-            println!("[AEGIS] Invoking CyberDefender SHA-256 integrity scanner on: {}", path);
+            println!(
+                "[AEGIS] Invoking CyberDefender SHA-256 integrity scanner on: {}",
+                path
+            );
             let status = std::process::Command::new("cargo")
                 .args(["run", "-q", "-p", "cyberdefender", "--", "scan", &path])
                 .status()?;
@@ -215,7 +288,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Dns { action } => match action {
             DnsCommands::Resolve { domain } => {
-                println!("[AEGIS] Resolving {} via Cloudflare Encrypted DoH...", domain);
+                println!(
+                    "[AEGIS] Resolving {} via Cloudflare Encrypted DoH...",
+                    domain
+                );
                 let _ = std::process::Command::new("cargo")
                     .args(["run", "-q", "-p", "cyberdns", "--", "lookup", &domain])
                     .status()?;
@@ -256,13 +332,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match s2o_bus::AegisIpcClient::call(&req).await {
                 Ok(resp) => {
                     if resp.success {
-                        println!("{}", format!("[AEGIS IPC] SUCCESS: {:?}", resp.data).green().bold());
+                        println!(
+                            "{}",
+                            format!("[AEGIS IPC] SUCCESS: {:?}", resp.data)
+                                .green()
+                                .bold()
+                        );
                     } else {
-                        println!("{}", format!("[AEGIS IPC] ERROR: {:?}", resp.error).red().bold());
+                        println!(
+                            "{}",
+                            format!("[AEGIS IPC] ERROR: {:?}", resp.error).red().bold()
+                        );
                     }
                 }
                 Err(e) => {
-                    println!("{}", format!("[AEGIS IPC] Failed to communicate with daemon: {e}").yellow());
+                    println!(
+                        "{}",
+                        format!("[AEGIS IPC] Failed to communicate with daemon: {e}").yellow()
+                    );
                     println!("Make sure 'aegisd start' is running in the background.");
                 }
             }

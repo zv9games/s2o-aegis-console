@@ -99,11 +99,19 @@ mod tests {
 
         let forged = serde_json::json!({"sub": "t", "exp": 100, "posture_score": 100});
         let parts: Vec<&str> = tok.split('.').collect();
-        let bad = format!("{}.{}.{}", parts[0], B64.encode(forged.to_string()), parts[2]);
+        let bad = format!(
+            "{}.{}.{}",
+            parts[0],
+            B64.encode(forged.to_string()),
+            parts[2]
+        );
         assert!(verify(&key.verifying_key(), &bad, 10).is_err(), "tampered");
 
         let other = SigningKey::generate(&mut rand::rngs::OsRng);
-        assert!(verify(&other.verifying_key(), &tok, 10).is_err(), "wrong key");
+        assert!(
+            verify(&other.verifying_key(), &tok, 10).is_err(),
+            "wrong key"
+        );
     }
 
     #[test]

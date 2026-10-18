@@ -100,8 +100,14 @@ fn collect_posture(st: &cyberwall_core::FirewallStatus) -> Posture {
     Posture {
         firewall: st.enabled && st.profile_private && st.profile_public,
         defender: st.defender_active,
-        uac: check_registry_dword("HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA") == Some(1),
-        secure_boot: check_registry_dword("HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State", "UEFISecureBootEnabled") == Some(1),
+        uac: check_registry_dword(
+            "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            "EnableLUA",
+        ) == Some(1),
+        secure_boot: check_registry_dword(
+            "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+            "UEFISecureBootEnabled",
+        ) == Some(1),
     }
 }
 
@@ -111,25 +117,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Status => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "        S2O CYBERID ZERO-TRUST IDENTITY            ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Posture Engine    : {}", "4-check posture audit (firewall, Defender, UAC, SecureBoot)".green());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "        S2O CYBERID ZERO-TRUST IDENTITY            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                " Posture Engine    : {}",
+                "4-check posture audit (firewall, Defender, UAC, SecureBoot)".green()
+            );
             println!(" Operating System  : {}", get_os_info().bold());
-            println!(" Zero-Trust Model  : {}", "Continuous Verification (NIST SP 800-207)".bold());
+            println!(
+                " Zero-Trust Model  : {}",
+                "Continuous Verification (NIST SP 800-207)".bold()
+            );
             println!(" Identity Protocols: Device Attestation / FIDO2 / Token Claims");
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Posture => {
             let fw = WindowsFirewallEngine::new();
             let st = fw.get_status().await?;
             let p = collect_posture(&st);
 
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "      S2O CYBERID ZERO-TRUST POSTURE AUDIT         ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "      S2O CYBERID ZERO-TRUST POSTURE AUDIT         "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Host Environment : {}", get_os_info().cyan());
-            println!("{}", "---------------------------------------------------------".cyan());
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
             let line = |label: &str, pass: bool, pts: u32, ok: &str, bad: &str| {
                 if pass {
                     println!(" {label}: {} ({pts}/{pts} pts)", ok.green().bold());
@@ -137,22 +177,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!(" {label}: {} (0/{pts} pts)", bad.red().bold());
                 }
             };
-            line("[1/4] Firewall Protection   ", p.firewall, W_FIREWALL, "PASS - Private & Public profiles on", "FAIL - Profiles Disabled");
-            line("[2/4] Antivirus (Defender)  ", p.defender, W_DEFENDER, "PASS - Defender AntivirusEnabled", "FAIL - Defender Inactive / Unknown");
-            line("[3/4] User Access Ctrl (UAC)", p.uac, W_UAC, "PASS - EnableLUA = 1", "FAIL - UAC Disabled or Unreadable");
-            line("[4/4] UEFI SecureBoot State ", p.secure_boot, W_SECUREBOOT, "PASS - SecureBoot Enabled", "FAIL - SecureBoot Not Detected");
+            line(
+                "[1/4] Firewall Protection   ",
+                p.firewall,
+                W_FIREWALL,
+                "PASS - Private & Public profiles on",
+                "FAIL - Profiles Disabled",
+            );
+            line(
+                "[2/4] Antivirus (Defender)  ",
+                p.defender,
+                W_DEFENDER,
+                "PASS - Defender AntivirusEnabled",
+                "FAIL - Defender Inactive / Unknown",
+            );
+            line(
+                "[3/4] User Access Ctrl (UAC)",
+                p.uac,
+                W_UAC,
+                "PASS - EnableLUA = 1",
+                "FAIL - UAC Disabled or Unreadable",
+            );
+            line(
+                "[4/4] UEFI SecureBoot State ",
+                p.secure_boot,
+                W_SECUREBOOT,
+                "PASS - SecureBoot Enabled",
+                "FAIL - SecureBoot Not Detected",
+            );
 
             let total_score = p.score();
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             let score_display = if total_score >= 80 {
-                format!("{} / 100 [TRUSTED ENDPOINT]", total_score).green().bold()
+                format!("{} / 100 [TRUSTED ENDPOINT]", total_score)
+                    .green()
+                    .bold()
             } else if total_score >= 60 {
-                format!("{} / 100 [DEGRADED POSTURE]", total_score).yellow().bold()
+                format!("{} / 100 [DEGRADED POSTURE]", total_score)
+                    .yellow()
+                    .bold()
             } else {
-                format!("{} / 100 [UNTRUSTED / NON-COMPLIANT]", total_score).red().bold()
+                format!("{} / 100 [UNTRUSTED / NON-COMPLIANT]", total_score)
+                    .red()
+                    .bold()
             };
             println!(" ZERO-TRUST POSTURE SCORE: {}", score_display);
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Attest { device } => {
             let fw = WindowsFirewallEngine::new();
@@ -175,14 +251,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             let jws = token::sign(&key, &claims)?;
 
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "        CYBERID SIGNED POSTURE TOKEN (Ed25519)           ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "        CYBERID SIGNED POSTURE TOKEN (Ed25519)           "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!("{}", serde_json::to_string_pretty(&claims)?);
-            println!("{}", "---------------------------------------------------------".cyan());
-            println!(" Signing key : {} ({})", token::KEY_PATH, token::public_key_b64(&key));
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
+            println!(
+                " Signing key : {} ({})",
+                token::KEY_PATH,
+                token::public_key_b64(&key)
+            );
             println!(" Token       :\n{}", jws);
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Verify { token: jws, pubkey } => {
             let vk = match pubkey {
@@ -190,7 +287,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => token::load_or_create_key()?.verifying_key(),
             };
             let claims = token::verify(&vk, &jws, chrono::Utc::now().timestamp())?;
-            println!("{}", "[cyberid] OK: signature valid and token not expired.".green().bold());
+            println!(
+                "{}",
+                "[cyberid] OK: signature valid and token not expired."
+                    .green()
+                    .bold()
+            );
             println!("{}", serde_json::to_string_pretty(&claims)?);
         }
         Commands::Pubkey => {

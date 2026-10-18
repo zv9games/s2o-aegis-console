@@ -78,7 +78,10 @@ struct MeshState {
 fn generate_clamped_wireguard_key() -> (String, String) {
     let secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
     let public = x25519_dalek::PublicKey::from(&secret);
-    (encode_key(&secret.to_bytes()), encode_key(public.as_bytes()))
+    (
+        encode_key(&secret.to_bytes()),
+        encode_key(public.as_bytes()),
+    )
 }
 
 fn encode_key(bytes: &[u8; 32]) -> String {
@@ -97,7 +100,10 @@ mod tests {
         assert_eq!(privk.len(), 44);
         assert_eq!(pubk.len(), 44);
         let raw: [u8; 32] = base64::engine::general_purpose::STANDARD
-            .decode(&privk).unwrap().try_into().unwrap();
+            .decode(&privk)
+            .unwrap()
+            .try_into()
+            .unwrap();
         let derived = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(raw));
         assert_eq!(encode_key(derived.as_bytes()), pubk);
     }
@@ -105,14 +111,20 @@ mod tests {
     #[test]
     fn rfc7748_vector() {
         // RFC 7748 section 6.1, Alice's keypair
-        let sk: [u8; 32] = hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+        let sk: [u8; 32] =
+            hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
         let pk = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sk));
-        assert_eq!(pk.as_bytes(), &hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"));
+        assert_eq!(
+            pk.as_bytes(),
+            &hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        );
     }
 
     fn hex32(h: &str) -> [u8; 32] {
         let mut o = [0u8; 32];
-        for i in 0..32 { o[i] = u8::from_str_radix(&h[i*2..i*2+2], 16).unwrap(); }
+        for i in 0..32 {
+            o[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap();
+        }
         o
     }
 }
@@ -170,25 +182,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let state = load_mesh_state();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "         S2O CYBERMESH VPN OVERLAY                 ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "         S2O CYBERMESH VPN OVERLAY                 "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Node Identifier   : {}", state.node_name.bold());
             println!(" Virtual Mesh IP   : {}", state.virtual_ip.green().bold());
             println!(" Public Node Key   : {}", state.public_key.yellow());
             println!(" Listen UDP Port   : {}", state.listen_port);
-            println!(" Registered Peers  : {}", format!("{} active nodes in mesh topology", state.peers.len()).bold());
+            println!(
+                " Registered Peers  : {}",
+                format!("{} active nodes in mesh topology", state.peers.len()).bold()
+            );
             println!(" Config Storage    : {}", MESH_CONFIG_PATH);
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Genkey => {
             let (privk, pubk) = generate_clamped_wireguard_key();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "       WIREGUARD X25519 KEYPAIR GENERATED                ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "       WIREGUARD X25519 KEYPAIR GENERATED                "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Private Key : {}", privk.yellow().bold());
             println!(" Public Key  : {}", pubk.green().bold());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::GenConfig { address, port, out } => {
             let mut state = load_mesh_state();
@@ -219,9 +262,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             std::fs::write(&out, &conf)?;
-            println!("{}", format!("[cybermesh] OK: WireGuard configuration generated at: {}", out.display()).green().bold());
+            println!(
+                "{}",
+                format!(
+                    "[cybermesh] OK: WireGuard configuration generated at: {}",
+                    out.display()
+                )
+                .green()
+                .bold()
+            );
         }
-        Commands::AddPeer { pubkey, allowed_ips, endpoint, name } => {
+        Commands::AddPeer {
+            pubkey,
+            allowed_ips,
+            endpoint,
+            name,
+        } => {
             let mut state = load_mesh_state();
             let peer = MeshPeer {
                 name: name.clone(),
@@ -232,19 +288,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             state.peers.insert(name.clone(), peer);
             save_mesh_state(&state)?;
-            println!("{}", format!("[cybermesh] OK: peer node '{}' registered in mesh.", name).green().bold());
+            println!(
+                "{}",
+                format!("[cybermesh] OK: peer node '{}' registered in mesh.", name)
+                    .green()
+                    .bold()
+            );
         }
         Commands::Peers => {
             let state = load_mesh_state();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "          CyberMesh Overlay — Connected Peers            ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "          CyberMesh Overlay — Connected Peers            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Total Peers: {}", state.peers.len());
             for (idx, (_, p)) in state.peers.iter().enumerate() {
                 println!("{}. {} ({})", idx + 1, p.name.bold(), p.allowed_ips.green());
                 println!("   PubKey   : {}", p.pubkey);
-                println!("   Endpoint : {}", p.endpoint.as_deref().unwrap_or("Dynamic / NAT"));
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "   Endpoint : {}",
+                    p.endpoint.as_deref().unwrap_or("Dynamic / NAT")
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
             }
         }
     }

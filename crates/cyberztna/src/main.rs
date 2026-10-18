@@ -104,31 +104,41 @@ fn save_routes(routes: &HashMap<String, ZtnaRoute>) -> Result<(), Box<dyn std::e
 
 async fn evaluate_local_posture() -> (u32, bool) {
     let fw = WindowsFirewallEngine::new();
-    let st = fw.get_status().await.unwrap_or(cyberwall_core::FirewallStatus {
-        enabled: false,
-        outbound_blocked: false,
-        defender_active: false,
-        profile_private: false,
-        profile_public: false,
-        profile_domain: false,
-        platform: "Windows".into(),
-        backend_driver: "".into(),
-        substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
-    });
+    let st = fw
+        .get_status()
+        .await
+        .unwrap_or(cyberwall_core::FirewallStatus {
+            enabled: false,
+            outbound_blocked: false,
+            defender_active: false,
+            profile_private: false,
+            profile_public: false,
+            profile_domain: false,
+            platform: "Windows".into(),
+            backend_driver: "".into(),
+            substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
+        });
 
     let uac_output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", "Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name 'EnableLUA' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty EnableLUA"])
         .output();
-    let uac_pass = uac_output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1").unwrap_or(false);
+    let uac_pass = uac_output
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+        .unwrap_or(false);
 
     let sb_output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", "Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State' -Name 'UEFISecureBootEnabled' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty UEFISecureBootEnabled"])
         .output();
-    let sb_pass = sb_output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1").unwrap_or(false);
+    let sb_pass = sb_output
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+        .unwrap_or(false);
 
     // Same weights as cyberid (30/30/20/20); no unconditional points.
-    let score = (if st.enabled && st.profile_private && st.profile_public { 30 } else { 0 })
-        + (if st.defender_active { 30 } else { 0 })
+    let score = (if st.enabled && st.profile_private && st.profile_public {
+        30
+    } else {
+        0
+    }) + (if st.defender_active { 30 } else { 0 })
         + (if uac_pass { 20 } else { 0 })
         + (if sb_pass { 20 } else { 0 });
 
@@ -142,29 +152,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let routes = load_routes();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "       S2O ZERO-TRUST APP ACCESS GATEWAY           ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Gateway Mode      : {}", "NOT IMPLEMENTED - routes are stored, no traffic is proxied".red());
-            println!(" Protected Apps    : {}", format!("{} configured application tunnels", routes.len()).bold());
-            println!(" Gate Enforcement  : {}", "On-demand local posture preflight (`connect`)".bold());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "       S2O ZERO-TRUST APP ACCESS GATEWAY           "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                " Gateway Mode      : {}",
+                "NOT IMPLEMENTED - routes are stored, no traffic is proxied".red()
+            );
+            println!(
+                " Protected Apps    : {}",
+                format!("{} configured application tunnels", routes.len()).bold()
+            );
+            println!(
+                " Gate Enforcement  : {}",
+                "On-demand local posture preflight (`connect`)".bold()
+            );
             println!(" Policy Storage    : {}", ZTNA_POLICY_PATH);
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Routes => {
             let routes = load_routes();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "       CyberZTNA — Protected Application Segments        ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "       CyberZTNA — Protected Application Segments        "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Configured Routes: {}", routes.len());
             for (idx, (_, r)) in routes.iter().enumerate() {
-                println!("{}. App: {} -> Target: {}", idx + 1, r.app.bold(), r.target.green());
-                println!("   Required Score : {} / 100", r.min_posture.to_string().yellow());
-                println!("   Requires UEFI  : {}", if r.require_secure_boot { "YES".green() } else { "NO".normal() });
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}. App: {} -> Target: {}",
+                    idx + 1,
+                    r.app.bold(),
+                    r.target.green()
+                );
+                println!(
+                    "   Required Score : {} / 100",
+                    r.min_posture.to_string().yellow()
+                );
+                println!(
+                    "   Requires UEFI  : {}",
+                    if r.require_secure_boot {
+                        "YES".green()
+                    } else {
+                        "NO".normal()
+                    }
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
             }
         }
-        Commands::AddRoute { app, target, min_posture, require_secure_boot } => {
+        Commands::AddRoute {
+            app,
+            target,
+            min_posture,
+            require_secure_boot,
+        } => {
             let mut routes = load_routes();
             let key = app.to_lowercase();
             let route = ZtnaRoute {
@@ -182,35 +249,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let routes = load_routes();
             let key = app.to_lowercase();
 
-            println!("{}", format!("[cyberztna] requesting connection to application segment: '{}'...", app).cyan());
+            println!(
+                "{}",
+                format!(
+                    "[cyberztna] requesting connection to application segment: '{}'...",
+                    app
+                )
+                .cyan()
+            );
 
             if let Some(route) = routes.get(&key) {
-                println!("{}", "[cyberztna] initiating pre-flight zero-trust device posture audit...".cyan());
+                println!(
+                    "{}",
+                    "[cyberztna] initiating pre-flight zero-trust device posture audit...".cyan()
+                );
                 let (score, sb_pass) = evaluate_local_posture().await;
 
-                println!("{}", "---------------------------------------------------------".cyan());
-                println!(" Evaluated Posture Score : {} / 100", score.to_string().bold());
-                println!(" Required Posture Score  : {} / 100", route.min_posture.to_string().yellow());
-                println!(" SecureBoot Requirement  : {}", if route.require_secure_boot { "ENFORCED".yellow() } else { "OPTIONAL".normal() });
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(
+                    " Evaluated Posture Score : {} / 100",
+                    score.to_string().bold()
+                );
+                println!(
+                    " Required Posture Score  : {} / 100",
+                    route.min_posture.to_string().yellow()
+                );
+                println!(
+                    " SecureBoot Requirement  : {}",
+                    if route.require_secure_boot {
+                        "ENFORCED".yellow()
+                    } else {
+                        "OPTIONAL".normal()
+                    }
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
 
                 let posture_ok = score >= route.min_posture;
                 let sb_ok = !route.require_secure_boot || sb_pass;
 
                 if posture_ok && sb_ok {
-                    println!("{}", "=========================================================".cyan());
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
                     println!(" POSTURE CHECK : {}", "PASSED".green().bold());
-                    println!(" Tunnel        : {}", format!("NOT OPENED - the ZTNA proxy is not implemented yet (target {})", route.target).yellow());
-                    println!("{}", "=========================================================".cyan());
+                    println!(
+                        " Tunnel        : {}",
+                        format!(
+                            "NOT OPENED - the ZTNA proxy is not implemented yet (target {})",
+                            route.target
+                        )
+                        .yellow()
+                    );
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
                 } else {
-                    println!("{}", "=========================================================".cyan());
-                    println!(" POSTURE CHECK : {}", "FAILED (posture non-compliant)".red().bold());
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
+                    println!(
+                        " POSTURE CHECK : {}",
+                        "FAILED (posture non-compliant)".red().bold()
+                    );
                     println!(" Remediation   : Device health score insufficient to access micro-segment.");
-                    println!("{}", "=========================================================".cyan());
+                    println!(
+                        "{}",
+                        "=========================================================".cyan()
+                    );
                     std::process::exit(1);
                 }
             } else {
-                eprintln!("{}", format!("[cyberztna] route '{}' does not exist in policy table.", app).red());
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[cyberztna] route '{}' does not exist in policy table.",
+                        app
+                    )
+                    .red()
+                );
                 std::process::exit(1);
             }
         }

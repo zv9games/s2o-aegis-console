@@ -73,18 +73,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Status { event_log } => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "            S2O CYBERSIEM TELEMETRY HUB            ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "            S2O CYBERSIEM TELEMETRY HUB            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Event Store Path  : {}", event_log.display());
             if event_log.exists() {
                 let store = EventStore::open(&event_log)?;
-                println!(" Total Ingested Events: {}", store.count()?.to_string().bold().green());
+                println!(
+                    " Total Ingested Events: {}",
+                    store.count()?.to_string().bold().green()
+                );
             } else {
                 println!(" Total Ingested Events: {}", "0 (empty log)".yellow());
             }
             println!(" Stream Protocols  : JSONL / NDJSON / Syslog RFC 5424");
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Stats { event_log } => {
             if !event_log.exists() {
@@ -95,8 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let store = EventStore::open(&event_log)?;
             let events = store.recent(10000)?;
 
-            let mut by_product: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            let mut by_severity: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut by_product: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut by_severity: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
 
             for ev in &events {
                 let p = format!("{:?}", ev.product);
@@ -105,9 +124,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *by_severity.entry(s).or_insert(0) += 1;
             }
 
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "            CyberSIEM Telemetry & Security Metrics       ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "            CyberSIEM Telemetry & Security Metrics       "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Total Analyzed Events: {}", events.len());
             println!("{}", "--- By Security Discipline ---".yellow());
             for (k, v) in by_product {
@@ -122,15 +152,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 println!("  {:<15} : {}", k, color_val);
             }
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
-        Commands::Tail { event_log, product, min_severity } => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "        CyberSIEM Live Telemetry Stream Follower         ".bold().green());
-            println!("{}", "=========================================================".cyan());
+        Commands::Tail {
+            event_log,
+            product,
+            min_severity,
+        } => {
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "        CyberSIEM Live Telemetry Stream Follower         "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Following : {}", event_log.display());
             println!("{}", "Press Ctrl+C to stop...".yellow());
-            println!("{}", "---------------------------------------------------------".cyan());
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
 
             let mut last_count = 0;
             if event_log.exists() {
@@ -153,7 +204,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     if let Some(ref s) = min_severity {
-                                        if s.eq_ignore_ascii_case("high") && ev.severity != s2o_schema::Severity::High && ev.severity != s2o_schema::Severity::Critical {
+                                        if s.eq_ignore_ascii_case("high")
+                                            && ev.severity != s2o_schema::Severity::High
+                                            && ev.severity != s2o_schema::Severity::Critical
+                                        {
                                             continue;
                                         }
                                     }
@@ -182,9 +236,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             }
         }
-        Commands::Query { event_log, product, severity, search, limit } => {
+        Commands::Query {
+            event_log,
+            product,
+            severity,
+            search,
+            limit,
+        } => {
             if !event_log.exists() {
-                println!("[cybersiem] event store does not exist at {}", event_log.display());
+                println!(
+                    "[cybersiem] event store does not exist at {}",
+                    event_log.display()
+                );
                 return Ok(());
             }
 
@@ -195,12 +258,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .filter(|ev| {
                     if let Some(ref p) = product {
-                        if !format!("{:?}", ev.product).to_lowercase().contains(&p.to_lowercase()) {
+                        if !format!("{:?}", ev.product)
+                            .to_lowercase()
+                            .contains(&p.to_lowercase())
+                        {
                             return false;
                         }
                     }
                     if let Some(ref s) = severity {
-                        if !format!("{:?}", ev.severity).to_lowercase().contains(&s.to_lowercase()) {
+                        if !format!("{:?}", ev.severity)
+                            .to_lowercase()
+                            .contains(&s.to_lowercase())
+                        {
                             return false;
                         }
                     }
@@ -214,9 +283,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .take(limit)
                 .collect();
 
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "           CyberSIEM Filtered Security Query             ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "           CyberSIEM Filtered Security Query             "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Matching Events: {}", filtered.len());
             for ev in filtered {
                 let sev_colored = match ev.severity {
@@ -234,9 +314,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ev.message
                 );
             }
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
-        Commands::Export { format, event_log, limit } => {
+        Commands::Export {
+            format,
+            event_log,
+            limit,
+        } => {
             if !event_log.exists() {
                 eprintln!("[cybersiem] no event log at {}", event_log.display());
                 std::process::exit(1);
@@ -265,9 +352,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let store = EventStore::open(&event_log)?;
             let events = store.recent(limit)?;
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "          CyberSIEM — recent Aegis events                ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "          CyberSIEM — recent Aegis events                "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             if events.is_empty() {
                 println!("(empty store)");
             }
@@ -279,7 +377,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ev.product,
                     ev.message
                 );
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
             }
         }
     }

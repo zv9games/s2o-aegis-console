@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn default_backend_never_fakes_capture() {
         let mut b = default_backend();
-        assert!(matches!(b.availability(), CaptureAvailability::Unavailable(_)));
+        assert!(matches!(
+            b.availability(),
+            CaptureAvailability::Unavailable(_)
+        ));
         assert!(b.open("true").is_err());
     }
 }

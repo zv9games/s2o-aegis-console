@@ -89,16 +89,32 @@ mod linux {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     const STATES: [&str; 12] = [
-        "UNKNOWN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT1", "FIN_WAIT2",
-        "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK", "LISTEN", "CLOSING",
+        "UNKNOWN",
+        "ESTABLISHED",
+        "SYN_SENT",
+        "SYN_RECV",
+        "FIN_WAIT1",
+        "FIN_WAIT2",
+        "TIME_WAIT",
+        "CLOSE",
+        "CLOSE_WAIT",
+        "LAST_ACK",
+        "LISTEN",
+        "CLOSING",
     ];
 
     fn inode_pid_map() -> HashMap<u64, u32> {
         let mut map = HashMap::new();
-        let Ok(procs) = std::fs::read_dir("/proc") else { return map };
+        let Ok(procs) = std::fs::read_dir("/proc") else {
+            return map;
+        };
         for p in procs.flatten() {
-            let Ok(pid) = p.file_name().to_string_lossy().parse::<u32>() else { continue };
-            let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else { continue };
+            let Ok(pid) = p.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
+                continue;
+            };
             for fd in fds.flatten() {
                 if let Ok(link) = std::fs::read_link(fd.path()) {
                     let l = link.to_string_lossy();
@@ -135,7 +151,9 @@ mod linux {
         let pids = inode_pid_map();
         let mut out = Vec::new();
         for file in ["/proc/net/tcp", "/proc/net/tcp6"] {
-            let Ok(text) = std::fs::read_to_string(file) else { continue };
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
             for line in text.lines().skip(1) {
                 let f: Vec<&str> = line.split_whitespace().collect();
                 if f.len() < 10 {

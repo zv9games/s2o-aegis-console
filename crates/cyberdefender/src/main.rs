@@ -9,14 +9,29 @@ use std::path::{Path, PathBuf};
 // Known test and malicious hashes for fast signature matching
 const KNOWN_THREAT_HASHES: &[(&str, &str)] = &[
     // EICAR standard antivirus test file
-    ("275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f", "EICAR-Standard-AV-Test-File"),
-    ("131f95c51cc819465fa1797f6ccacf9d494aaaff46fa3eac73ae63ffbdfd8267", "EICAR-Standard-AV-Test-File-CRLF"),
+    (
+        "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+        "EICAR-Standard-AV-Test-File",
+    ),
+    (
+        "131f95c51cc819465fa1797f6ccacf9d494aaaff46fa3eac73ae63ffbdfd8267",
+        "EICAR-Standard-AV-Test-File-CRLF",
+    ),
     // WannaCry sample
-    ("ed01ebfbc9eb5bbea545af4d01bf5f1071661840480439c6e5babe8e080e41aa", "Ransomware.WannaCry.A"),
+    (
+        "ed01ebfbc9eb5bbea545af4d01bf5f1071661840480439c6e5babe8e080e41aa",
+        "Ransomware.WannaCry.A",
+    ),
     // NotPetya sample
-    ("027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745", "Ransomware.NotPetya.A"),
+    (
+        "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
+        "Ransomware.NotPetya.A",
+    ),
     // Emotet loader
-    ("41d0442334f35422911b3f70f86ab59f77222f290962b3256017e50246697b58", "Trojan.Emotet.Generic"),
+    (
+        "41d0442334f35422911b3f70f86ab59f77222f290962b3256017e50246697b58",
+        "Trojan.Emotet.Generic",
+    ),
 ];
 
 #[derive(Parser)]
@@ -110,16 +125,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Status => {
-            let is_service_active = tokio::task::spawn_blocking(|| {
-                s2o_platform::defender::is_defender_active()
-            })
-            .await?;
+            let is_service_active =
+                tokio::task::spawn_blocking(|| s2o_platform::defender::is_defender_active())
+                    .await?;
 
             let mp_info = tokio::task::spawn_blocking(query_mp_status).await?;
 
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "            S2O CYBERDEFENDER AV ENGINE            ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "            S2O CYBERDEFENDER AV ENGINE            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(
                 " WinDefend Service : {}",
                 if is_service_active {
@@ -140,33 +165,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 println!(
                     " Signature Version : {}",
-                    info.AntivirusSignatureVersion.unwrap_or_else(|| "Unknown".into()).yellow()
+                    info.AntivirusSignatureVersion
+                        .unwrap_or_else(|| "Unknown".into())
+                        .yellow()
                 );
             } else {
                 println!(" Real-Time Shield  : {}", "Query unavailable".yellow());
             }
 
-            println!(" S2O Known Signatures: {}", format!("{} indexed IOC hashes", KNOWN_THREAT_HASHES.len()).bold());
-            println!(" MpCmdRun Helper   : {}", match s2o_platform::defender::find_mp_cmd_run() {
-                Some(p) => p.display().to_string().green(),
-                None => "Not found".yellow(),
-            });
-            println!("{}", "=========================================================".cyan());
+            println!(
+                " S2O Known Signatures: {}",
+                format!("{} indexed IOC hashes", KNOWN_THREAT_HASHES.len()).bold()
+            );
+            println!(
+                " MpCmdRun Helper   : {}",
+                match s2o_platform::defender::find_mp_cmd_run() {
+                    Some(p) => p.display().to_string().green(),
+                    None => "Not found".yellow(),
+                }
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Scan { path, recursive } => {
             let target_path = Path::new(&path);
             if !target_path.exists() {
-                eprintln!("{}", format!("[cyberdefender] target path does not exist: '{path}'").red());
+                eprintln!(
+                    "{}",
+                    format!("[cyberdefender] target path does not exist: '{path}'").red()
+                );
                 std::process::exit(1);
             }
 
-            println!("{}", format!("[cyberdefender] scanning target: '{}' (recursive={})...", path, recursive).cyan());
+            println!(
+                "{}",
+                format!(
+                    "[cyberdefender] scanning target: '{}' (recursive={})...",
+                    path, recursive
+                )
+                .cyan()
+            );
 
             let mut files_to_scan = Vec::new();
             collect_files(target_path, recursive, &mut files_to_scan);
 
-            println!("{}", format!("[cyberdefender] discovered {} files to inspect.", files_to_scan.len()).bold());
-            println!("{}", "---------------------------------------------------------".cyan());
+            println!(
+                "{}",
+                format!(
+                    "[cyberdefender] discovered {} files to inspect.",
+                    files_to_scan.len()
+                )
+                .bold()
+            );
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
 
             let mut threat_count = 0;
             let mut scanned_count = 0;
@@ -175,7 +231,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match calculate_file_hash(file) {
                     Ok(hash) => {
                         scanned_count += 1;
-                        let matched_threat = KNOWN_THREAT_HASHES.iter().find(|(h, _)| *h == hash.as_str());
+                        let matched_threat = KNOWN_THREAT_HASHES
+                            .iter()
+                            .find(|(h, _)| *h == hash.as_str());
 
                         if let Some((_, threat_name)) = matched_threat {
                             threat_count += 1;
@@ -194,7 +252,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            println!("{}", "---------------------------------------------------------".cyan());
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
             if threat_count > 0 {
                 println!(
                     "{}",
@@ -219,22 +280,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::ScanNative => {
-            println!("{}", "[cyberdefender] launching native Windows Defender scan via MpCmdRun...".cyan());
-            tokio::task::spawn_blocking(|| {
-                s2o_platform::defender::run_scan_native()
-            })
-            .await?
-            .map_err(|e| format!("Native scan execution error: {e}"))?;
-            println!("{}", "[cyberdefender] OK: native scan completed successfully.".green().bold());
+            println!(
+                "{}",
+                "[cyberdefender] launching native Windows Defender scan via MpCmdRun...".cyan()
+            );
+            tokio::task::spawn_blocking(|| s2o_platform::defender::run_scan_native())
+                .await?
+                .map_err(|e| format!("Native scan execution error: {e}"))?;
+            println!(
+                "{}",
+                "[cyberdefender] OK: native scan completed successfully."
+                    .green()
+                    .bold()
+            );
         }
         Commands::UpdateDefs => {
-            println!("{}", "[cyberdefender] triggering Defender signature update...".cyan());
-            tokio::task::spawn_blocking(|| {
-                s2o_platform::defender::update_defender_native()
-            })
-            .await?
-            .map_err(|e| format!("Definition update error: {e}"))?;
-            println!("{}", "[cyberdefender] OK: signatures successfully refreshed.".green().bold());
+            println!(
+                "{}",
+                "[cyberdefender] triggering Defender signature update...".cyan()
+            );
+            tokio::task::spawn_blocking(|| s2o_platform::defender::update_defender_native())
+                .await?
+                .map_err(|e| format!("Definition update error: {e}"))?;
+            println!(
+                "{}",
+                "[cyberdefender] OK: signatures successfully refreshed."
+                    .green()
+                    .bold()
+            );
         }
     }
 
