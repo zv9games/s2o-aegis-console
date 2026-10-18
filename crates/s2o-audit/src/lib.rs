@@ -113,6 +113,14 @@ impl AuditLog {
         action: &str,
         data: serde_json::Value,
     ) -> Result<Entry, AuditError> {
+        // Another process (CLI vs. running server) may have appended since
+        // we opened: re-read the tail so the chain never forks.
+        // TODO: OS file lock around read+append.
+        if self.path.exists() {
+            if let Some(e) = read_file(&self.path)?.last() {
+                self.last = Some((e.seq, e.hash.clone()));
+            }
+        }
         let (seq, prev) = match &self.last {
             Some((s, h)) => (s + 1, h.clone()),
             None => (0, GENESIS.to_string()),
@@ -369,5 +377,23 @@ mod tests {
         );
         std::fs::remove_file(p).ok();
         std::fs::remove_file(p2).ok();
+    }
+}
+
+#[cfg(test)]
+mod multi_writer {
+    use super::*;
+
+    #[test]
+    fn two_handles_do_not_fork() {
+        let d = std::env::temp_dir().join(format!("s2o-audit-mw-{}", std::process::id()));
+        let _ = std::fs::remove_file(&d);
+        let mut a = AuditLog::open(&d).unwrap();
+        let mut b = AuditLog::open(&d).unwrap();
+        a.append(1, "x", "a", serde_json::json!({})).unwrap();
+        b.append(2, "y", "b", serde_json::json!({})).unwrap();
+        a.append(3, "x", "c", serde_json::json!({})).unwrap();
+        assert_eq!(verify_file(&d).unwrap().len(), 3);
+        let _ = std::fs::remove_file(&d);
     }
 }

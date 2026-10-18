@@ -19,6 +19,7 @@ pub mod ca;
 pub mod keystore;
 pub mod policy;
 pub mod proto;
+pub mod runtime;
 pub mod server;
 pub mod store;
 

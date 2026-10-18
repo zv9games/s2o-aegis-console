@@ -29,4 +29,6 @@ time = "0.3"
 thiserror = "1"
 clap = { version = "4.4", features = ["derive"] }
 s2o-attest = { path = "../s2o-attest" }
+s2o-policy = { path = "../s2o-policy" }
+s2o-audit = { path = "../s2o-audit" }
 ed25519-dalek = { version = "2", features = ["rand_core"] }

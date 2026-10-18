@@ -58,6 +58,8 @@ dependencies = [
  "rustls 0.23.46",
  "rustls-pemfile 2.2.0",
  "s2o-attest",
+ "s2o-audit",
+ "s2o-policy",
  "serde",
  "serde_json",
  "sha2",

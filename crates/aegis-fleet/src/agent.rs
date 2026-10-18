@@ -134,6 +134,27 @@ pub async fn renew(
     }
 }
 
+/// Heartbeat reporting policy progress; returns the server response.
+pub async fn heartbeat_full(
+    ep: &FleetEndpoint,
+    keys: &dyn AgentKeyStore,
+    cert_pem: &str,
+    posture: serde_json::Value,
+    cyberid_token: &str,
+    last_policy_version: u64,
+    policy_results: Vec<crate::proto::PolicyResult>,
+) -> FleetResult<Response> {
+    crate::init_crypto();
+    let cfg = mtls_config(ep, keys, cert_pem)?;
+    let req = Request::Heartbeat {
+        posture,
+        cyberid_token: cyberid_token.to_string(),
+        last_policy_version,
+        policy_results,
+    };
+    exchange(ep, cfg, &req).await
+}
+
 pub async fn heartbeat(
     ep: &FleetEndpoint,
     keys: &dyn AgentKeyStore,
@@ -141,21 +162,5 @@ pub async fn heartbeat(
     posture: serde_json::Value,
     cyberid_token: &str,
 ) -> FleetResult<Response> {
-    crate::init_crypto();
-    let der = keys.private_key_der().ok_or_else(|| {
-        FleetError::Protocol(
-            "key store cannot export key; hardware signer not implemented yet".into(),
-        )
-    })?;
-    let cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store(&ep.ca_pem)?)
-        .with_client_auth_cert(
-            parse_certs(cert_pem)?,
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)),
-        )?;
-    let req = Request::Heartbeat {
-        posture,
-        cyberid_token: cyberid_token.to_string(),
-    };
-    exchange(ep, cfg, &req).await
+    heartbeat_full(ep, keys, cert_pem, posture, cyberid_token, 0, Vec::new()).await
 }
