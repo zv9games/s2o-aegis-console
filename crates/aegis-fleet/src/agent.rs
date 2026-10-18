@@ -145,12 +145,14 @@ pub async fn heartbeat_full(
     policy_results: Vec<crate::proto::PolicyResult>,
 ) -> FleetResult<Response> {
     crate::init_crypto();
+    let ca_pins = crate::ca::pem_fingerprints(&ep.ca_pem);
     let cfg = mtls_config(ep, keys, cert_pem)?;
     let req = Request::Heartbeat {
         posture,
         cyberid_token: cyberid_token.to_string(),
         last_policy_version,
         policy_results,
+        ca_pins,
     };
     exchange(ep, cfg, &req).await
 }

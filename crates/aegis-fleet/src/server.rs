@@ -26,6 +26,17 @@ fn default_overlap() -> i64 {
     30
 }
 
+/// Body of a `RetireCa` bundle.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetireCaBody {
+    /// SHA-256 fingerprint of the CA being retired.
+    pub old_ca_fingerprint: String,
+    /// Retire even if some active agents have not acked the new pin
+    /// (those agents will need re-enrollment). Still needs quorum.
+    #[serde(default)]
+    pub force: bool,
+}
+
 struct TrustState {
     /// CA that issues new client certificates.
     issuer: Arc<FleetCa>,
@@ -39,9 +50,9 @@ pub struct FleetServer {
     pub policy: FleetPolicy,
     roster: RwLock<Option<AdminRoster>>,
     next_ca: Option<Arc<FleetCa>>,
-    audit: Option<Mutex<(AuditLog, ed25519_dalek::SigningKey)>>,
-    server_cert_pem: String,
-    server_key_pem: String,
+    audit: Option<Mutex<(AuditLog, Option<ed25519_dalek::SigningKey>)>>,
+    /// (cert PEM, key PEM); replaceable at runtime via `reload_server_cert`.
+    server_identity: RwLock<(String, String)>,
     state: RwLock<TrustState>,
 }
 
@@ -95,6 +106,20 @@ fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
+/// True if the first cert in `cert_pem` has a valid signature by `ca_pem`.
+pub fn cert_signed_by(cert_pem: &str, ca_pem: &str) -> bool {
+    let (Ok((_, c)), Ok((_, ca))) = (
+        x509_parser::pem::parse_x509_pem(cert_pem.as_bytes()),
+        x509_parser::pem::parse_x509_pem(ca_pem.as_bytes()),
+    ) else {
+        return false;
+    };
+    let (Ok(c), Ok(ca)) = (c.parse_x509(), ca.parse_x509()) else {
+        return false;
+    };
+    c.verify_signature(Some(ca.public_key())).is_ok()
+}
+
 fn build_acceptor(trusted: &[String], cert_pem: &str, key_pem: &str) -> FleetResult<TlsAcceptor> {
     // Client certs are optional at the TLS layer (enrollment has none yet),
     // but any presented cert must chain to a trusted fleet CA and be in date.
@@ -126,8 +151,7 @@ impl FleetServer {
             roster: RwLock::new(None),
             next_ca: None,
             audit: None,
-            server_cert_pem: server_cert_pem.into(),
-            server_key_pem: server_key_pem.into(),
+            server_identity: RwLock::new((server_cert_pem.into(), server_key_pem.into())),
             state: RwLock::new(TrustState {
                 issuer: ca,
                 trusted,
@@ -151,7 +175,13 @@ impl FleetServer {
 
     /// Hash-chained audit log + key that signs its heads.
     pub fn with_audit(mut self, log: AuditLog, head_key: ed25519_dalek::SigningKey) -> Self {
-        self.audit = Some(Mutex::new((log, head_key)));
+        self.audit = Some(Mutex::new((log, Some(head_key))));
+        self
+    }
+
+    /// Audit log without a head-signing key (CLI admin commands).
+    pub fn with_audit_unsigned(mut self, log: AuditLog) -> Self {
+        self.audit = Some(Mutex::new((log, None)));
         self
     }
 
@@ -172,7 +202,7 @@ impl FleetServer {
     fn audit_head(&self) -> Option<SignedHead> {
         self.audit.as_ref().and_then(|a| {
             let g = a.lock().unwrap();
-            g.0.sign_head(&g.1)
+            g.1.as_ref().and_then(|k| g.0.sign_head(k))
         })
     }
 
@@ -186,6 +216,15 @@ impl FleetServer {
     fn activate_rotation(&self, sb: &SignedBundle) -> FleetResult<()> {
         let body: RotateCaBody = serde_json::from_value(sb.bundle.body.clone())
             .map_err(|e| FleetError::Rejected(format!("bad rotate_ca body: {e}")))?;
+        if self
+            .state
+            .read()
+            .unwrap()
+            .trusted
+            .contains(&body.new_ca_pem)
+        {
+            return Ok(()); // already active (restart / after promotion)
+        }
         let next = self
             .next_ca
             .clone()
@@ -196,14 +235,77 @@ impl FleetServer {
             ));
         }
         let mut st = self.state.write().unwrap();
-        if st.trusted.contains(&body.new_ca_pem) {
-            return Ok(());
-        }
         let mut trusted = st.trusted.clone();
         trusted.push(body.new_ca_pem.clone());
-        st.acceptor = build_acceptor(&trusted, &self.server_cert_pem, &self.server_key_pem)?;
+        st.acceptor = {
+            let id = self.server_identity.read().unwrap();
+            build_acceptor(&trusted, &id.0, &id.1)?
+        };
         st.trusted = trusted;
         st.issuer = next;
+        Ok(())
+    }
+
+    fn retire_body(sb: &SignedBundle) -> FleetResult<RetireCaBody> {
+        serde_json::from_value(sb.bundle.body.clone())
+            .map_err(|e| FleetError::Rejected(format!("bad retire_ca body: {e}")))
+    }
+
+    /// Preconditions for retiring a CA (checked at submission only).
+    fn check_retire(&self, body: &RetireCaBody) -> FleetResult<()> {
+        let st = self.state.read().unwrap();
+        let old = st
+            .trusted
+            .iter()
+            .find(|p| crate::ca::pem_fingerprint(p) == body.old_ca_fingerprint)
+            .ok_or_else(|| FleetError::Rejected("old CA is not currently trusted".into()))?;
+        if crate::ca::pem_fingerprint(st.issuer.cert_pem()) == body.old_ca_fingerprint {
+            return Err(FleetError::Rejected(
+                "cannot retire the issuing CA; rotate first".into(),
+            ));
+        }
+        if cert_signed_by(&self.server_identity.read().unwrap().0, old) {
+            return Err(FleetError::Rejected(
+                "server certificate is still issued by the old CA; run reissue-server-cert --from-next and restart first".into(),
+            ));
+        }
+        let new_fp = crate::ca::pem_fingerprint(st.issuer.cert_pem());
+        let missing = self.store.agents_missing_pin(&new_fp)?;
+        if !missing.is_empty() && !body.force {
+            return Err(FleetError::Rejected(format!(
+                "{} active agent(s) have not acked the new CA pin: {}",
+                missing.len(),
+                missing.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    fn activate_retire(&self, body: &RetireCaBody) -> FleetResult<()> {
+        let mut st = self.state.write().unwrap();
+        let trusted: Vec<String> = st
+            .trusted
+            .iter()
+            .filter(|p| crate::ca::pem_fingerprint(p) != body.old_ca_fingerprint)
+            .cloned()
+            .collect();
+        if trusted.len() == st.trusted.len() || trusted.is_empty() {
+            return Ok(());
+        }
+        st.acceptor = {
+            let id = self.server_identity.read().unwrap();
+            build_acceptor(&trusted, &id.0, &id.1)?
+        };
+        st.trusted = trusted;
+        Ok(())
+    }
+
+    /// Swap the server's TLS certificate (e.g. after `reissue-server-cert
+    /// --from-next`) without dropping trust state.
+    pub fn reload_server_cert(&self, cert_pem: &str, key_pem: &str) -> FleetResult<()> {
+        let mut st = self.state.write().unwrap();
+        st.acceptor = build_acceptor(&st.trusted, cert_pem, key_pem)?;
+        *self.server_identity.write().unwrap() = (cert_pem.into(), key_pem.into());
         Ok(())
     }
 
@@ -214,6 +316,7 @@ impl FleetServer {
             if let Ok(sb) = serde_json::from_str::<SignedBundle>(&j) {
                 match sb.bundle.action {
                     ActionClass::RotateCa => self.activate_rotation(&sb)?,
+                    ActionClass::RetireCa => self.activate_retire(&Self::retire_body(&sb)?)?,
                     ActionClass::ChangeRoster => {
                         if let Ok(r) = serde_json::from_value(sb.bundle.body.clone()) {
                             *self.roster.write().unwrap() = Some(r);
@@ -239,6 +342,11 @@ impl FleetServer {
             .map_err(|e| FleetError::Rejected(format!("bundle rejected: {e}")))?;
         if sb.bundle.action == ActionClass::RotateCa {
             self.activate_rotation(sb)?;
+        }
+        if sb.bundle.action == ActionClass::RetireCa {
+            let body = Self::retire_body(sb)?;
+            self.check_retire(&body)?;
+            self.activate_retire(&body)?;
         }
         if sb.bundle.action == ActionClass::ChangeRoster {
             let new: AdminRoster = serde_json::from_value(sb.bundle.body.clone())
@@ -398,6 +506,7 @@ impl FleetServer {
                 cyberid_token,
                 last_policy_version,
                 policy_results,
+                ca_pins,
             } => {
                 let agent_id = peer_agent.ok_or_else(|| {
                     FleetError::Rejected("heartbeat requires a client certificate".into())
@@ -416,6 +525,7 @@ impl FleetServer {
                 let record = serde_json::json!({ "reported": posture, "attested": claims });
                 self.store
                     .record_heartbeat(&agent_id, now(), &record.to_string())?;
+                self.store.set_agent_pins(&agent_id, &ca_pins)?;
                 self.audit(
                     &format!("agent:{agent_id}"),
                     "agent.heartbeat",

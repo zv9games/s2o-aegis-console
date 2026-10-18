@@ -223,6 +223,36 @@ impl AgentState {
                     Err(e) => (PolicyStatus::Rejected, format!("bad rotate_ca body: {e}")),
                 }
             }
+            ActionClass::RetireCa => {
+                match serde_json::from_value::<crate::server::RetireCaBody>(sb.bundle.body.clone())
+                {
+                    Ok(b) => {
+                        let keep: Vec<CaPin> = self
+                            .pins
+                            .iter()
+                            .filter(|p| crate::ca::pem_fingerprint(&p.pem) != b.old_ca_fingerprint)
+                            .cloned()
+                            .collect();
+                        if keep.is_empty() {
+                            (
+                                PolicyStatus::Rejected,
+                                "refusing to drop the last CA pin".into(),
+                            )
+                        } else {
+                            let n = self.pins.len() - keep.len();
+                            self.pins = keep;
+                            for p in &mut self.pins {
+                                p.valid_until = None;
+                            }
+                            (
+                                PolicyStatus::Applied,
+                                format!("dropped {n} retired CA pin(s)"),
+                            )
+                        }
+                    }
+                    Err(e) => (PolicyStatus::Rejected, format!("bad retire_ca body: {e}")),
+                }
+            }
             // Enforcement pillars are deliberately not implemented until they
             // can be tested on real Windows hosts.
             other => (

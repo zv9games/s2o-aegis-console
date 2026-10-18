@@ -37,6 +37,8 @@ pub enum ActionClass {
     ChangeRequireTpm,
     /// Rotating the fleet CA (dual-pin overlap).
     RotateCa,
+    /// Retiring the old CA after rotation (agents drop the old pin).
+    RetireCa,
 }
 
 impl ActionClass {
@@ -46,7 +48,7 @@ impl ActionClass {
         !matches!(self, ActionClass::Normal)
     }
 
-    pub const ALL: [ActionClass; 8] = [
+    pub const ALL: [ActionClass; 9] = [
         ActionClass::Normal,
         ActionClass::IsolateHost,
         ActionClass::RunScript,
@@ -55,6 +57,7 @@ impl ActionClass {
         ActionClass::ChangeFirewall,
         ActionClass::ChangeRequireTpm,
         ActionClass::RotateCa,
+        ActionClass::RetireCa,
     ];
 }
 

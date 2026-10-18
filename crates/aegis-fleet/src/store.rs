@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS agents (
     last_posture TEXT,
     revoked INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS agent_pins (
+    agent_id TEXT PRIMARY KEY,
+    pins TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS bundles (
     version INTEGER PRIMARY KEY,
     action TEXT NOT NULL,
@@ -287,6 +291,38 @@ impl Store {
             params![now, posture, agent_id],
         )?;
         Ok(())
+    }
+
+    pub fn set_agent_pins(&self, agent_id: &str, pins: &[String]) -> FleetResult<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO agent_pins (agent_id, pins) VALUES (?1, ?2)",
+            params![agent_id, pins.join(",")],
+        )?;
+        Ok(())
+    }
+
+    /// Non-revoked agents that have not reported pinning `fingerprint`.
+    pub fn agents_missing_pin(&self, fingerprint: &str) -> FleetResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT a.agent_id, p.pins FROM agents a LEFT JOIN agent_pins p ON a.agent_id = p.agent_id
+             WHERE a.revoked = 0",
+        )?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, p)| {
+                !p.as_deref()
+                    .unwrap_or("")
+                    .split(',')
+                    .any(|x| x == fingerprint)
+            })
+            .map(|(a, _)| a)
+            .collect())
     }
 
     pub fn revoke(&self, agent_id: &str) -> FleetResult<bool> {

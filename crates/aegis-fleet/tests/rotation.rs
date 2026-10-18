@@ -251,3 +251,111 @@ fn agent_rejects_forged_or_underapproved_rotation() {
     assert_eq!(st.pins.len(), 1);
     assert_eq!(st.last_policy_version, 0);
 }
+
+#[tokio::test]
+async fn full_rotation_lifecycle_with_retirement() {
+    let fx = start().await;
+    let pol = FleetPolicy::default();
+    let (mut a1, k1, c1) = enrolled_agent(&fx).await;
+    let (mut a2, k2, c2) = enrolled_agent(&fx).await;
+    let old_fp = fx.old.fingerprint();
+    let new_fp = fx.next.fingerprint();
+
+    // 1. Rotate (2 approvals).
+    let mut rot = bundle(1, ActionClass::RotateCa, rotate_body(&fx));
+    rot.approve("alice-1", &fx.adm.a);
+    rot.approve("bob-1", &fx.adm.b);
+    fx.srv.submit_bundle(&rot).unwrap();
+
+    // 2. Agent 1 gets the pin, acks it on the next heartbeat, renews from new CA.
+    a1.tick(&k1, &pol, serde_json::json!({}), &tok(&c1), now())
+        .await
+        .unwrap();
+    let e = aegis_fleet::agent::renew(&a1.endpoint(), &k1, &a1.agent_id, Some(&a1.cert_pem))
+        .await
+        .unwrap();
+    a1.cert_pem = e.cert_pem;
+    a1.tick(&k1, &pol, serde_json::json!({}), &tok(&c1), now())
+        .await
+        .unwrap();
+    assert!(!fx
+        .store
+        .agents_missing_pin(&new_fp)
+        .unwrap()
+        .contains(&a1.agent_id));
+    assert!(fx
+        .store
+        .agents_missing_pin(&new_fp)
+        .unwrap()
+        .contains(&a2.agent_id));
+
+    let retire = |v: u64, force: bool, approvers: usize| {
+        let mut b = bundle(
+            v,
+            ActionClass::RetireCa,
+            serde_json::json!({"old_ca_fingerprint": old_fp, "force": force}),
+        );
+        b.approve("alice-1", &fx.adm.a);
+        if approvers > 1 {
+            b.approve("bob-1", &fx.adm.b);
+        }
+        b
+    };
+
+    // 3. Refused while the server cert is still from the old CA.
+    let err = fx
+        .srv
+        .submit_bundle(&retire(2, false, 2))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("server certificate"), "{err}");
+
+    // 4. Reissue server cert from next CA.
+    let (cert, key) = fx
+        .next
+        .issue_server_cert(&["fleet.test".to_string()])
+        .unwrap();
+    fx.srv.reload_server_cert(&cert, &key).unwrap();
+
+    // 5. Refused while agent 2 has not acked; force needs quorum too.
+    let err = fx
+        .srv
+        .submit_bundle(&retire(2, false, 2))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not acked"), "{err}");
+    assert!(fx.srv.submit_bundle(&retire(2, true, 1)).is_err());
+    fx.srv.submit_bundle(&retire(2, true, 2)).unwrap();
+    assert_eq!(fx.srv.trusted_cas(), vec![fx.next.cert_pem().to_string()]);
+
+    // 6. Agent 1 drops the old pin on the signed retire bundle.
+    let out = a1
+        .tick(&k1, &pol, serde_json::json!({}), &tok(&c1), now())
+        .await
+        .unwrap();
+    match out {
+        TickOutcome::Ok { results, .. } => {
+            assert_eq!(results[0].version, 2);
+            assert_eq!(results[0].status, PolicyStatus::Applied, "{results:?}");
+        }
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(a1.pins.len(), 1);
+    assert_eq!(aegis_fleet::ca::pem_fingerprint(&a1.pins[0].pem), new_fp);
+    a1.tick(&k1, &pol, serde_json::json!({}), &tok(&c1), now())
+        .await
+        .unwrap();
+    assert!(matches!(
+        a1.tick(&k1, &pol, serde_json::json!({}), &tok(&c1), now())
+            .await
+            .unwrap(),
+        TickOutcome::Ok { .. }
+    ));
+
+    // 7. Agent 2 (old-CA cert, old pin only) is now locked out: needs re-enrollment.
+    let out = a2
+        .tick(&k2, &pol, serde_json::json!({}), &tok(&c2), now())
+        .await
+        .unwrap();
+    assert!(matches!(out, TickOutcome::Offline { .. }), "{out:?}");
+}
