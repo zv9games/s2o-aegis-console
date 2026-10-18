@@ -1,0 +1,52 @@
+[graph]
+all-features = false
+
+[advisories]
+# Fail on known vulnerabilities; unmaintained/yanked are reported.
+# Every entry below is pulled in only by eframe/egui 0.17 (the aegis-gui
+# dashboard): winit 0.26, glutin 0.28, egui_glow, quick-xml 0.22, xcb,
+# webbrowser, ttf-parser, zbus 3 via dark-light. None are reachable from the
+# agent/daemon crates. Remove these when aegis-gui is upgraded to a current
+# eframe (tracked in aegis-console-build-plan.md).
+ignore = [
+    { id = "RUSTSEC-2021-0019", reason = "xcb soundness; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.22; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.22; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0257", reason = "webbrowser BROWSER injection (Unix); eframe 0.17 only" },
+    { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained; eframe 0.17 only" },
+    { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; eframe 0.17 only" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; eframe 0.17 only" },
+]
+
+[licenses]
+# Licenses compatible with distributing S2O Aegis under AGPL-3.0-only.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OFL-1.1",
+    "LicenseRef-UFL-1.0",
+    "AGPL-3.0-only",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

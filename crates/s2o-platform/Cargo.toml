@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Split2ops Software <support@zv9games.org>"]
 license = "AGPL-3.0-only"
+publish = false
 description = "In-repo OS integration layer for S2O Aegis (firewall, Defender, socket telemetry, packet-capture port)"
 
 [features]
