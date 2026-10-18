@@ -6,9 +6,9 @@
 ### *Post-Agent Era. Total Control.*
 
 [![Rust](https://img.shields.io/badge/Language-Pure%20Rust%202021-DEA584?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
-[![Substrate](https://img.shields.io/badge/Substrate-Tier--0%20Userspace%20Native-00E696?style=for-the-badge)](https://split2ops.com)
-[![Kernel Readiness](https://img.shields.io/badge/Kernel%20Driver-Standby%20Ready-64C8FF?style=for-the-badge)](https://split2ops.com)
-[![Footprint](https://img.shields.io/badge/Memory%20Footprint-%3C%2035%20MB-blueviolet?style=for-the-badge)](https://split2ops.com)
+[![Substrate](https://img.shields.io/badge/Substrate-Tier--0%20Userspace%20Native-00E696?style=for-the-badge)](https://zv9games.org)
+[![Kernel Readiness](https://img.shields.io/badge/Kernel%20Driver-Standby%20Ready-64C8FF?style=for-the-badge)](https://zv9games.org)
+[![Footprint](https://img.shields.io/badge/Memory%20Footprint-%3C%2035%20MB-blueviolet?style=for-the-badge)](https://zv9games.org)
 [![License](https://img.shields.io/badge/License-Dual%20AGPLv3%20%2F%20Commercial-FF4B4B?style=for-the-badge)](LICENSE)
 
 ---
@@ -123,7 +123,7 @@ aegis firewall list
 aegis scan C:\Windows\System32
 
 # Encrypted DNS Query & Threat Sinkhole
-aegis dns resolve split2ops.com
+aegis dns resolve zv9games.org
 aegis dns block malicious-c2.com
 
 # EDR Process & Socket Telemetry

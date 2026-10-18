@@ -10,7 +10,7 @@ const IOC_DATABASE_PATH: &str = ".aegis/threatgrid_iocs.json";
 
 #[derive(Parser)]
 #[command(name = "cyberintel")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O ThreatGrid Intel: IOC Feeds, Hash Reputation & Threat Lookups", long_about = None)]
 struct Cli {
@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let db = load_ioc_db();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "          SPLIT2OPS THREATGRID THREAT INTEL              ".bold().green());
+            println!("{}", "          S2O THREATGRID THREAT INTEL              ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Total Indexed IOCs: {}", db.len().to_string().bold().green());
             println!(" Database Path     : {}", IOC_DATABASE_PATH);

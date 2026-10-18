@@ -24,7 +24,7 @@ members = [
 [package]
 name = "s2o-aegis-gui"
 version = "0.7.2"
-authors = ["zv9games <44912099+zv9games@users.noreply.github.com>"]
+authors = ["Split2ops Software <support@zv9games.org>"]
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "S2O Aegis Executive Command Center (egui dashboard)"

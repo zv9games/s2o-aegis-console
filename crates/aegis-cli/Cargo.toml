@@ -2,7 +2,7 @@
 name = "aegis-cli"
 version = "0.1.0"
 edition = "2021"
-authors = ["Split2ops Software <support@split2ops.com>"]
+authors = ["Split2ops Software <support@zv9games.org>"]
 description = "S2O Aegis Master Multiplexer CLI"
 
 [[bin]]

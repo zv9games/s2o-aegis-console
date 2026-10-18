@@ -5,7 +5,7 @@ use cyberwall_core::{FirewallEngine, RuleAction, RuleDirection, RuleProtocol, Fi
 
 #[derive(Parser)]
 #[command(name = "aegis")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.0.0")]
 #[command(about = "S2O Aegis Universal Master Security CLI - Unified Control Matrix", long_about = None)]
 struct Cli {

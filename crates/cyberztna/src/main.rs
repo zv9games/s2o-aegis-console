@@ -12,7 +12,7 @@ const ZTNA_POLICY_PATH: &str = ".aegis/ztna_policy.json";
 
 #[derive(Parser)]
 #[command(name = "cyberztna")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberZTNA: route policy store + local posture preflight (proxy not implemented yet)", long_about = None)]
 struct Cli {
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let routes = load_routes();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "       SPLIT2OPS ZERO-TRUST APP ACCESS GATEWAY           ".bold().green());
+            println!("{}", "       S2O ZERO-TRUST APP ACCESS GATEWAY           ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Gateway Mode      : {}", "NOT IMPLEMENTED - routes are stored, no traffic is proxied".red());
             println!(" Protected Apps    : {}", format!("{} configured application tunnels", routes.len()).bold());

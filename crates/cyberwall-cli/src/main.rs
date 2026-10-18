@@ -5,9 +5,9 @@ use cyberwall_core::FirewallEngine;
 
 #[derive(Parser)]
 #[command(name = "cyberwall")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.0.0")]
-#[command(about = "Split2ops Cyberwall Enterprise Commercial Firewall CLI", long_about = None)]
+#[command(about = "S2O Cyberwall firewall CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
                 println!("{}", "=========================================================".cyan());
-                println!("{}", "       SPLIT2OPS SOFTWARE CYBERWALL ENTERPRISE CLI       ".bold().green());
+                println!("{}", "       S2O SOFTWARE CYBERWALL ENTERPRISE CLI       ".bold().green());
                 println!("{}", "=========================================================".cyan());
                 println!(" Platform Engine   : {}", status.platform.bold());
                 println!(" Backend Driver    : {}", status.backend_driver.yellow());

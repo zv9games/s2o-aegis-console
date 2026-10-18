@@ -21,7 +21,7 @@ const KNOWN_THREAT_HASHES: &[(&str, &str)] = &[
 
 #[derive(Parser)]
 #[command(name = "cyberdefender")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberDefender AV: Real-Time Anti-Malware & Signature Scanner CLI", long_about = None)]
 struct Cli {
@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mp_info = tokio::task::spawn_blocking(query_mp_status).await?;
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "            SPLIT2OPS CYBERDEFENDER AV ENGINE            ".bold().green());
+            println!("{}", "            S2O CYBERDEFENDER AV ENGINE            ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(
                 " WinDefend Service : {}",

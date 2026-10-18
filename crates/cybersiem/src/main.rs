@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "cybersiem")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "0.1.0")]
 #[command(about = "S2O CyberLog SIEM: local event store reader (Phase 2 full SIEM)", long_about = None)]
 struct Cli {
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status { event_log } => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "            SPLIT2OPS CYBERSIEM TELEMETRY HUB            ".bold().green());
+            println!("{}", "            S2O CYBERSIEM TELEMETRY HUB            ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Event Store Path  : {}", event_log.display());
             if event_log.exists() {

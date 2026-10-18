@@ -5,7 +5,7 @@ use cyberwall_core::FirewallEngine;
 
 #[derive(Parser)]
 #[command(name = "cyberid")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberID: Zero-Trust Endpoint Posture & Device Identity CLI", long_about = None)]
 struct Cli {
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             println!("{}", "=========================================================".cyan());
-            println!("{}", "        SPLIT2OPS CYBERID ZERO-TRUST IDENTITY            ".bold().green());
+            println!("{}", "        S2O CYBERID ZERO-TRUST IDENTITY            ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Posture Engine    : {}", "4-check posture audit (firewall, Defender, UAC, SecureBoot)".green());
             println!(" Operating System  : {}", get_os_info().bold());
@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let p = collect_posture(&st);
 
             println!("{}", "=========================================================".cyan());
-            println!("{}", "      SPLIT2OPS CYBERID ZERO-TRUST POSTURE AUDIT         ".bold().green());
+            println!("{}", "      S2O CYBERID ZERO-TRUST POSTURE AUDIT         ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Host Environment : {}", get_os_info().cyan());
             println!("{}", "---------------------------------------------------------".cyan());
@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let key = token::load_or_create_key()?;
             let now = chrono::Utc::now().timestamp();
             let claims = serde_json::json!({
-                "iss": "Split2ops-CyberID",
+                "iss": "S2O-CyberID",
                 "sub": device,
                 "iat": now,
                 "exp": now + 3600,

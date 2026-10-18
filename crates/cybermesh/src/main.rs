@@ -10,7 +10,7 @@ const MESH_CONFIG_PATH: &str = ".aegis/mesh_config.json";
 
 #[derive(Parser)]
 #[command(name = "cybermesh")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "1.1.0")]
 #[command(about = "S2O CyberMesh VPN: High-Speed Encrypted WireGuard Overlay Mesh Network CLI", long_about = None)]
 struct Cli {
@@ -134,7 +134,7 @@ fn load_mesh_state() -> MeshState {
             name: "gateway-cloud-01".to_string(),
             pubkey: "uW82xLhQnLqT3kPv1zM9sR6yA4vB7cD0eF3gH5jK1lM=".to_string(),
             allowed_ips: "10.220.0.1/32".to_string(),
-            endpoint: Some("gateway.split2ops.com:51820".to_string()),
+            endpoint: Some("gateway.example.com:51820".to_string()),
             added_at: "2026-09-15T00:00:00Z".to_string(),
         },
     );
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let state = load_mesh_state();
             println!("{}", "=========================================================".cyan());
-            println!("{}", "         SPLIT2OPS CYBERMESH VPN OVERLAY                 ".bold().green());
+            println!("{}", "         S2O CYBERMESH VPN OVERLAY                 ".bold().green());
             println!("{}", "=========================================================".cyan());
             println!(" Node Identifier   : {}", state.node_name.bold());
             println!(" Virtual Mesh IP   : {}", state.virtual_ip.green().bold());
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let mut conf = String::new();
-            conf.push_str("# Split2ops CyberMesh WireGuard Configuration\n");
+            conf.push_str("# S2O CyberMesh WireGuard Configuration\n");
             conf.push_str("[Interface]\n");
             conf.push_str(&format!("PrivateKey = {}\n", state.private_key));
             conf.push_str(&format!("Address = {}\n", address));

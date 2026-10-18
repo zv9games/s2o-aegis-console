@@ -2,7 +2,7 @@
 name = "cyberwall-core"
 version = "0.1.0"
 edition = "2021"
-authors = ["Split2ops Software"]
+authors = ["Split2ops Software <support@zv9games.org>"]
 
 [dependencies]
 async-trait = "0.1"

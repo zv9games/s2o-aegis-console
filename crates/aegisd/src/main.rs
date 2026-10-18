@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "aegisd")]
-#[command(author = "Split2ops Software <support@split2ops.com>")]
+#[command(author = "Split2ops Software <support@zv9games.org>")]
 #[command(version = "0.1.0")]
 #[command(about = "S2O Aegis Platform: unified cyber-ops orchestrator (Phase 0: Cyberwall real)", long_about = None)]
 struct Cli {
@@ -241,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "platform": "Split2ops Aegis Platform",
+                        "platform": "S2O Aegis",
                         "schema_version": SCHEMA_VERSION,
                         "modules": modules,
                         "cyberwall": st,
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             } else {
                 println!("{}", "=========================================================".cyan());
-                println!("{}", "       SPLIT2OPS AEGIS ENTERPRISE MATRIX STATUS          ".bold().green());
+                println!("{}", "       S2O AEGIS ENTERPRISE MATRIX STATUS          ".bold().green());
                 println!("{}", "=========================================================".cyan());
                 for (idx, m) in modules.iter().enumerate() {
                     let state_col = state_colored(m.state);

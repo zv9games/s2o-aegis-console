@@ -286,7 +286,7 @@ impl epi::App for AegisDashboardApp {
                     ui.label("S2O CyberDNS");
                     ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
                     if ui.button("DoH Resolve").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("split2ops.com".into()));
+                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("zv9games.org".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::DnsSettings;
@@ -675,8 +675,8 @@ impl epi::App for AegisDashboardApp {
                     });
 
                     ui.add_space(8.0);
-                    if ui.button("🌐 Test Encrypted Resolution (split2ops.com)").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("split2ops.com".into()));
+                    if ui.button("🌐 Test Encrypted Resolution (zv9games.org)").clicked() {
+                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("zv9games.org".into()));
                     }
                 });
             if !open { self.active_modal = ActiveModal::None; }
@@ -987,7 +987,7 @@ pub fn run_gui() {
         siem_log_retention_days: 30,
         siem_syslog_forwarder: "10.0.0.50:514".into(),
         siem_forward_protocol_udp: true,
-        siem_alert_email: "secops@split2ops.com".into(),
+        siem_alert_email: "secops@zv9games.org".into(),
 
         intel_auto_sync_interval_mins: 60,
         intel_custom_ioc: "".into(),
