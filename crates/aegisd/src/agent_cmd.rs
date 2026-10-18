@@ -96,7 +96,13 @@ pub async fn run(dir: &Path, once: bool, stop: tokio::sync::watch::Receiver<bool
             &cid,
             &serde_json::json!({"sub": st.agent_id, "exp": now() + 300, "posture": p}),
         )?;
-        match st.tick(&keys, &policy, p, &token, now()).await {
+        #[cfg(windows)]
+        let fw: Option<&dyn aegis_fleet::fw::AegisFirewall> =
+            Some(&aegis_fleet::fw::windows::WindowsAegisFirewall);
+        // Linux: firewall enforcement is not implemented (never flush nft).
+        #[cfg(not(windows))]
+        let fw: Option<&dyn aegis_fleet::fw::AegisFirewall> = None;
+        match st.tick_with(&keys, &policy, p, &token, now(), fw).await {
             Ok(TickOutcome::Ok { renewed, results }) => {
                 if renewed {
                     println!("[aegisd] certificate renewed");
@@ -121,7 +127,7 @@ pub async fn run(dir: &Path, once: bool, stop: tokio::sync::watch::Receiver<bool
         if once {
             return Ok(());
         }
-        let wait = std::time::Duration::from_secs(st.heartbeat_secs.max(10));
+        let wait = std::time::Duration::from_secs(st.next_wake_secs(now()));
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = stop.changed() => return Ok(()),

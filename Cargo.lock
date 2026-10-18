@@ -50,6 +50,8 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
+ "cyberwall-backend-windows",
+ "cyberwall-core",
  "ed25519-dalek",
  "hex",
  "rand",
@@ -60,6 +62,7 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "s2o-attest",
  "s2o-audit",
+ "s2o-platform",
  "s2o-policy",
  "serde",
  "serde_json",

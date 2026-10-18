@@ -52,6 +52,9 @@ pub enum PolicyStatus {
     NotImplemented,
     /// Verification failed (bad signature, quorum, rollback).
     Rejected,
+    /// Applied, then automatically reverted (apply error or no heartbeat
+    /// confirmation within the window).
+    RolledBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
