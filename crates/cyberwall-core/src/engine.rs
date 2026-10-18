@@ -15,6 +15,8 @@ impl std::error::Error for EngineError {}
 
 pub type EngineResult<T> = Result<T, EngineError>;
 
+// async-trait adds #[must_use] to Result-returning methods.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait FirewallEngine: Send + Sync {
     /// Returns the current OS firewall status & profile states
@@ -30,20 +32,32 @@ pub trait FirewallEngine: Send + Sync {
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>>;
 
     /// Lists rules matching a filter
-    async fn list_rules_filtered(&self, filter: &crate::models::RuleFilter) -> EngineResult<Vec<FirewallRule>> {
+    async fn list_rules_filtered(
+        &self,
+        filter: &crate::models::RuleFilter,
+    ) -> EngineResult<Vec<FirewallRule>> {
         let rules = self.list_rules().await?;
-        Ok(rules.into_iter().filter(|r| {
-            if let Some(dir) = filter.direction {
-                if r.direction != dir { return false; }
-            }
-            if let Some(act) = filter.action {
-                if r.action != act { return false; }
-            }
-            if let Some(ref s) = filter.search {
-                if !r.name.to_lowercase().contains(&s.to_lowercase()) { return false; }
-            }
-            true
-        }).collect())
+        Ok(rules
+            .into_iter()
+            .filter(|r| {
+                if let Some(dir) = filter.direction {
+                    if r.direction != dir {
+                        return false;
+                    }
+                }
+                if let Some(act) = filter.action {
+                    if r.action != act {
+                        return false;
+                    }
+                }
+                if let Some(ref s) = filter.search {
+                    if !r.name.to_lowercase().contains(&s.to_lowercase()) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect())
     }
 
     /// Adds a new firewall rule

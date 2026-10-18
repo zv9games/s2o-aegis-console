@@ -38,7 +38,10 @@ impl EventStore {
     }
 
     pub fn append(&self, event: &AegisEvent) -> StoreResult<()> {
-        let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         let mut writer = BufWriter::new(file);
         serde_json::to_writer(&mut writer, event)?;
         writer.write_all(b"\n")?;
@@ -77,7 +80,7 @@ impl EventStore {
         let reader = BufReader::new(file);
         Ok(reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .filter(|l| !l.trim().is_empty())
             .count())
     }

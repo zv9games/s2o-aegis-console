@@ -11,6 +11,12 @@ impl LinuxFirewallEngine {
     }
 }
 
+impl Default for LinuxFirewallEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl FirewallEngine for LinuxFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {
@@ -55,7 +61,9 @@ impl FirewallEngine for LinuxFirewallEngine {
     }
 
     async fn set_outbound_block(&self, _blocked: bool) -> EngineResult<()> {
-        Err(EngineError("Linux set_outbound_block not implemented yet".into()))
+        Err(EngineError(
+            "Linux set_outbound_block not implemented yet".into(),
+        ))
     }
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {

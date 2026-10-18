@@ -9,9 +9,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use cyberwall_backend_windows::WindowsFirewallEngine;
 use cyberwall_core::FirewallEngine;
-use s2o_schema::{
-    AegisEvent, EventAction, EventKind, ProductId, Severity, SCHEMA_VERSION,
-};
+use s2o_schema::{AegisEvent, EventAction, EventKind, ProductId, Severity, SCHEMA_VERSION};
 use s2o_store::EventStore;
 use std::path::PathBuf;
 
@@ -52,10 +50,7 @@ struct ModuleStatus {
     detail: String,
 }
 
-fn module_table(
-    st: &cyberwall_core::FirewallStatus,
-    conns: usize,
-) -> Vec<ModuleStatus> {
+fn module_table(st: &cyberwall_core::FirewallStatus, conns: usize) -> Vec<ModuleStatus> {
     vec![
         ModuleStatus {
             id: "cyberwall",
@@ -135,9 +130,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Start { event_log } => {
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "     S2O AEGIS MASTER DAEMON  (Phase 0 spine)            ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "     S2O AEGIS MASTER DAEMON  (Phase 0 spine)            "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Schema version    : {}", SCHEMA_VERSION);
             let store = EventStore::open(&event_log)?;
             println!(" Event store       : {}", store.path().display());
@@ -145,11 +151,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let fw = WindowsFirewallEngine::new();
             let st = fw.get_status().await?;
 
-            let conns = tokio::task::spawn_blocking(s2o_platform::telemetry::get_active_tcp_connections)
-                .await
-                .unwrap_or_default();
+            let conns =
+                tokio::task::spawn_blocking(s2o_platform::telemetry::get_active_tcp_connections)
+                    .await
+                    .unwrap_or_default();
             for (idx, m) in module_table(&st, conns.len()).iter().enumerate() {
-                println!("[AEGISD] [{}/9] {:<18} {}  {}", idx + 1, m.name, state_colored(m.state), m.detail);
+                println!(
+                    "[AEGISD] [{}/9] {:<18} {}  {}",
+                    idx + 1,
+                    m.name,
+                    state_colored(m.state),
+                    m.detail
+                );
             }
 
             let host_id = hostname();
@@ -170,28 +183,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("[AEGISD]       -> Master health event committed to store");
 
             // Spawn the Universal IPC Server (Named Pipe on Windows / Unix Domain Socket on Unix)
-            let ipc_server = std::sync::Arc::new(s2o_bus::AegisIpcServer::new(|req: s2o_bus::IpcRequest| async move {
-                match req.method.as_str() {
-                    "status" => {
-                        let fw = WindowsFirewallEngine::new();
-                        let st = fw.get_status().await.unwrap_or(cyberwall_core::FirewallStatus {
-                            enabled: false,
-                            outbound_blocked: false,
-                            defender_active: false,
-                            profile_private: false,
-                            profile_public: false,
-                            profile_domain: false,
-                            platform: "Windows".into(),
-                            backend_driver: "".into(),
-                            substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
-                        });
-                        s2o_bus::IpcResponse::ok(req.id, serde_json::to_value(&st).unwrap_or_default())
+            let ipc_server = std::sync::Arc::new(s2o_bus::AegisIpcServer::new(
+                |req: s2o_bus::IpcRequest| async move {
+                    match req.method.as_str() {
+                        "status" => {
+                            let fw = WindowsFirewallEngine::new();
+                            let st =
+                                fw.get_status()
+                                    .await
+                                    .unwrap_or(cyberwall_core::FirewallStatus {
+                                        enabled: false,
+                                        outbound_blocked: false,
+                                        defender_active: false,
+                                        profile_private: false,
+                                        profile_public: false,
+                                        profile_domain: false,
+                                        platform: "Windows".into(),
+                                        backend_driver: "".into(),
+                                        substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
+                                    });
+                            s2o_bus::IpcResponse::ok(
+                                req.id,
+                                serde_json::to_value(&st).unwrap_or_default(),
+                            )
+                        }
+                        "ping" => {
+                            s2o_bus::IpcResponse::ok(req.id, serde_json::json!({ "pong": true }))
+                        }
+                        "reload" => s2o_bus::IpcResponse::err(
+                            req.id,
+                            "reload not implemented: no policy engine yet".to_string(),
+                        ),
+                        unknown => s2o_bus::IpcResponse::err(
+                            req.id,
+                            format!("Unknown RPC method: {unknown}"),
+                        ),
                     }
-                    "ping" => s2o_bus::IpcResponse::ok(req.id, serde_json::json!({ "pong": true })),
-                    "reload" => s2o_bus::IpcResponse::err(req.id, "reload not implemented: no policy engine yet".to_string()),
-                    unknown => s2o_bus::IpcResponse::err(req.id, format!("Unknown RPC method: {unknown}")),
-                }
-            }));
+                },
+            ));
 
             #[cfg(windows)]
             {
@@ -201,7 +230,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("[AEGISD] IPC named pipe server error: {e}");
                     }
                 });
-                println!("[AEGISD]       -> IPC Named Pipe active at {}", s2o_bus::AEGIS_PIPE_NAME.cyan());
+                println!(
+                    "[AEGISD]       -> IPC Named Pipe active at {}",
+                    s2o_bus::AEGIS_PIPE_NAME.cyan()
+                );
             }
 
             #[cfg(unix)]
@@ -212,17 +244,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("[AEGISD] IPC Unix socket server error: {e}");
                     }
                 });
-                println!("[AEGISD]       -> IPC Unix Socket active at {}", s2o_bus::AEGIS_UNIX_SOCKET.cyan());
+                println!(
+                    "[AEGISD]       -> IPC Unix Socket active at {}",
+                    s2o_bus::AEGIS_UNIX_SOCKET.cyan()
+                );
             }
 
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(
                 "{}",
                 "  aegisd running (IPC: ping, status). Other pillars run via their own CLIs."
                     .bold()
                     .green()
             );
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!("\nPress Ctrl+C to stop...");
             tokio::signal::ctrl_c().await?;
             println!("\n[AEGISD] shutdown complete.");
@@ -233,7 +274,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let conns = tokio::task::spawn_blocking(|| {
                 s2o_platform::telemetry::get_active_tcp_connections()
-            }).await.unwrap_or_default();
+            })
+            .await
+            .unwrap_or_default();
 
             let modules = module_table(&st, conns.len());
 
@@ -249,19 +292,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }))?
                 );
             } else {
-                println!("{}", "=========================================================".cyan());
-                println!("{}", "       S2O AEGIS ENTERPRISE MATRIX STATUS          ".bold().green());
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "       S2O AEGIS ENTERPRISE MATRIX STATUS          "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
                 for (idx, m) in modules.iter().enumerate() {
                     let state_col = state_colored(m.state);
                     println!(" [{}/9] {:<24} : {}", idx + 1, m.name.bold(), state_col);
                     println!("       Detail : {}", m.detail);
-                    println!("{}", "---------------------------------------------------------".cyan());
+                    println!(
+                        "{}",
+                        "---------------------------------------------------------".cyan()
+                    );
                 }
             }
         }
         Commands::Reload => {
-            eprintln!("{}", "[AEGISD] reload: NOT IMPLEMENTED (there is no policy engine to reload yet)".red());
+            eprintln!(
+                "{}",
+                "[AEGISD] reload: NOT IMPLEMENTED (there is no policy engine to reload yet)".red()
+            );
             std::process::exit(2);
         }
     }

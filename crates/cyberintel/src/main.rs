@@ -3,7 +3,7 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 const IOC_DATABASE_PATH: &str = ".aegis/threatgrid_iocs.json";
@@ -73,12 +73,48 @@ fn load_ioc_db() -> HashMap<String, IocRecord> {
     // Default seeded baseline if database file is missing
     let mut default_db = HashMap::new();
     let seed_data = [
-        ("198.51.100.4", "ip", "CobaltStrike C2 Server", 95, "Abuse.ch Feodo Tracker"),
-        ("185.220.101.5", "ip", "Tor Exit Node / BruteForce", 80, "ThreatGrid Sentinel"),
-        ("evil-payload.xyz", "domain", "Phishing / Credential Harvester", 90, "URLhaus Feed"),
-        ("cryptolocker-pay.top", "domain", "Ransomware Payment Gateway", 99, "ThreatGrid ML"),
-        ("275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f", "hash", "EICAR Standard AV Test File", 100, "AV-TEST"),
-        ("ed01ebfbc9eb5bbea545af4d01bf5f1071661840480439c6e5babe8e080e41aa", "hash", "WannaCry Ransomware Binary", 100, "MalwareBazaar"),
+        (
+            "198.51.100.4",
+            "ip",
+            "CobaltStrike C2 Server",
+            95,
+            "Abuse.ch Feodo Tracker",
+        ),
+        (
+            "185.220.101.5",
+            "ip",
+            "Tor Exit Node / BruteForce",
+            80,
+            "ThreatGrid Sentinel",
+        ),
+        (
+            "evil-payload.xyz",
+            "domain",
+            "Phishing / Credential Harvester",
+            90,
+            "URLhaus Feed",
+        ),
+        (
+            "cryptolocker-pay.top",
+            "domain",
+            "Ransomware Payment Gateway",
+            99,
+            "ThreatGrid ML",
+        ),
+        (
+            "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+            "hash",
+            "EICAR Standard AV Test File",
+            100,
+            "AV-TEST",
+        ),
+        (
+            "ed01ebfbc9eb5bbea545af4d01bf5f1071661840480439c6e5babe8e080e41aa",
+            "hash",
+            "WannaCry Ransomware Binary",
+            100,
+            "MalwareBazaar",
+        ),
     ];
 
     for (ind, kind, threat, conf, src) in seed_data {
@@ -118,43 +154,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let db = load_ioc_db();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "          S2O THREATGRID THREAT INTEL              ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Total Indexed IOCs: {}", db.len().to_string().bold().green());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "          S2O THREATGRID THREAT INTEL              "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                " Total Indexed IOCs: {}",
+                db.len().to_string().bold().green()
+            );
             println!(" Database Path     : {}", IOC_DATABASE_PATH);
-            println!(" Feeds Connected   : {}", "URLhaus, Abuse.ch, ThreatGrid Sentinel".yellow());
+            println!(
+                " Feeds Connected   : {}",
+                "URLhaus, Abuse.ch, ThreatGrid Sentinel".yellow()
+            );
             println!(" Match Confidence  : {}", "Active scoring (0-100)".bold());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Lookup { target } => {
             let db = load_ioc_db();
             let key = target.trim().to_lowercase();
 
-            println!("{}", format!("[threatgrid] looking up indicator: '{}'...", target).cyan());
+            println!(
+                "{}",
+                format!("[threatgrid] looking up indicator: '{}'...", target).cyan()
+            );
 
             if let Some(record) = db.get(&key) {
-                println!("{}", "=========================================================".cyan());
-                println!(" Match Status  : {}", "MATCHED MALICIOUS INDICATOR".red().bold());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    " Match Status  : {}",
+                    "MATCHED MALICIOUS INDICATOR".red().bold()
+                );
                 println!(" Indicator     : {}", record.indicator.bold());
                 println!(" Type          : {}", record.kind.yellow());
                 println!(" Threat Family : {}", record.threat.red().bold());
                 println!(
                     " Confidence    : {}% {}",
                     record.confidence,
-                    if record.confidence >= 90 { "(CRITICAL)".red().bold() } else { "(SUSPICIOUS)".yellow() }
+                    if record.confidence >= 90 {
+                        "(CRITICAL)".red().bold()
+                    } else {
+                        "(SUSPICIOUS)".yellow()
+                    }
                 );
                 println!(" Source Feed   : {}", record.source);
                 println!(" First Seen    : {}", record.first_seen.cyan());
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
             } else {
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
                 println!(" Indicator     : {}", target.bold());
-                println!(" Verdict       : {}", "CLEAN (No threat intelligence match found)".green().bold());
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    " Verdict       : {}",
+                    "CLEAN (No threat intelligence match found)".green().bold()
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
             }
         }
-        Commands::Add { indicator, kind, threat, confidence } => {
+        Commands::Add {
+            indicator,
+            kind,
+            threat,
+            confidence,
+        } => {
             let mut db = load_ioc_db();
             let key = indicator.trim().to_lowercase();
             let record = IocRecord {
@@ -167,15 +253,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             db.insert(key, record);
             save_ioc_db(&db)?;
-            println!("{}", format!("[threatgrid] OK: indicator '{}' successfully registered.", indicator).green().bold());
+            println!(
+                "{}",
+                format!(
+                    "[threatgrid] OK: indicator '{}' successfully registered.",
+                    indicator
+                )
+                .green()
+                .bold()
+            );
         }
         Commands::Sync => {
-            println!("{}", "[threatgrid] syncing open-source threat feeds (Abuse.ch / URLhaus)...".cyan());
+            println!(
+                "{}",
+                "[threatgrid] syncing open-source threat feeds (Abuse.ch / URLhaus)...".cyan()
+            );
             let mut db = load_ioc_db();
             let client = reqwest::Client::new();
 
             // Fetch recent URLhaus active malware domains/URLs
-            match client.get("https://urlhaus.abuse.ch/downloads/csv_recent/").send().await {
+            match client
+                .get("https://urlhaus.abuse.ch/downloads/csv_recent/")
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     let body = resp.text().await.unwrap_or_default();
                     let mut added = 0;
@@ -205,23 +306,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 _ => {
                     save_ioc_db(&db)?;
-                    println!("{}", "[threatgrid] feed server unavailable (using local intelligence baseline).".yellow());
+                    println!(
+                        "{}",
+                        "[threatgrid] feed server unavailable (using local intelligence baseline)."
+                            .yellow()
+                    );
                 }
             }
         }
         Commands::List { limit } => {
             let db = load_ioc_db();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "         ThreatGrid — Indexed Threat Signatures          ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "         ThreatGrid — Indexed Threat Signatures          "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Total records: {}", db.len());
             for (idx, (_, rec)) in db.iter().take(limit).enumerate() {
-                println!("{}. {:<10} | {:<32} | {}", idx + 1, rec.kind.yellow(), rec.indicator.bold(), rec.threat.red());
+                println!(
+                    "{}. {:<10} | {:<32} | {}",
+                    idx + 1,
+                    rec.kind.yellow(),
+                    rec.indicator.bold(),
+                    rec.threat.red()
+                );
             }
             if db.len() > limit {
-                println!("... and {} more records (use --limit to see more)", db.len() - limit);
+                println!(
+                    "... and {} more records (use --limit to see more)",
+                    db.len() - limit
+                );
             }
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
     }
 

@@ -3,6 +3,7 @@ name = "s2o-bus"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+publish = false
 authors = ["Split2ops Software <support@zv9games.org>"]
 description = "S2O Aegis in-process event bus (IPC later)"
 

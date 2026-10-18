@@ -123,19 +123,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
-                println!("{}", "=========================================================".cyan());
-                println!("{}", "       S2O SOFTWARE CYBERWALL ENTERPRISE CLI       ".bold().green());
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "       S2O SOFTWARE CYBERWALL ENTERPRISE CLI       "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
                 println!(" Platform Engine   : {}", status.platform.bold());
                 println!(" Backend Driver    : {}", status.backend_driver.yellow());
-                println!(" Firewall Status   : {}", if status.enabled { "ENABLED (Green)".green().bold() } else { "DISABLED (Red)".red().bold() });
-                println!(" Outbound Shield   : {}", if status.outbound_blocked { "BLOCKED (Red)".red().bold() } else { "NORMAL (Allow)".green() });
-                println!(" Windows Defender  : {}", if status.defender_active { "ACTIVE (Green)".green() } else { "INACTIVE (Red)".red() });
-                println!("{}", "---------------------------------------------------------".cyan());
-                println!(" Private Profile   : {}", if status.profile_private { "ON".green() } else { "OFF".red() });
-                println!(" Public Profile    : {}", if status.profile_public { "ON".green() } else { "OFF".red() });
-                println!(" Domain Profile    : {}", if status.profile_domain { "ON".green() } else { "OFF".red() });
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    " Firewall Status   : {}",
+                    if status.enabled {
+                        "ENABLED (Green)".green().bold()
+                    } else {
+                        "DISABLED (Red)".red().bold()
+                    }
+                );
+                println!(
+                    " Outbound Shield   : {}",
+                    if status.outbound_blocked {
+                        "BLOCKED (Red)".red().bold()
+                    } else {
+                        "NORMAL (Allow)".green()
+                    }
+                );
+                println!(
+                    " Windows Defender  : {}",
+                    if status.defender_active {
+                        "ACTIVE (Green)".green()
+                    } else {
+                        "INACTIVE (Red)".red()
+                    }
+                );
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
+                println!(
+                    " Private Profile   : {}",
+                    if status.profile_private {
+                        "ON".green()
+                    } else {
+                        "OFF".red()
+                    }
+                );
+                println!(
+                    " Public Profile    : {}",
+                    if status.profile_public {
+                        "ON".green()
+                    } else {
+                        "OFF".red()
+                    }
+                );
+                println!(
+                    " Domain Profile    : {}",
+                    if status.profile_domain {
+                        "ON".green()
+                    } else {
+                        "OFF".red()
+                    }
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
             }
         }
         Commands::Enable => {
@@ -143,9 +202,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine.set_enabled(true).await?;
             let status = engine.get_status().await?;
             if status.enabled {
-                println!("{}", "[cyberwall] OK: firewall enabled on interactive profiles.".green().bold());
+                println!(
+                    "{}",
+                    "[cyberwall] OK: firewall enabled on interactive profiles."
+                        .green()
+                        .bold()
+                );
             } else {
-                eprintln!("{}", "[cyberwall] command returned OK but profiles still report disabled.".red().bold());
+                eprintln!(
+                    "{}",
+                    "[cyberwall] command returned OK but profiles still report disabled."
+                        .red()
+                        .bold()
+                );
                 std::process::exit(1);
             }
         }
@@ -154,9 +223,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine.set_enabled(false).await?;
             let status = engine.get_status().await?;
             if !status.enabled {
-                println!("{}", "[cyberwall] OK: firewall disabled on interactive profiles.".yellow().bold());
+                println!(
+                    "{}",
+                    "[cyberwall] OK: firewall disabled on interactive profiles."
+                        .yellow()
+                        .bold()
+                );
             } else {
-                eprintln!("{}", "[cyberwall] command returned OK but profiles still report enabled.".red().bold());
+                eprintln!(
+                    "{}",
+                    "[cyberwall] command returned OK but profiles still report enabled."
+                        .red()
+                        .bold()
+                );
                 std::process::exit(1);
             }
         }
@@ -165,9 +244,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine.set_outbound_block(true).await?;
             let status = engine.get_status().await?;
             if status.outbound_blocked {
-                println!("{}", "[cyberwall] OK: outbound default action is BLOCK.".red().bold());
+                println!(
+                    "{}",
+                    "[cyberwall] OK: outbound default action is BLOCK."
+                        .red()
+                        .bold()
+                );
             } else {
-                eprintln!("{}", "[cyberwall] lock returned OK but outbound not blocked.".red().bold());
+                eprintln!(
+                    "{}",
+                    "[cyberwall] lock returned OK but outbound not blocked."
+                        .red()
+                        .bold()
+                );
                 std::process::exit(1);
             }
         }
@@ -176,13 +265,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine.set_outbound_block(false).await?;
             let status = engine.get_status().await?;
             if !status.outbound_blocked {
-                println!("{}", "[cyberwall] OK: outbound traffic allowed.".green().bold());
+                println!(
+                    "{}",
+                    "[cyberwall] OK: outbound traffic allowed.".green().bold()
+                );
             } else {
-                eprintln!("{}", "[cyberwall] unlock returned OK but outbound still blocked.".red().bold());
+                eprintln!(
+                    "{}",
+                    "[cyberwall] unlock returned OK but outbound still blocked."
+                        .red()
+                        .bold()
+                );
                 std::process::exit(1);
             }
         }
-        Commands::Rules { dir, action, search, json } => {
+        Commands::Rules {
+            dir,
+            action,
+            search,
+            json,
+        } => {
             let filter_dir = match dir.as_deref() {
                 Some("in") => Some(cyberwall_core::RuleDirection::Inbound),
                 Some("out") => Some(cyberwall_core::RuleDirection::Outbound),
@@ -205,9 +307,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&rules)?);
             } else {
-                println!("{}", "=========================================================".cyan());
-                println!("{}", "            S2O Cyberwall — OS firewall rules            ".bold().green());
-                println!("{}", "=========================================================".cyan());
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
+                println!(
+                    "{}",
+                    "            S2O Cyberwall — OS firewall rules            "
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    "=========================================================".cyan()
+                );
                 println!(" Total matching rules: {}", rules.len());
                 for (idx, rule) in rules.iter().take(40).enumerate() {
                     let act_colored = match rule.action {
@@ -215,18 +328,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cyberwall_core::RuleAction::Block => "BLOCK".red(),
                     };
                     println!("{}. {} [{}]", idx + 1, rule.name.bold(), act_colored);
+                    println!("   enabled={} direction={:?}", rule.enabled, rule.direction);
                     println!(
-                        "   enabled={} direction={:?}",
-                        rule.enabled, rule.direction
+                        "{}",
+                        "---------------------------------------------------------".cyan()
                     );
-                    println!("{}", "---------------------------------------------------------".cyan());
                 }
                 if rules.len() > 40 {
-                    println!("... and {} more rules (use --search or --json for full list)", rules.len() - 40);
+                    println!(
+                        "... and {} more rules (use --search or --json for full list)",
+                        rules.len() - 40
+                    );
                 }
             }
         }
-        Commands::BlockPort { port, protocol, dir, name } => {
+        Commands::BlockPort {
+            port,
+            protocol,
+            dir,
+            name,
+        } => {
             let is_out = dir.eq_ignore_ascii_case("out");
             let proto = if protocol.eq_ignore_ascii_case("udp") {
                 cyberwall_core::RuleProtocol::Udp
@@ -234,27 +355,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cyberwall_core::RuleProtocol::Tcp
             };
             let rule_name = name.unwrap_or_else(|| {
-                format!("S2O-Block-Port-{}-{}-{}", protocol.to_uppercase(), port, if is_out { "Out" } else { "In" })
+                format!(
+                    "S2O-Block-Port-{}-{}-{}",
+                    protocol.to_uppercase(),
+                    port,
+                    if is_out { "Out" } else { "In" }
+                )
             });
 
             let rule = cyberwall_core::FirewallRule {
                 name: rule_name.clone(),
                 enabled: true,
                 action: cyberwall_core::RuleAction::Block,
-                direction: if is_out { cyberwall_core::RuleDirection::Outbound } else { cyberwall_core::RuleDirection::Inbound },
+                direction: if is_out {
+                    cyberwall_core::RuleDirection::Outbound
+                } else {
+                    cyberwall_core::RuleDirection::Inbound
+                },
                 profile: cyberwall_core::ProfileType::All,
                 protocol: Some(proto),
-                local_ports: if !is_out { Some(port.to_string()) } else { None },
+                local_ports: if !is_out {
+                    Some(port.to_string())
+                } else {
+                    None
+                },
                 remote_ports: if is_out { Some(port.to_string()) } else { None },
                 remote_addresses: None,
                 application: None,
             };
 
-            println!("[cyberwall] applying block rule: '{}' on port {}/{}...", rule_name, port, protocol);
+            println!(
+                "[cyberwall] applying block rule: '{}' on port {}/{}...",
+                rule_name, port, protocol
+            );
             engine.add_rule(&rule).await?;
-            println!("{}", format!("[cyberwall] OK: port {}/{} successfully blocked.", port, protocol).green().bold());
+            println!(
+                "{}",
+                format!(
+                    "[cyberwall] OK: port {}/{} successfully blocked.",
+                    port, protocol
+                )
+                .green()
+                .bold()
+            );
         }
-        Commands::AllowPort { port, protocol, dir, name } => {
+        Commands::AllowPort {
+            port,
+            protocol,
+            dir,
+            name,
+        } => {
             let is_out = dir.eq_ignore_ascii_case("out");
             let proto = if protocol.eq_ignore_ascii_case("udp") {
                 cyberwall_core::RuleProtocol::Udp
@@ -262,37 +412,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cyberwall_core::RuleProtocol::Tcp
             };
             let rule_name = name.unwrap_or_else(|| {
-                format!("S2O-Allow-Port-{}-{}-{}", protocol.to_uppercase(), port, if is_out { "Out" } else { "In" })
+                format!(
+                    "S2O-Allow-Port-{}-{}-{}",
+                    protocol.to_uppercase(),
+                    port,
+                    if is_out { "Out" } else { "In" }
+                )
             });
 
             let rule = cyberwall_core::FirewallRule {
                 name: rule_name.clone(),
                 enabled: true,
                 action: cyberwall_core::RuleAction::Allow,
-                direction: if is_out { cyberwall_core::RuleDirection::Outbound } else { cyberwall_core::RuleDirection::Inbound },
+                direction: if is_out {
+                    cyberwall_core::RuleDirection::Outbound
+                } else {
+                    cyberwall_core::RuleDirection::Inbound
+                },
                 profile: cyberwall_core::ProfileType::All,
                 protocol: Some(proto),
-                local_ports: if !is_out { Some(port.to_string()) } else { None },
+                local_ports: if !is_out {
+                    Some(port.to_string())
+                } else {
+                    None
+                },
                 remote_ports: if is_out { Some(port.to_string()) } else { None },
                 remote_addresses: None,
                 application: None,
             };
 
-            println!("[cyberwall] applying allow rule: '{}' on port {}/{}...", rule_name, port, protocol);
+            println!(
+                "[cyberwall] applying allow rule: '{}' on port {}/{}...",
+                rule_name, port, protocol
+            );
             engine.add_rule(&rule).await?;
-            println!("{}", format!("[cyberwall] OK: port {}/{} successfully allowed.", port, protocol).green().bold());
+            println!(
+                "{}",
+                format!(
+                    "[cyberwall] OK: port {}/{} successfully allowed.",
+                    port, protocol
+                )
+                .green()
+                .bold()
+            );
         }
         Commands::BlockIp { ip, dir, name } => {
             let is_in = dir.eq_ignore_ascii_case("in");
             let rule_name = name.unwrap_or_else(|| {
-                format!("S2O-Block-IP-{}-{}", ip.replace(['.', ':'], "_"), if is_in { "In" } else { "Out" })
+                format!(
+                    "S2O-Block-IP-{}-{}",
+                    ip.replace(['.', ':'], "_"),
+                    if is_in { "In" } else { "Out" }
+                )
             });
 
             let rule = cyberwall_core::FirewallRule {
                 name: rule_name.clone(),
                 enabled: true,
                 action: cyberwall_core::RuleAction::Block,
-                direction: if is_in { cyberwall_core::RuleDirection::Inbound } else { cyberwall_core::RuleDirection::Outbound },
+                direction: if is_in {
+                    cyberwall_core::RuleDirection::Inbound
+                } else {
+                    cyberwall_core::RuleDirection::Outbound
+                },
                 profile: cyberwall_core::ProfileType::All,
                 protocol: Some(cyberwall_core::RuleProtocol::Any),
                 local_ports: None,
@@ -303,7 +485,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("[cyberwall] blocking traffic for IP '{}'...", ip);
             engine.add_rule(&rule).await?;
-            println!("{}", format!("[cyberwall] OK: rule '{}' added for IP {}.", rule_name, ip).green().bold());
+            println!(
+                "{}",
+                format!("[cyberwall] OK: rule '{}' added for IP {}.", rule_name, ip)
+                    .green()
+                    .bold()
+            );
         }
         Commands::BlockApp { path, dir, name } => {
             let is_in = dir.eq_ignore_ascii_case("in");
@@ -317,7 +504,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: rule_name.clone(),
                 enabled: true,
                 action: cyberwall_core::RuleAction::Block,
-                direction: if is_in { cyberwall_core::RuleDirection::Inbound } else { cyberwall_core::RuleDirection::Outbound },
+                direction: if is_in {
+                    cyberwall_core::RuleDirection::Inbound
+                } else {
+                    cyberwall_core::RuleDirection::Outbound
+                },
                 profile: cyberwall_core::ProfileType::All,
                 protocol: None,
                 local_ports: None,
@@ -328,7 +519,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("[cyberwall] blocking traffic for application '{}'...", path);
             engine.add_rule(&rule).await?;
-            println!("{}", format!("[cyberwall] OK: rule '{}' added for {}.", rule_name, path).green().bold());
+            println!(
+                "{}",
+                format!("[cyberwall] OK: rule '{}' added for {}.", rule_name, path)
+                    .green()
+                    .bold()
+            );
         }
         Commands::AllowApp { path, dir, name } => {
             let is_out = dir.eq_ignore_ascii_case("out");
@@ -342,7 +538,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: rule_name.clone(),
                 enabled: true,
                 action: cyberwall_core::RuleAction::Allow,
-                direction: if is_out { cyberwall_core::RuleDirection::Outbound } else { cyberwall_core::RuleDirection::Inbound },
+                direction: if is_out {
+                    cyberwall_core::RuleDirection::Outbound
+                } else {
+                    cyberwall_core::RuleDirection::Inbound
+                },
                 profile: cyberwall_core::ProfileType::All,
                 protocol: None,
                 local_ports: None,
@@ -353,12 +553,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("[cyberwall] allowing traffic for application '{}'...", path);
             engine.add_rule(&rule).await?;
-            println!("{}", format!("[cyberwall] OK: rule '{}' added for {}.", rule_name, path).green().bold());
+            println!(
+                "{}",
+                format!("[cyberwall] OK: rule '{}' added for {}.", rule_name, path)
+                    .green()
+                    .bold()
+            );
         }
         Commands::DeleteRule { name } => {
             println!("[cyberwall] removing firewall rule '{}'...", name);
             engine.delete_rule(&name).await?;
-            println!("{}", format!("[cyberwall] OK: rule '{}' deleted.", name).green().bold());
+            println!(
+                "{}",
+                format!("[cyberwall] OK: rule '{}' deleted.", name)
+                    .green()
+                    .bold()
+            );
         }
     }
 

@@ -1,5 +1,7 @@
+use cyberwall_core::{
+    FirewallEngine, FirewallRule, ProfileType, RuleAction, RuleDirection, RuleProtocol,
+};
 use eframe::{egui, epi};
-use cyberwall_core::{FirewallEngine, FirewallRule, RuleAction, RuleDirection, RuleProtocol, ProfileType};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
 
@@ -199,12 +201,29 @@ impl epi::App for AegisDashboardApp {
                     ui.label("1. Firewall");
                     ui.label("S2O Cyberwall");
                     if self.firewall_enabled {
-                        ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                        ui.label(
+                            egui::RichText::new("ONLINE")
+                                .color(egui::Color32::GREEN)
+                                .strong(),
+                        );
                     } else {
-                        ui.label(egui::RichText::new("OFFLINE").color(egui::Color32::RED).strong());
+                        ui.label(
+                            egui::RichText::new("OFFLINE")
+                                .color(egui::Color32::RED)
+                                .strong(),
+                        );
                     }
-                    if ui.button(if self.firewall_enabled { "Toggle Off" } else { "Toggle On" }).clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::ToggleFirewall(!self.firewall_enabled));
+                    if ui
+                        .button(if self.firewall_enabled {
+                            "Toggle Off"
+                        } else {
+                            "Toggle On"
+                        })
+                        .clicked()
+                    {
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::ToggleFirewall(!self.firewall_enabled));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::FirewallSettings;
@@ -215,7 +234,11 @@ impl epi::App for AegisDashboardApp {
                     // 2. Mesh
                     ui.label("2. Overlay Mesh");
                     ui.label("S2O CyberMesh");
-                    ui.label(egui::RichText::new("KEYS ONLY").color(egui::Color32::YELLOW).strong());
+                    ui.label(
+                        egui::RichText::new("KEYS ONLY")
+                            .color(egui::Color32::YELLOW)
+                            .strong(),
+                    );
                     if ui.button("Regen Key").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::GenMeshKey);
                     }
@@ -229,12 +252,22 @@ impl epi::App for AegisDashboardApp {
                     ui.label("3. Endpoint AV");
                     ui.label("S2O CyberDefender");
                     if self.defender_active {
-                        ui.label(egui::RichText::new("ONLINE").color(egui::Color32::GREEN).strong());
+                        ui.label(
+                            egui::RichText::new("ONLINE")
+                                .color(egui::Color32::GREEN)
+                                .strong(),
+                        );
                     } else {
-                        ui.label(egui::RichText::new("WARNING").color(egui::Color32::YELLOW).strong());
+                        ui.label(
+                            egui::RichText::new("WARNING")
+                                .color(egui::Color32::YELLOW)
+                                .strong(),
+                        );
                     }
                     if ui.button("Trigger Scan").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TriggerScan(self.scan_target_path.clone()));
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::TriggerScan(self.scan_target_path.clone()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::DefenderSettings;
@@ -245,22 +278,35 @@ impl epi::App for AegisDashboardApp {
                     // 4. EDR
                     ui.label("4. Socket EDR");
                     ui.label("S2O CyberEDR");
-                    ui.label(egui::RichText::new("LIVE").color(egui::Color32::GREEN).strong());
+                    ui.label(
+                        egui::RichText::new("LIVE")
+                            .color(egui::Color32::GREEN)
+                            .strong(),
+                    );
                     if ui.button("Audit Sockets").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditEdr);
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::EdrSettings;
                     }
-                    ui.label(format!("TCP socket table ({} active sockets)", self.active_connections_count));
+                    ui.label(format!(
+                        "TCP socket table ({} active sockets)",
+                        self.active_connections_count
+                    ));
                     ui.end_row();
 
                     // 5. SIEM
                     ui.label("5. Event SIEM");
                     ui.label("S2O CyberSIEM");
-                    ui.label(egui::RichText::new("LOCAL LOG").color(egui::Color32::LIGHT_BLUE).strong());
+                    ui.label(
+                        egui::RichText::new("LOCAL LOG")
+                            .color(egui::Color32::LIGHT_BLUE)
+                            .strong(),
+                    );
                     if ui.button("Emit Test Alert").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::EmitSiemEvent("Manual alert triggered".into()));
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::EmitSiemEvent("Manual alert triggered".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::SiemSettings;
@@ -271,7 +317,11 @@ impl epi::App for AegisDashboardApp {
                     // 6. Threat Intel
                     ui.label("6. Threat Intel");
                     ui.label("S2O CyberIntel");
-                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
+                    ui.label(
+                        egui::RichText::new("ON DEMAND")
+                            .color(egui::Color32::LIGHT_BLUE)
+                            .strong(),
+                    );
                     if ui.button("Sync URLhaus").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::SyncIntel);
                     }
@@ -284,9 +334,15 @@ impl epi::App for AegisDashboardApp {
                     // 7. DNS Guard
                     ui.label("7. DNS Guard");
                     ui.label("S2O CyberDNS");
-                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
+                    ui.label(
+                        egui::RichText::new("ON DEMAND")
+                            .color(egui::Color32::LIGHT_BLUE)
+                            .strong(),
+                    );
                     if ui.button("DoH Resolve").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("zv9games.org".into()));
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::TestDns("zv9games.org".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::DnsSettings;
@@ -297,7 +353,11 @@ impl epi::App for AegisDashboardApp {
                     // 8. Zero-Trust ID
                     ui.label("8. Zero-Trust ID");
                     ui.label("S2O CyberID");
-                    ui.label(egui::RichText::new("ON DEMAND").color(egui::Color32::LIGHT_BLUE).strong());
+                    ui.label(
+                        egui::RichText::new("ON DEMAND")
+                            .color(egui::Color32::LIGHT_BLUE)
+                            .strong(),
+                    );
                     if ui.button("Re-Audit").clicked() {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditPosture);
                     }
@@ -310,9 +370,15 @@ impl epi::App for AegisDashboardApp {
                     // 9. App ZTNA
                     ui.label("9. App ZTNA");
                     ui.label("S2O CyberZTNA");
-                    ui.label(egui::RichText::new("NOT IMPLEMENTED").color(egui::Color32::RED).strong());
+                    ui.label(
+                        egui::RichText::new("NOT IMPLEMENTED")
+                            .color(egui::Color32::RED)
+                            .strong(),
+                    );
                     if ui.button("Test Gateway").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestZtna("secure-crm".into()));
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::TestZtna("secure-crm".into()));
                     }
                     if ui.button("⚙ Full Customization").clicked() {
                         self.active_modal = ActiveModal::ZtnaSettings;
@@ -326,15 +392,19 @@ impl epi::App for AegisDashboardApp {
 
             // SIEM / EDR Real-Time Incident Stream
             ui.heading("Real-Time Telemetry & Security Events (SIEM)");
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                if self.recent_events.is_empty() {
-                    ui.label(egui::RichText::new("Awaiting incoming security events...").italics());
-                } else {
-                    for ev in &self.recent_events {
-                        ui.monospace(ev);
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    if self.recent_events.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Awaiting incoming security events...").italics(),
+                        );
+                    } else {
+                        for ev in &self.recent_events {
+                            ui.monospace(ev);
+                        }
                     }
-                }
-            });
+                });
         });
 
         // -------------------------------------------------------------
@@ -351,11 +421,29 @@ impl epi::App for AegisDashboardApp {
                 .show(ctx, |ui| {
                     ui.heading("Master Operating System Firewall Controls");
                     ui.horizontal(|ui| {
-                        if ui.button(if self.firewall_enabled { "🔴 Turn ALL Profiles OFF" } else { "🟢 Turn ALL Profiles ON" }).clicked() {
-                            let _ = self.cmd_tx.send(DashboardCmd::ToggleFirewall(!self.firewall_enabled));
+                        if ui
+                            .button(if self.firewall_enabled {
+                                "🔴 Turn ALL Profiles OFF"
+                            } else {
+                                "🟢 Turn ALL Profiles ON"
+                            })
+                            .clicked()
+                        {
+                            let _ = self
+                                .cmd_tx
+                                .send(DashboardCmd::ToggleFirewall(!self.firewall_enabled));
                         }
-                        if ui.button(if self.outbound_shield { "🔓 Release Isolation Shield" } else { "🔒 Engage Isolation Shield (Lockdown)" }).clicked() {
-                            let _ = self.cmd_tx.send(DashboardCmd::ToggleShield(!self.outbound_shield));
+                        if ui
+                            .button(if self.outbound_shield {
+                                "🔓 Release Isolation Shield"
+                            } else {
+                                "🔒 Engage Isolation Shield (Lockdown)"
+                            })
+                            .clicked()
+                        {
+                            let _ = self
+                                .cmd_tx
+                                .send(DashboardCmd::ToggleShield(!self.outbound_shield));
                         }
                     });
 
@@ -394,18 +482,45 @@ impl epi::App for AegisDashboardApp {
                         ui.text_edit_singleline(&mut self.fw_rule_app_path_input);
                     });
 
-                    if ui.button("➕ Inject Rule into Windows Firewall Engine").clicked() {
+                    if ui
+                        .button("➕ Inject Rule into Windows Firewall Engine")
+                        .clicked()
+                    {
                         let rule = FirewallRule {
                             name: self.fw_rule_name_input.clone(),
                             enabled: true,
-                            action: if self.fw_rule_action_allow { RuleAction::Allow } else { RuleAction::Block },
-                            direction: if self.fw_rule_dir_inbound { RuleDirection::Inbound } else { RuleDirection::Outbound },
+                            action: if self.fw_rule_action_allow {
+                                RuleAction::Allow
+                            } else {
+                                RuleAction::Block
+                            },
+                            direction: if self.fw_rule_dir_inbound {
+                                RuleDirection::Inbound
+                            } else {
+                                RuleDirection::Outbound
+                            },
                             profile: ProfileType::All,
-                            protocol: Some(if self.fw_rule_proto_tcp { RuleProtocol::Tcp } else { RuleProtocol::Udp }),
-                            local_ports: if self.fw_rule_port_input.trim().is_empty() { None } else { Some(self.fw_rule_port_input.trim().into()) },
+                            protocol: Some(if self.fw_rule_proto_tcp {
+                                RuleProtocol::Tcp
+                            } else {
+                                RuleProtocol::Udp
+                            }),
+                            local_ports: if self.fw_rule_port_input.trim().is_empty() {
+                                None
+                            } else {
+                                Some(self.fw_rule_port_input.trim().into())
+                            },
                             remote_ports: None,
-                            remote_addresses: if self.fw_rule_remote_ip_input.trim().is_empty() { None } else { Some(self.fw_rule_remote_ip_input.trim().into()) },
-                            application: if self.fw_rule_app_path_input.trim().is_empty() { None } else { Some(self.fw_rule_app_path_input.trim().into()) },
+                            remote_addresses: if self.fw_rule_remote_ip_input.trim().is_empty() {
+                                None
+                            } else {
+                                Some(self.fw_rule_remote_ip_input.trim().into())
+                            },
+                            application: if self.fw_rule_app_path_input.trim().is_empty() {
+                                None
+                            } else {
+                                Some(self.fw_rule_app_path_input.trim().into())
+                            },
                         };
                         let _ = self.cmd_tx.send(DashboardCmd::AddCustomRule(rule));
                     }
@@ -415,26 +530,32 @@ impl epi::App for AegisDashboardApp {
                     ui.horizontal(|ui| {
                         ui.label("Target Rule Name:");
                         ui.text_edit_singleline(&mut self.fw_delete_rule_name_input);
-                        if ui.button("🗑 Delete Rule").clicked() {
-                            if !self.fw_delete_rule_name_input.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::DeleteRuleByName(self.fw_delete_rule_name_input.trim().into()));
-                            }
+                        if ui.button("🗑 Delete Rule").clicked()
+                            && !self.fw_delete_rule_name_input.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::DeleteRuleByName(
+                                self.fw_delete_rule_name_input.trim().into(),
+                            ));
                         }
                     });
 
                     ui.separator();
                     ui.heading("Active Custom Rules");
-                    egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                        if self.fw_rules_cache.is_empty() {
-                            ui.label(egui::RichText::new("Querying active rules...").italics());
-                        } else {
-                            for r in &self.fw_rules_cache {
-                                ui.label(r);
+                    egui::ScrollArea::vertical()
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            if self.fw_rules_cache.is_empty() {
+                                ui.label(egui::RichText::new("Querying active rules...").italics());
+                            } else {
+                                for r in &self.fw_rules_cache {
+                                    ui.label(r);
+                                }
                             }
-                        }
-                    });
+                        });
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 2. Pillar 2: Full Mesh Customization Modal
@@ -468,7 +589,10 @@ impl epi::App for AegisDashboardApp {
                         ui.add(egui::DragValue::new(&mut self.mesh_keepalive));
                     });
 
-                    ui.checkbox(&mut self.mesh_persistent_active, "Enable Auto-Reconnect on Network Change");
+                    ui.checkbox(
+                        &mut self.mesh_persistent_active,
+                        "Enable Auto-Reconnect on Network Change",
+                    );
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -485,7 +609,9 @@ impl epi::App for AegisDashboardApp {
                         }
                     });
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 3. Pillar 3: Full Defender Customization Modal
@@ -502,22 +628,38 @@ impl epi::App for AegisDashboardApp {
                         ui.text_edit_singleline(&mut self.scan_target_path);
                     });
 
-                    ui.checkbox(&mut self.scan_deep_mode, "Compute SHA-256 Hashes for Executables");
-                    ui.checkbox(&mut self.scan_archive_mode, "Unpack and Scan Inside Compressed Archives (.zip, .tar.gz)");
-                    ui.checkbox(&mut self.defender_cloud_protection, "Enable Cloud Protection Telemetry");
-                    ui.checkbox(&mut self.defender_tamper_protection, "Enforce Tamper Protection");
+                    ui.checkbox(
+                        &mut self.scan_deep_mode,
+                        "Compute SHA-256 Hashes for Executables",
+                    );
+                    ui.checkbox(
+                        &mut self.scan_archive_mode,
+                        "Unpack and Scan Inside Compressed Archives (.zip, .tar.gz)",
+                    );
+                    ui.checkbox(
+                        &mut self.defender_cloud_protection,
+                        "Enable Cloud Protection Telemetry",
+                    );
+                    ui.checkbox(
+                        &mut self.defender_tamper_protection,
+                        "Enforce Tamper Protection",
+                    );
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("▶ Run Full Integrity Scan").clicked() {
-                            let _ = self.cmd_tx.send(DashboardCmd::TriggerScan(self.scan_target_path.clone()));
+                            let _ = self
+                                .cmd_tx
+                                .send(DashboardCmd::TriggerScan(self.scan_target_path.clone()));
                         }
                         if ui.button("⟳ Update Virus Signatures (MpCmdRun)").clicked() {
                             let _ = self.cmd_tx.send(DashboardCmd::UpdateSignatures);
                         }
                     });
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 4. Pillar 4: Full EDR Customization Modal
@@ -533,8 +675,14 @@ impl epi::App for AegisDashboardApp {
                         ui.label("Alert on Listening Port Below:");
                         ui.add(egui::DragValue::new(&mut self.edr_backdoor_threshold));
                     });
-                    ui.checkbox(&mut self.edr_auto_kill_unauthorized, "Auto-Terminate Rogue Backdoor Processes");
-                    ui.checkbox(&mut self.edr_isolate_suspicious_sockets, "Sever Socket Immediately on Suspicious Detection");
+                    ui.checkbox(
+                        &mut self.edr_auto_kill_unauthorized,
+                        "Auto-Terminate Rogue Backdoor Processes",
+                    );
+                    ui.checkbox(
+                        &mut self.edr_isolate_suspicious_sockets,
+                        "Sever Socket Immediately on Suspicious Detection",
+                    );
 
                     ui.separator();
                     ui.heading("Force-Kill Process by PID");
@@ -553,7 +701,9 @@ impl epi::App for AegisDashboardApp {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditEdr);
                     }
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 5. Pillar 5: Full SIEM Customization Modal
@@ -585,14 +735,21 @@ impl epi::App for AegisDashboardApp {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("📨 Emit Diagnostic Test Alert").clicked() {
-                            let _ = self.cmd_tx.send(DashboardCmd::EmitSiemEvent("Manual diagnostic audit".into()));
+                            let _ = self.cmd_tx.send(DashboardCmd::EmitSiemEvent(
+                                "Manual diagnostic audit".into(),
+                            ));
                         }
-                        if ui.button("🗑 Clear Local Event Log (.aegis/events.jsonl)").clicked() {
+                        if ui
+                            .button("🗑 Clear Local Event Log (.aegis/events.jsonl)")
+                            .clicked()
+                        {
                             let _ = self.cmd_tx.send(DashboardCmd::ClearSiemLog);
                         }
                     });
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 6. Pillar 6: Full Threat Intel Customization Modal
@@ -606,29 +763,44 @@ impl epi::App for AegisDashboardApp {
                     ui.heading("Threat Intelligence & Feed Orchestration");
                     ui.horizontal(|ui| {
                         ui.label("Auto-Sync Interval (minutes):");
-                        ui.add(egui::DragValue::new(&mut self.intel_auto_sync_interval_mins));
+                        ui.add(egui::DragValue::new(
+                            &mut self.intel_auto_sync_interval_mins,
+                        ));
                     });
 
-                    ui.checkbox(&mut self.intel_feed_urlhaus_enabled, "Enable Abuse.ch URLhaus Real-Time Malware Feed");
-                    ui.checkbox(&mut self.intel_feed_alienvault_enabled, "Enable AlienVault OTX Community Feed");
+                    ui.checkbox(
+                        &mut self.intel_feed_urlhaus_enabled,
+                        "Enable Abuse.ch URLhaus Real-Time Malware Feed",
+                    );
+                    ui.checkbox(
+                        &mut self.intel_feed_alienvault_enabled,
+                        "Enable AlienVault OTX Community Feed",
+                    );
 
                     ui.separator();
                     ui.heading("Add Custom IOC Indicator (URL, IP, Domain)");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.intel_custom_ioc);
-                        if ui.button("➕ Inject IOC").clicked() {
-                            if !self.intel_custom_ioc.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::AddIoc(self.intel_custom_ioc.trim().into()));
-                            }
+                        if ui.button("➕ Inject IOC").clicked()
+                            && !self.intel_custom_ioc.trim().is_empty()
+                        {
+                            let _ = self
+                                .cmd_tx
+                                .send(DashboardCmd::AddIoc(self.intel_custom_ioc.trim().into()));
                         }
                     });
 
                     ui.add_space(8.0);
-                    if ui.button("🔄 Trigger Immediate Feed Synchronization").clicked() {
+                    if ui
+                        .button("🔄 Trigger Immediate Feed Synchronization")
+                        .clicked()
+                    {
                         let _ = self.cmd_tx.send(DashboardCmd::SyncIntel);
                     }
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 7. Pillar 7: Full DNS Guard Customization Modal
@@ -650,36 +822,50 @@ impl epi::App for AegisDashboardApp {
                         ui.text_edit_singleline(&mut self.dns_fallback_ip);
                     });
 
-                    ui.checkbox(&mut self.dns_block_tor_nodes, "Automatically Sinkhole Known Tor Exit Nodes");
+                    ui.checkbox(
+                        &mut self.dns_block_tor_nodes,
+                        "Automatically Sinkhole Known Tor Exit Nodes",
+                    );
 
                     ui.separator();
                     ui.heading("Sinkhole Domain Management");
                     ui.horizontal(|ui| {
                         ui.label("Block Domain:");
                         ui.text_edit_singleline(&mut self.dns_custom_block_domain);
-                        if ui.button("🚫 Block").clicked() {
-                            if !self.dns_custom_block_domain.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::BlockDomain(self.dns_custom_block_domain.trim().into()));
-                            }
+                        if ui.button("🚫 Block").clicked()
+                            && !self.dns_custom_block_domain.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::BlockDomain(
+                                self.dns_custom_block_domain.trim().into(),
+                            ));
                         }
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Unblock Domain:");
                         ui.text_edit_singleline(&mut self.dns_unblock_domain);
-                        if ui.button("✅ Unblock").clicked() {
-                            if !self.dns_unblock_domain.trim().is_empty() {
-                                let _ = self.cmd_tx.send(DashboardCmd::UnblockDomain(self.dns_unblock_domain.trim().into()));
-                            }
+                        if ui.button("✅ Unblock").clicked()
+                            && !self.dns_unblock_domain.trim().is_empty()
+                        {
+                            let _ = self.cmd_tx.send(DashboardCmd::UnblockDomain(
+                                self.dns_unblock_domain.trim().into(),
+                            ));
                         }
                     });
 
                     ui.add_space(8.0);
-                    if ui.button("🌐 Test Encrypted Resolution (zv9games.org)").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestDns("zv9games.org".into()));
+                    if ui
+                        .button("🌐 Test Encrypted Resolution (zv9games.org)")
+                        .clicked()
+                    {
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::TestDns("zv9games.org".into()));
                     }
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 8. Pillar 8: Full CyberID Customization Modal
@@ -691,10 +877,22 @@ impl epi::App for AegisDashboardApp {
                 .default_width(500.0)
                 .show(ctx, |ui| {
                     ui.heading("Zero-Trust Posture & Attestation Rules");
-                    ui.checkbox(&mut self.id_enforce_secureboot, "Enforce UEFI SecureBoot Attestation");
-                    ui.checkbox(&mut self.id_enforce_uac, "Enforce Windows UAC EnableLUA Policy");
-                    ui.checkbox(&mut self.id_enforce_firewall, "Require All OS Firewall Profiles to be Active");
-                    ui.checkbox(&mut self.id_enforce_defender, "Require Real-Time Antivirus Active");
+                    ui.checkbox(
+                        &mut self.id_enforce_secureboot,
+                        "Enforce UEFI SecureBoot Attestation",
+                    );
+                    ui.checkbox(
+                        &mut self.id_enforce_uac,
+                        "Enforce Windows UAC EnableLUA Policy",
+                    );
+                    ui.checkbox(
+                        &mut self.id_enforce_firewall,
+                        "Require All OS Firewall Profiles to be Active",
+                    );
+                    ui.checkbox(
+                        &mut self.id_enforce_defender,
+                        "Require Real-Time Antivirus Active",
+                    );
 
                     ui.separator();
                     ui.heading("Device Attestation");
@@ -702,7 +900,9 @@ impl epi::App for AegisDashboardApp {
                         ui.label("Device Subject ID:");
                         ui.text_edit_singleline(&mut self.id_device_subject);
                         if ui.button("📜 Sign Device Token").clicked() {
-                            let _ = self.cmd_tx.send(DashboardCmd::GenerateAttestation(self.id_device_subject.clone()));
+                            let _ = self.cmd_tx.send(DashboardCmd::GenerateAttestation(
+                                self.id_device_subject.clone(),
+                            ));
                         }
                     });
 
@@ -711,7 +911,9 @@ impl epi::App for AegisDashboardApp {
                         let _ = self.cmd_tx.send(DashboardCmd::AuditPosture);
                     }
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // 9. Pillar 9: Full ZTNA Customization Modal
@@ -738,14 +940,21 @@ impl epi::App for AegisDashboardApp {
                         ui.text_edit_singleline(&mut self.ztna_upstream_proxy);
                     });
 
-                    ui.checkbox(&mut self.ztna_mutual_tls_enabled, "Enforce Mutual TLS (not implemented yet)");
+                    ui.checkbox(
+                        &mut self.ztna_mutual_tls_enabled,
+                        "Enforce Mutual TLS (not implemented yet)",
+                    );
 
                     ui.add_space(8.0);
                     if ui.button("🚀 Test Posture Preflight Connection").clicked() {
-                        let _ = self.cmd_tx.send(DashboardCmd::TestZtna(self.ztna_route_destination.clone()));
+                        let _ = self
+                            .cmd_tx
+                            .send(DashboardCmd::TestZtna(self.ztna_route_destination.clone()));
                     }
                 });
-            if !open { self.active_modal = ActiveModal::None; }
+            if !open {
+                self.active_modal = ActiveModal::None;
+            }
         }
 
         // Request continuous repaint for smooth responsiveness
@@ -784,14 +993,26 @@ pub fn run_gui() {
                         DashboardCmd::GenMeshKey => {
                             tokio::task::spawn_blocking(|| {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cybermesh", "--", "gen-key"])
+                                    .args(["run", "-q", "-p", "cybermesh", "--", "genkey"])
                                     .status();
                             });
                         }
-                        DashboardCmd::ExportMeshConfig(ep, port, keepalive, ip) => {
+                        DashboardCmd::ExportMeshConfig(_ep, port, _keepalive, ip) => {
+                            // cybermesh gen-config has no endpoint/keepalive flags yet; those fields are ignored.
                             tokio::task::spawn_blocking(move || {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cybermesh", "--", "gen-config", "--peer-endpoint", &ep, "--listen-port", &port.to_string(), "--keepalive", &keepalive.to_string(), "--client-ip", &ip])
+                                    .args([
+                                        "run",
+                                        "-q",
+                                        "-p",
+                                        "cybermesh",
+                                        "--",
+                                        "gen-config",
+                                        "--address",
+                                        &ip,
+                                        "--port",
+                                        &port.to_string(),
+                                    ])
                                     .status();
                             });
                         }
@@ -812,7 +1033,7 @@ pub fn run_gui() {
                         DashboardCmd::AuditEdr => {
                             tokio::task::spawn_blocking(|| {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cyberedr", "--", "audit"])
+                                    .args(["run", "-q", "-p", "cyberedr", "--", "processes"])
                                     .status();
                             });
                         }
@@ -825,7 +1046,11 @@ pub fn run_gui() {
                         }
                         DashboardCmd::EmitSiemEvent(msg) => {
                             use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(".aegis/events.jsonl") {
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(".aegis/events.jsonl")
+                            {
                                 let sample = serde_json::json!({
                                     "timestamp": chrono::Utc::now().to_rfc3339(),
                                     "product": "CyberLog",
@@ -848,14 +1073,18 @@ pub fn run_gui() {
                         DashboardCmd::AddIoc(ioc) => {
                             let _ = std::fs::create_dir_all(".aegis");
                             use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(".aegis/threatgrid_iocs.json") {
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(".aegis/threatgrid_iocs.json")
+                            {
                                 let _ = writeln!(f, "// custom: {}", ioc);
                             }
                         }
                         DashboardCmd::TestDns(domain) => {
                             tokio::task::spawn_blocking(move || {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cyberdns", "--", "lookup", &domain])
+                                    .args(["run", "-q", "-p", "cyberdns", "--", "resolve", &domain])
                                     .status();
                             });
                         }
@@ -883,7 +1112,10 @@ pub fn run_gui() {
                         DashboardCmd::GenerateAttestation(device) => {
                             tokio::task::spawn_blocking(move || {
                                 let _ = std::process::Command::new("cargo")
-                                    .args(["run", "-q", "-p", "cyberid", "--", "attest", "--device", &device])
+                                    .args([
+                                        "run", "-q", "-p", "cyberid", "--", "attest", "--device",
+                                        &device,
+                                    ])
                                     .status();
                             });
                         }
@@ -898,17 +1130,20 @@ pub fn run_gui() {
                 }
 
                 // Query live system status
-                let st = fw.get_status().await.unwrap_or(cyberwall_core::FirewallStatus {
-                    enabled: false,
-                    outbound_blocked: false,
-                    defender_active: false,
-                    profile_private: false,
-                    profile_public: false,
-                    profile_domain: false,
-                    platform: "Windows".into(),
-                    backend_driver: "".into(),
-                    substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
-                });
+                let st = fw
+                    .get_status()
+                    .await
+                    .unwrap_or(cyberwall_core::FirewallStatus {
+                        enabled: false,
+                        outbound_blocked: false,
+                        defender_active: false,
+                        profile_private: false,
+                        profile_public: false,
+                        profile_domain: false,
+                        platform: "Windows".into(),
+                        backend_driver: "".into(),
+                        substrate: cyberwall_core::DriverSubstrate::UserspaceNative,
+                    });
 
                 let conns = s2o_platform::telemetry::get_active_tcp_connections();
 
@@ -917,17 +1152,17 @@ pub fn run_gui() {
                 if let Ok(file) = std::fs::File::open(".aegis/events.jsonl") {
                     use std::io::{BufRead, BufReader};
                     let reader = BufReader::new(file);
-                    for line in reader.lines().flatten().take(50) {
-                        events.push(line);
-                    }
-                    events.reverse(); // Newest first
+                    let all: Vec<String> = reader.lines().map_while(Result::ok).collect();
+                    // Last 50 lines, newest first
+                    events.extend(all.into_iter().rev().take(50));
                 }
 
                 // Sample recent rules summary
                 let mut rules_summary = Vec::new();
                 if let Ok(rules) = fw.list_rules().await {
                     for r in rules.iter().take(15) {
-                        rules_summary.push(format!("- {} [{:?}] [{:?}]", r.name, r.direction, r.action));
+                        rules_summary
+                            .push(format!("- {} [{:?}] [{:?}]", r.name, r.direction, r.action));
                     }
                 }
 
@@ -1012,10 +1247,12 @@ pub fn run_gui() {
         ztna_mutual_tls_enabled: true,
     };
 
-    let mut native_options = epi::NativeOptions::default();
-    native_options.initial_window_size = Some(egui::Vec2::new(1024.0, 700.0));
-    native_options.min_window_size = Some(egui::Vec2::new(800.0, 600.0));
-    native_options.maximized = true;
+    let native_options = epi::NativeOptions {
+        initial_window_size: Some(egui::Vec2::new(1024.0, 700.0)),
+        min_window_size: Some(egui::Vec2::new(800.0, 600.0)),
+        maximized: true,
+        ..Default::default()
+    };
     eframe::run_native(Box::new(app), native_options);
 }
 

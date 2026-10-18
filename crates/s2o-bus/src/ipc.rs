@@ -1,8 +1,14 @@
-use crate::protocol::{IpcRequest, IpcResponse, AEGIS_PIPE_NAME, AEGIS_UNIX_SOCKET};
+#[cfg(windows)]
+use crate::protocol::AEGIS_PIPE_NAME;
+#[cfg(unix)]
+use crate::protocol::AEGIS_UNIX_SOCKET;
+use crate::protocol::{IpcRequest, IpcResponse};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub type RequestHandler = Arc<dyn Fn(IpcRequest) -> futures::future::BoxFuture<'static, IpcResponse> + Send + Sync + 'static>;
+pub type RequestHandler = Arc<
+    dyn Fn(IpcRequest) -> futures::future::BoxFuture<'static, IpcResponse> + Send + Sync + 'static,
+>;
 
 pub struct AegisIpcServer {
     handler: RequestHandler,
@@ -19,7 +25,9 @@ impl AegisIpcServer {
     }
 
     #[cfg(windows)]
-    pub async fn run_named_pipe(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run_named_pipe(
+        self: Arc<Self>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::net::windows::named_pipe::ServerOptions;
 
         loop {
@@ -55,7 +63,9 @@ impl AegisIpcServer {
     }
 
     #[cfg(unix)]
-    pub async fn run_unix_socket(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run_unix_socket(
+        self: Arc<Self>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::net::UnixListener;
         let _ = std::fs::remove_file(AEGIS_UNIX_SOCKET);
         let listener = UnixListener::bind(AEGIS_UNIX_SOCKET)?;
@@ -93,7 +103,9 @@ pub struct AegisIpcClient;
 
 impl AegisIpcClient {
     #[cfg(windows)]
-    pub async fn call(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn call(
+        req: &IpcRequest,
+    ) -> Result<IpcResponse, Box<dyn std::error::Error + Send + Sync>> {
         use tokio::net::windows::named_pipe::ClientOptions;
 
         let client = ClientOptions::new().open(AEGIS_PIPE_NAME)?;
@@ -114,7 +126,9 @@ impl AegisIpcClient {
     }
 
     #[cfg(unix)]
-    pub async fn call(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn call(
+        req: &IpcRequest,
+    ) -> Result<IpcResponse, Box<dyn std::error::Error + Send + Sync>> {
         use tokio::net::UnixStream;
 
         let stream = UnixStream::connect(AEGIS_UNIX_SOCKET).await?;

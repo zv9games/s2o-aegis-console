@@ -21,12 +21,10 @@ impl Default for WindowsFirewallEngine {
 #[async_trait]
 impl FirewallEngine for WindowsFirewallEngine {
     async fn get_status(&self) -> EngineResult<FirewallStatus> {
-        let profiles = tokio::task::spawn_blocking(|| {
-            s2o_platform::firewall::get_profile_status()
-        })
-        .await
-        .map_err(|e| EngineError(e.to_string()))?
-        .map_err(|e| EngineError(format!("COM profile status: {e:?}")))?;
+        let profiles = tokio::task::spawn_blocking(s2o_platform::firewall::get_profile_status)
+            .await
+            .map_err(|e| EngineError(e.to_string()))?
+            .map_err(|e| EngineError(format!("COM profile status: {e:?}")))?;
 
         let outbound_blocked = tokio::task::spawn_blocking(|| {
             s2o_platform::firewall::is_outbound_blocked().unwrap_or(false)
@@ -34,11 +32,10 @@ impl FirewallEngine for WindowsFirewallEngine {
         .await
         .map_err(|e| EngineError(e.to_string()))?;
 
-        let defender_active = tokio::task::spawn_blocking(|| {
-            s2o_platform::defender::is_defender_active()
-        })
-        .await
-        .map_err(|e| EngineError(e.to_string()))?;
+        let defender_active =
+            tokio::task::spawn_blocking(s2o_platform::defender::is_defender_active)
+                .await
+                .map_err(|e| EngineError(e.to_string()))?;
 
         Ok(FirewallStatus {
             enabled: profiles.any_interactive_enabled(),
@@ -95,12 +92,10 @@ impl FirewallEngine for WindowsFirewallEngine {
     }
 
     async fn list_rules(&self) -> EngineResult<Vec<FirewallRule>> {
-        let rules = tokio::task::spawn_blocking(|| {
-            s2o_platform::firewall::get_rules()
-        })
-        .await
-        .map_err(|e| EngineError(e.to_string()))?
-        .map_err(|e| EngineError(format!("list rules failed: {e:?}")))?;
+        let rules = tokio::task::spawn_blocking(s2o_platform::firewall::get_rules)
+            .await
+            .map_err(|e| EngineError(e.to_string()))?
+            .map_err(|e| EngineError(format!("list rules failed: {e:?}")))?;
 
         Ok(rules
             .into_iter()
@@ -181,9 +176,9 @@ impl FirewallEngine for WindowsFirewallEngine {
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
 
-            let output = cmd.output().map_err(|e| {
-                EngineError(format!("Failed to execute netsh add rule: {}", e))
-            })?;
+            let output = cmd
+                .output()
+                .map_err(|e| EngineError(format!("Failed to execute netsh add rule: {}", e)))?;
 
             if output.status.success() {
                 Ok(())
@@ -211,7 +206,8 @@ impl FirewallEngine for WindowsFirewallEngine {
 
     async fn apply_policy(&self, _policy: &FirewallPolicy) -> EngineResult<()> {
         Err(EngineError(
-            "Windows apply_policy not implemented yet: use add_rule/delete_rule individually".into(),
+            "Windows apply_policy not implemented yet: use add_rule/delete_rule individually"
+                .into(),
         ))
     }
 }

@@ -62,6 +62,7 @@ struct DohAnswer {
 #[allow(non_snake_case)]
 struct DohResponse {
     #[serde(default)]
+    #[allow(dead_code)]
     Status: u32,
     Answer: Option<Vec<DohAnswer>>,
 }
@@ -71,7 +72,7 @@ fn load_blocklist() -> HashSet<String> {
     let path = PathBuf::from(DEFAULT_BLOCKLIST_PATH);
     if let Ok(file) = File::open(&path) {
         let reader = BufReader::new(file);
-        for line in reader.lines().filter_map(|l| l.ok()) {
+        for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim().to_lowercase();
             if !trimmed.is_empty() && !trimmed.starts_with('#') {
                 set.insert(trimmed);
@@ -135,7 +136,10 @@ fn extract_qname(buf: &[u8]) -> Option<String> {
 }
 
 async fn query_doh(domain: &str) -> Result<Option<String>, reqwest::Error> {
-    let url = format!("https://cloudflare-dns.com/dns-query?name={}&type=A", domain);
+    let url = format!(
+        "https://cloudflare-dns.com/dns-query?name={}&type=A",
+        domain
+    );
     let client = reqwest::Client::new();
     let res = client
         .get(&url)
@@ -147,7 +151,8 @@ async fn query_doh(domain: &str) -> Result<Option<String>, reqwest::Error> {
         let doh: DohResponse = res.json().await?;
         if let Some(answers) = doh.Answer {
             for ans in answers {
-                if ans.record_type == 1 { // A record
+                if ans.record_type == 1 {
+                    // A record
                     return Ok(Some(ans.data));
                 }
             }
@@ -212,29 +217,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let blocklist = load_blocklist();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "        S2O CYBERDNS GUARD & SINKHOLE              ".bold().green());
-            println!("{}", "=========================================================".cyan());
-            println!(" Primary Resolver  : {}", "https://cloudflare-dns.com/dns-query (DoH)".yellow());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "        S2O CYBERDNS GUARD & SINKHOLE              "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                " Primary Resolver  : {}",
+                "https://cloudflare-dns.com/dns-query (DoH)".yellow()
+            );
             println!(" Secondary Engine  : {}", "Local UDP DNS Forwarder".green());
-            println!(" Threat Blocklist  : {}", format!("{} active domains sinkholed", blocklist.len()).bold());
+            println!(
+                " Threat Blocklist  : {}",
+                format!("{} active domains sinkholed", blocklist.len()).bold()
+            );
             println!(" Storage File      : {}", DEFAULT_BLOCKLIST_PATH);
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Resolve { domain } => {
             let blocklist = load_blocklist();
             let d_lower = domain.to_lowercase();
             if blocklist.contains(&d_lower) {
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
                 println!(" Target Domain : {}", domain.bold());
-                println!(" Guard Verdict : {}", "BLOCKED (Threat Sinkhole)".red().bold());
+                println!(
+                    " Guard Verdict : {}",
+                    "BLOCKED (Threat Sinkhole)".red().bold()
+                );
                 println!(" Resolved IP   : {}", "0.0.0.0".red());
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
                 return Ok(());
             }
 
-            println!("{}", format!("[cyberdns] resolving '{}' via Encrypted DoH...", domain).cyan());
-            let url = format!("https://cloudflare-dns.com/dns-query?name={}&type=A", domain);
+            println!(
+                "{}",
+                format!("[cyberdns] resolving '{}' via Encrypted DoH...", domain).cyan()
+            );
+            let url = format!(
+                "https://cloudflare-dns.com/dns-query?name={}&type=A",
+                domain
+            );
             let client = reqwest::Client::new();
             let res = client
                 .get(&url)
@@ -244,16 +284,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if res.status().is_success() {
                 let doh: DohResponse = res.json().await?;
-                println!("{}", "---------------------------------------------------------".cyan());
+                println!(
+                    "{}",
+                    "---------------------------------------------------------".cyan()
+                );
                 if let Some(answers) = doh.Answer {
                     for ans in answers {
                         println!(" Domain Record : {}", ans.name.bold());
                         println!(" Type Code     : {}", ans.record_type);
                         println!(" Resolved IP   : {}", ans.data.green().bold());
-                        println!("{}", "---------------------------------------------------------".cyan());
+                        println!(
+                            "{}",
+                            "---------------------------------------------------------".cyan()
+                        );
                     }
                 } else {
-                    println!("{}", "NXDOMAIN: No DNS records found for this target.".yellow());
+                    println!(
+                        "{}",
+                        "NXDOMAIN: No DNS records found for this target.".yellow()
+                    );
                 }
             } else {
                 println!("{}", format!("DoH HTTP Error: {}", res.status()).red());
@@ -264,9 +313,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let d_lower = domain.to_lowercase();
             if blocklist.insert(d_lower.clone()) {
                 save_blocklist(&blocklist)?;
-                println!("{}", format!("[cyberdns] OK: '{}' added to threat sinkhole blocklist.", d_lower).green().bold());
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] OK: '{}' added to threat sinkhole blocklist.",
+                        d_lower
+                    )
+                    .green()
+                    .bold()
+                );
             } else {
-                println!("{}", format!("[cyberdns] '{}' is already in the blocklist.", d_lower).yellow());
+                println!(
+                    "{}",
+                    format!("[cyberdns] '{}' is already in the blocklist.", d_lower).yellow()
+                );
             }
         }
         Commands::Unblock { domain } => {
@@ -274,32 +334,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let d_lower = domain.to_lowercase();
             if blocklist.remove(&d_lower) {
                 save_blocklist(&blocklist)?;
-                println!("{}", format!("[cyberdns] OK: '{}' removed from threat sinkhole blocklist.", d_lower).green().bold());
+                println!(
+                    "{}",
+                    format!(
+                        "[cyberdns] OK: '{}' removed from threat sinkhole blocklist.",
+                        d_lower
+                    )
+                    .green()
+                    .bold()
+                );
             } else {
-                println!("{}", format!("[cyberdns] '{}' was not found in the blocklist.", d_lower).yellow());
+                println!(
+                    "{}",
+                    format!("[cyberdns] '{}' was not found in the blocklist.", d_lower).yellow()
+                );
             }
         }
         Commands::ListBlocked => {
             let blocklist = load_blocklist();
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "           CyberDNS Guard — Threat Sinkhole              ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "           CyberDNS Guard — Threat Sinkhole              "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Total sinkholed domains: {}", blocklist.len());
             for (idx, dom) in blocklist.iter().enumerate() {
                 println!("{}. {}", idx + 1, dom.red().bold());
             }
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
         }
         Commands::Serve { listen } => {
             let addr: SocketAddr = listen.parse()?;
             let socket = UdpSocket::bind(addr).await?;
-            println!("{}", "=========================================================".cyan());
-            println!("{}", "    S2O CYBERDNS PROXY & SINKHOLE SERVICE ACTIVE   ".bold().green());
-            println!("{}", "=========================================================".cyan());
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
+            println!(
+                "{}",
+                "    S2O CYBERDNS PROXY & SINKHOLE SERVICE ACTIVE   "
+                    .bold()
+                    .green()
+            );
+            println!(
+                "{}",
+                "=========================================================".cyan()
+            );
             println!(" Listening on UDP : {}", addr);
             println!(" Upstream DoH     : Cloudflare DNS (1.1.1.1 encrypted)");
             println!(" Sinkhole IP      : 0.0.0.0");
-            println!("{}", "---------------------------------------------------------".cyan());
+            println!(
+                "{}",
+                "---------------------------------------------------------".cyan()
+            );
 
             let mut buf = [0u8; 1024];
 
@@ -311,14 +410,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(qname) = extract_qname(req_bytes) {
                     let is_blocked = blocklist.contains(&qname.to_lowercase());
                     if is_blocked {
-                        println!("{} {} -> 0.0.0.0 (Sinkhole)", "[CYBERDNS-BLOCK]".red().bold(), qname);
+                        println!(
+                            "{} {} -> 0.0.0.0 (Sinkhole)",
+                            "[CYBERDNS-BLOCK]".red().bold(),
+                            qname
+                        );
                         let resp = build_dns_response(req_bytes, Some([0, 0, 0, 0]));
                         let _ = socket.send_to(&resp, src).await;
                     } else {
                         match query_doh(&qname).await {
                             Ok(Some(ip_str)) => {
                                 if let Ok(ipv4) = ip_str.parse::<std::net::Ipv4Addr>() {
-                                    println!("{} {} -> {}", "[CYBERDNS-RESOLVE]".green().bold(), qname, ip_str);
+                                    println!(
+                                        "{} {} -> {}",
+                                        "[CYBERDNS-RESOLVE]".green().bold(),
+                                        qname,
+                                        ip_str
+                                    );
                                     let resp = build_dns_response(req_bytes, Some(ipv4.octets()));
                                     let _ = socket.send_to(&resp, src).await;
                                 }
