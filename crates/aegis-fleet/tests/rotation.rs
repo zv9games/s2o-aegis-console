@@ -122,6 +122,8 @@ async fn enrolled_agent(fx: &Fx) -> (AgentState, SoftwareKeyStore, SigningKey) {
         heartbeat_secs: 60,
         pending_results: vec![],
         audit_head: None,
+        fw_applied: vec![],
+        fw_pending: None,
     };
     (st, keys, cid)
 }
@@ -239,6 +241,8 @@ fn agent_rejects_forged_or_underapproved_rotation() {
         heartbeat_secs: 60,
         pending_results: vec![],
         audit_head: None,
+        fw_applied: vec![],
+        fw_pending: None,
     };
     let body = serde_json::json!({"new_ca_pem": "EVIL"});
     let mut one = bundle(1, ActionClass::RotateCa, body.clone());

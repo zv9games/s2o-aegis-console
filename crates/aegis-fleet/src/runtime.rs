@@ -41,6 +41,12 @@ pub struct AgentState {
     pub pending_results: Vec<PolicyResult>,
     #[serde(default)]
     pub audit_head: Option<SignedHead>,
+    /// Last *confirmed* Aegis-owned firewall rule set (rollback snapshot).
+    #[serde(default)]
+    pub fw_applied: Vec<crate::fw::FwRule>,
+    /// Applied but not yet confirmed by a successful heartbeat.
+    #[serde(default)]
+    pub fw_pending: Option<crate::fw::FwPending>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +113,8 @@ pub async fn enroll_new(
         heartbeat_secs: 60,
         pending_results: Vec::new(),
         audit_head: None,
+        fw_applied: Vec::new(),
+        fw_pending: None,
     })
 }
 
@@ -155,6 +163,17 @@ impl AgentState {
     /// Verify and apply bundles in version order. Verification failures are
     /// reported as `Rejected` and do not advance the version.
     pub fn apply_bundles(&mut self, bundles: &[SignedBundle], now: i64) -> Vec<PolicyResult> {
+        self.apply_bundles_with(bundles, now, None)
+    }
+
+    /// Like [`apply_bundles`](Self::apply_bundles) with an optional firewall
+    /// backend for `ChangeFirewall` (None = not implemented on this OS).
+    pub fn apply_bundles_with(
+        &mut self,
+        bundles: &[SignedBundle],
+        now: i64,
+        fw: Option<&dyn crate::fw::AegisFirewall>,
+    ) -> Vec<PolicyResult> {
         let mut sorted: Vec<&SignedBundle> = bundles.iter().collect();
         sorted.sort_by_key(|b| b.bundle.version);
         let mut out = Vec::new();
@@ -172,7 +191,7 @@ impl AgentState {
                 });
                 continue;
             }
-            let (status, detail) = self.apply_one(sb, now);
+            let (status, detail) = self.apply_one(sb, now, fw);
             self.roster = guard.roster;
             self.last_policy_version = guard.last_version;
             out.push(PolicyResult {
@@ -184,7 +203,12 @@ impl AgentState {
         out
     }
 
-    fn apply_one(&mut self, sb: &SignedBundle, now: i64) -> (PolicyStatus, String) {
+    fn apply_one(
+        &mut self,
+        sb: &SignedBundle,
+        now: i64,
+        fw: Option<&dyn crate::fw::AegisFirewall>,
+    ) -> (PolicyStatus, String) {
         match sb.bundle.action {
             ActionClass::Normal => match sb
                 .bundle
@@ -253,12 +277,131 @@ impl AgentState {
                     Err(e) => (PolicyStatus::Rejected, format!("bad retire_ca body: {e}")),
                 }
             }
+            ActionClass::ChangeFirewall => match fw {
+                None => (
+                    PolicyStatus::NotImplemented,
+                    "firewall enforcement not implemented on this OS".into(),
+                ),
+                Some(fw) => self.apply_firewall(sb, now, fw),
+            },
             // Enforcement pillars are deliberately not implemented until they
             // can be tested on real Windows hosts.
             other => (
                 PolicyStatus::NotImplemented,
                 format!("{other:?} not implemented on this agent"),
             ),
+        }
+    }
+
+    fn apply_firewall(
+        &mut self,
+        sb: &SignedBundle,
+        now: i64,
+        fw: &dyn crate::fw::AegisFirewall,
+    ) -> (PolicyStatus, String) {
+        use crate::fw::{replace_owned, FirewallBody, FwPending, DEFAULT_CONFIRM_SECS};
+        let body: FirewallBody = match serde_json::from_value(sb.bundle.body.clone()) {
+            Ok(b) => b,
+            Err(e) => {
+                return (
+                    PolicyStatus::Rejected,
+                    format!("bad change_firewall body: {e}"),
+                )
+            }
+        };
+        if let Err(e) = body.validate() {
+            return (PolicyStatus::Rejected, e);
+        }
+        // An older unconfirmed change is superseded; its snapshot (the last
+        // confirmed set) stays the rollback target.
+        let snapshot = self.fw_applied.clone();
+        if let Err(e) = replace_owned(fw, &body.rules) {
+            let restore = replace_owned(fw, &snapshot);
+            return (
+                PolicyStatus::RolledBack,
+                format!(
+                    "apply failed: {e}; restore: {}",
+                    restore.err().unwrap_or_else(|| "ok".into())
+                ),
+            );
+        }
+        let deadline = now + body.confirm_secs.unwrap_or(DEFAULT_CONFIRM_SECS);
+        self.fw_pending = Some(FwPending {
+            version: sb.bundle.version,
+            deadline,
+            applied_at: now,
+            snapshot,
+            new_rules: body.rules,
+        });
+        (
+            PolicyStatus::Applied,
+            format!("applied; pending heartbeat confirmation until {deadline}"),
+        )
+    }
+
+    /// Called after a successful heartbeat: confirm a pending firewall change
+    /// applied in an earlier tick.
+    pub fn confirm_firewall(&mut self, now: i64) -> Option<PolicyResult> {
+        let p = self.fw_pending.as_ref()?;
+        if p.applied_at >= now && p.deadline > now {
+            // Applied in this same instant; needs a later heartbeat.
+            return None;
+        }
+        let p = self.fw_pending.take()?;
+        self.fw_applied = p.new_rules;
+        Some(PolicyResult {
+            version: p.version,
+            status: PolicyStatus::Applied,
+            detail: "confirmed by heartbeat".into(),
+        })
+    }
+
+    /// Restore the snapshot if the confirmation window has passed.
+    pub fn check_firewall_deadline(
+        &mut self,
+        fw: Option<&dyn crate::fw::AegisFirewall>,
+        now: i64,
+    ) -> Option<PolicyResult> {
+        let due = self.fw_pending.as_ref().is_some_and(|p| now >= p.deadline);
+        let fw = fw?;
+        if !due {
+            return None;
+        }
+        let p = self.fw_pending.take()?;
+        let detail = match crate::fw::replace_owned(fw, &p.snapshot) {
+            Ok(()) => "no heartbeat confirmation in time; snapshot restored".to_string(),
+            Err(e) => {
+                // Keep trying on the next tick.
+                let d = format!("rollback failed (will retry): {e}");
+                self.fw_pending = Some(crate::fw::FwPending {
+                    deadline: now,
+                    ..p.clone()
+                });
+                return Some(PolicyResult {
+                    version: p.version,
+                    status: PolicyStatus::RolledBack,
+                    detail: d,
+                });
+            }
+        };
+        self.fw_applied = p.snapshot;
+        Some(PolicyResult {
+            version: p.version,
+            status: PolicyStatus::RolledBack,
+            detail,
+        })
+    }
+
+    /// Seconds until the agent must wake (heartbeat interval, or sooner when
+    /// a firewall confirmation deadline is near).
+    pub fn next_wake_secs(&self, now: i64) -> u64 {
+        let hb = self.heartbeat_secs.max(10);
+        match &self.fw_pending {
+            Some(p) => {
+                let half = ((p.deadline - now) / 2).max(5) as u64;
+                hb.min(half)
+            }
+            None => hb,
         }
     }
 
@@ -271,6 +414,24 @@ impl AgentState {
         cyberid_token: &str,
         now: i64,
     ) -> FleetResult<TickOutcome> {
+        self.tick_with(keys, policy, posture, cyberid_token, now, None)
+            .await
+    }
+
+    /// [`tick`](Self::tick) with an optional firewall backend.
+    pub async fn tick_with(
+        &mut self,
+        keys: &dyn AgentKeyStore,
+        policy: &FleetPolicy,
+        posture: serde_json::Value,
+        cyberid_token: &str,
+        now: i64,
+        fw: Option<&dyn crate::fw::AegisFirewall>,
+    ) -> FleetResult<TickOutcome> {
+        if let Some(r) = self.check_firewall_deadline(fw, now) {
+            eprintln!("[aegisd] firewall v{} rolled back: {}", r.version, r.detail);
+            self.pending_results.push(r);
+        }
         self.prune_pins(now);
         let ep = self.endpoint();
         let mut renewed = false;
@@ -327,7 +488,9 @@ impl AgentState {
                         eprintln!("[aegisd] WARNING: server audit head regressed or changed key");
                     }
                 }
-                let results = self.apply_bundles(&bundles, now);
+                let mut results: Vec<PolicyResult> =
+                    self.confirm_firewall(now).into_iter().collect();
+                results.extend(self.apply_bundles_with(&bundles, now, fw));
                 self.pending_results = results.clone();
                 Ok(TickOutcome::Ok { renewed, results })
             }

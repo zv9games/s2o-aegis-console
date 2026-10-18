@@ -51,6 +51,9 @@ jobs:
       - run: cargo check -p s2o-platform --features packet-driver --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Windows firewall integration test (real rules; skips if not elevated)
+        if: runner.os == 'Windows'
+        run: cargo test -p aegis-fleet --test winfw --locked -- --nocapture
 
   deny:
     runs-on: ubuntu-latest

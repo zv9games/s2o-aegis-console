@@ -16,6 +16,7 @@
 
 pub mod agent;
 pub mod ca;
+pub mod fw;
 pub mod keystore;
 pub mod policy;
 pub mod proto;
