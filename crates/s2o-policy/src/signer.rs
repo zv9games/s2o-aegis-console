@@ -28,6 +28,11 @@ impl SoftwareSigner {
             key,
         }
     }
+
+    /// Underlying key (software signers only; e.g. the audit head key).
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.key
+    }
 }
 
 impl PolicySigner for SoftwareSigner {

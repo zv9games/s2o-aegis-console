@@ -37,6 +37,10 @@ pub enum Request {
         /// Outcomes of bundles processed since the last heartbeat.
         #[serde(default)]
         policy_results: Vec<PolicyResult>,
+        /// SHA-256 fingerprints of the CA certs the agent currently pins
+        /// (lets the server refuse CA retirement until every agent acked).
+        #[serde(default)]
+        ca_pins: Vec<String>,
     },
 }
 

@@ -168,3 +168,12 @@ pub fn pem_fingerprint(pem: &str) -> String {
         .unwrap_or_default();
     hex::encode(sha2::Sha256::digest(der))
 }
+
+/// SHA-256 (hex) of every certificate's DER in `pem`.
+pub fn pem_fingerprints(pem: &str) -> Vec<String> {
+    use sha2::Digest;
+    rustls_pemfile::certs(&mut pem.as_bytes())
+        .filter_map(Result::ok)
+        .map(|c| hex::encode(sha2::Sha256::digest(c.as_ref())))
+        .collect()
+}

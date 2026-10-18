@@ -56,6 +56,27 @@ enum Cmd {
         #[arg(long)]
         name: String,
     },
+    /// Issue a new server TLS certificate from the prepared next CA
+    /// (required before `ca-retire-old`). Restart `serve` afterwards.
+    ReissueServerCert {
+        #[arg(long, required = true)]
+        from_next: bool,
+        /// DNS names / IPs (same as `init --name`)
+        #[arg(long, required = true)]
+        name: Vec<String>,
+    },
+    /// Retire the old CA. `--print-body` prints the bundle body to sign
+    /// (2 approvals); `--bundle` submits it and promotes ca-next to ca.
+    CaRetireOld {
+        #[arg(long)]
+        print_body: bool,
+        /// Include force=true in the printed body (agents that never acked
+        /// the new pin must re-enroll). Still needs quorum.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        bundle: Option<PathBuf>,
+    },
     /// Submit a signed policy bundle (verified against roster.json)
     Submit { bundle: PathBuf },
     /// Policy results reported by agents
@@ -66,21 +87,53 @@ enum Cmd {
     Revoke { agent_id: String },
 }
 
-fn audit_key(
-    dir: &std::path::Path,
-) -> Result<ed25519_dalek::SigningKey, Box<dyn std::error::Error>> {
-    let p = dir.join("audit.key");
-    if p.exists() {
-        let b = hex::decode(std::fs::read_to_string(&p)?.trim())?;
-        let arr: [u8; 32] = b.try_into().map_err(|_| "audit.key: bad length")?;
-        return Ok(ed25519_dalek::SigningKey::from_bytes(&arr));
+fn audit_passphrase(confirm: bool) -> Result<String, Box<dyn std::error::Error>> {
+    if let Ok(p) = std::env::var("AEGIS_AUDIT_PASSPHRASE") {
+        return Ok(p);
     }
-    let k = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-    std::fs::write(&p, hex::encode(k.to_bytes()))?;
+    let p = rpassword::prompt_password("Audit key passphrase: ")?;
+    if confirm && rpassword::prompt_password("Repeat passphrase: ")? != p {
+        return Err("passphrases do not match".into());
+    }
+    Ok(p)
+}
+
+fn write_private(p: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(p, data)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Audit head signing key, encrypted at rest (`audit-key.json`, same
+/// Argon2id + XChaCha20-Poly1305 format as admin key files). A legacy
+/// plaintext `audit.key` is migrated and removed.
+fn audit_key(
+    dir: &std::path::Path,
+) -> Result<ed25519_dalek::SigningKey, Box<dyn std::error::Error>> {
+    use s2o_policy::keyfile::KeyFile;
+    let enc = dir.join("audit-key.json");
+    if enc.exists() {
+        let kf: KeyFile = serde_json::from_str(&std::fs::read_to_string(&enc)?)?;
+        let signer = kf.decrypt(&audit_passphrase(false)?)?;
+        return Ok(signer.signing_key().clone());
+    }
+    let legacy = dir.join("audit.key");
+    let k = if legacy.exists() {
+        let b = hex::decode(std::fs::read_to_string(&legacy)?.trim())?;
+        let arr: [u8; 32] = b.try_into().map_err(|_| "audit.key: bad length")?;
+        eprintln!("migrating plaintext audit.key to encrypted audit-key.json");
+        ed25519_dalek::SigningKey::from_bytes(&arr)
+    } else {
+        ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng)
+    };
+    let kf = KeyFile::encrypt("audit-head", &k, &audit_passphrase(true)?)?;
+    write_private(&enc, serde_json::to_string_pretty(&kf)?.as_bytes())?;
+    if legacy.exists() {
+        std::fs::remove_file(&legacy)?;
     }
     Ok(k)
 }
@@ -89,6 +142,7 @@ fn audit_key(
 fn load_server(
     dir: &std::path::Path,
     policy: aegis_fleet::policy::FleetPolicy,
+    sign_heads: bool,
 ) -> Result<FleetServer, Box<dyn std::error::Error>> {
     let ca = Arc::new(FleetCa::load(dir)?);
     let store = Arc::new(Store::open(&dir.join("fleet.db"))?);
@@ -107,7 +161,11 @@ fn load_server(
         srv = srv.with_next_ca(Arc::new(FleetCa::load(&dir.join("ca-next"))?));
     }
     let log = s2o_audit::AuditLog::open(&dir.join("audit.log"))?;
-    srv = srv.with_audit(log, audit_key(dir)?);
+    srv = if sign_heads {
+        srv.with_audit(log, audit_key(dir)?)
+    } else {
+        srv.with_audit_unsigned(log)
+    };
     srv.restore_from_store()?;
     Ok(srv)
 }
@@ -144,7 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Cmd::Token { ttl_hours } => {
-            let srv = load_server(&dir, Default::default())?;
+            let srv = load_server(&dir, Default::default(), false)?;
             let t = srv.store.create_token(now, ttl_hours * 3600)?;
             srv.audit_admin(
                 "cli",
@@ -157,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("ca fingerprint: {}", ca.fingerprint());
         }
         Cmd::Settings { require_tpm } => {
-            let srv = load_server(&dir, Default::default())?;
+            let srv = load_server(&dir, Default::default(), false)?;
             let store = &srv.store;
             if let Some(v) = require_tpm {
                 srv.audit_admin(
@@ -182,6 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     offline_grace: time::Duration::days(grace_days),
                     ..Default::default()
                 },
+                true,
             )?);
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             println!("aegis-fleet listening on {listen} (mTLS)");
@@ -211,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Cmd::Submit { bundle } => {
-            let srv = load_server(&dir, Default::default())?;
+            let srv = load_server(&dir, Default::default(), false)?;
             let sb: s2o_policy::SignedBundle =
                 serde_json::from_str(&std::fs::read_to_string(bundle)?)?;
             srv.submit_bundle(&sb)?;
@@ -220,6 +279,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("restart `serve` to activate dual CA trust");
             }
         }
+        Cmd::ReissueServerCert { from_next, name } => {
+            if !from_next {
+                return Err("only --from-next is supported".into());
+            }
+            let next = FleetCa::load(&dir.join("ca-next"))?;
+            let (cert, key) = next.issue_server_cert(&name)?;
+            let ts = now;
+            std::fs::rename(
+                dir.join("server.pem"),
+                dir.join(format!("server.pem.{ts}.old")),
+            )?;
+            std::fs::rename(
+                dir.join("server.key"),
+                dir.join(format!("server.key.{ts}.old")),
+            )?;
+            std::fs::write(dir.join("server.pem"), cert)?;
+            write_private(&dir.join("server.key"), key.as_bytes())?;
+            let mut log = s2o_audit::AuditLog::open(&dir.join("audit.log"))?;
+            log.append(
+                now,
+                "cli",
+                "server_cert.reissue",
+                serde_json::json!({"names": name, "issuer": next.fingerprint()}),
+            )?;
+            println!(
+                "server certificate reissued from next CA {}; restart `serve`",
+                next.fingerprint()
+            );
+        }
+        Cmd::CaRetireOld {
+            print_body,
+            force,
+            bundle,
+        } => {
+            let old = FleetCa::load(&dir)?;
+            if print_body {
+                println!(
+                    "{}",
+                    serde_json::json!({"old_ca_fingerprint": old.fingerprint(), "force": force})
+                );
+                return Ok(());
+            }
+            let path = bundle.ok_or("pass --print-body or --bundle")?;
+            let srv = load_server(&dir, Default::default(), false)?;
+            let sb: s2o_policy::SignedBundle =
+                serde_json::from_str(&std::fs::read_to_string(path)?)?;
+            if sb.bundle.action != s2o_policy::ActionClass::RetireCa {
+                return Err("bundle action is not retire_ca".into());
+            }
+            srv.submit_bundle(&sb)?;
+            // Promote ca-next -> ca, keep the retired CA for the record.
+            let retired = dir.join(format!("ca-retired-{now}"));
+            std::fs::create_dir_all(&retired)?;
+            for f in ["ca.pem", "ca.key"] {
+                std::fs::rename(dir.join(f), retired.join(f))?;
+                std::fs::rename(dir.join("ca-next").join(f), dir.join(f))?;
+            }
+            std::fs::remove_dir(dir.join("ca-next"))?;
+            println!(
+                "retired CA {}; ca-next promoted (old key kept in {}; destroy it when no longer needed). Restart `serve`.",
+                old.fingerprint(),
+                retired.display()
+            );
+        }
         Cmd::Results => {
             let store = Store::open(&dir.join("fleet.db"))?;
             for (a, v, st, d) in store.policy_results()? {
@@ -227,7 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Cmd::Revoke { agent_id } => {
-            let srv = load_server(&dir, Default::default())?;
+            let srv = load_server(&dir, Default::default(), false)?;
             let store = &srv.store;
             srv.audit_admin(
                 "cli",

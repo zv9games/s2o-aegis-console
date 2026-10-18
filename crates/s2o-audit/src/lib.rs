@@ -113,9 +113,23 @@ impl AuditLog {
         action: &str,
         data: serde_json::Value,
     ) -> Result<Entry, AuditError> {
-        // Another process (CLI vs. running server) may have appended since
-        // we opened: re-read the tail so the chain never forks.
-        // TODO: OS file lock around read+append.
+        // Another process (CLI vs. running server) may append concurrently:
+        // hold an exclusive OS lock (flock / LockFileEx) on a sidecar file
+        // for read-tail + append, so the chain never forks.
+        if let Some(dir) = self.path.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+        let mut lock_path = self.path.clone().into_os_string();
+        lock_path.push(".lock");
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(PathBuf::from(lock_path))?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.write()?;
         if self.path.exists() {
             if let Some(e) = read_file(&self.path)?.last() {
                 self.last = Some((e.seq, e.hash.clone()));
@@ -394,6 +408,34 @@ mod multi_writer {
         b.append(2, "y", "b", serde_json::json!({})).unwrap();
         a.append(3, "x", "c", serde_json::json!({})).unwrap();
         assert_eq!(verify_file(&d).unwrap().len(), 3);
+        let _ = std::fs::remove_file(&d);
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_threads_keep_chain_linear() {
+        let d = std::env::temp_dir().join(format!("s2o-audit-lock-{}", std::process::id()));
+        let _ = std::fs::remove_file(&d);
+        let hs: Vec<_> = (0..4)
+            .map(|t| {
+                let d = d.clone();
+                std::thread::spawn(move || {
+                    let mut l = AuditLog::open(&d).unwrap();
+                    for i in 0..10 {
+                        l.append(i, &format!("t{t}"), "x", serde_json::json!({}))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        assert_eq!(verify_file(&d).unwrap().len(), 40);
         let _ = std::fs::remove_file(&d);
     }
 }
