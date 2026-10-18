@@ -1,0 +1,153 @@
+name: Release
+
+# Tag push `v*`  -> build, attest, publish a GitHub Release (draft).
+# workflow_dispatch / PRs touching this file -> dry run: build + attest +
+# upload workflow artifacts only. Nothing is published.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  BINS: aegisd aegis-fleet aegis-policy aegis-audit aegis
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write      # keyless Sigstore signing
+      attestations: write  # store build provenance
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} \
+            -p aegisd -p aegis-fleet -p s2o-policy -p s2o-audit -p aegis-cli
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME//\//-}"
+          name="s2o-aegis-${ref}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          for b in $BINS; do cp "target/${{ matrix.target }}/release/$b${{ matrix.ext }}" "dist/$name/"; done
+          cp LICENSE NOTICE README.md "dist/$name/"
+          [ -f INSTALL.md ] && cp INSTALL.md "dist/$name/"
+          cp -r packaging "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "$name.zip" "$name" >/dev/null; archive="$name.zip"
+          else
+            tar czf "$name.tar.gz" "$name"; archive="$name.tar.gz"
+          fi
+          echo "archive=dist/$archive" >> "$GITHUB_OUTPUT"
+          echo "dir=dist/$name" >> "$GITHUB_OUTPUT"
+      - name: Attest build provenance (archive + binaries)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ steps.pkg.outputs.archive }}
+            ${{ steps.pkg.outputs.dir }}/*${{ matrix.ext }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ steps.pkg.outputs.archive }}
+          if-no-files-found: error
+
+  sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Generate CycloneDX SBOM (syft, from Cargo.lock)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: s2o-aegis.cdx.json
+          upload-artifact: false
+      - name: Attest SBOM file provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: s2o-aegis.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: s2o-aegis.cdx.json
+
+  checksums:
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: out/*
+
+  publish:
+    # Only on a real tag push; dry runs stop before this job.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: out
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "S2O Aegis $GITHUB_REF_NAME" \
+            --notes "Verify downloads: gh attestation verify <file> -R $GITHUB_REPOSITORY (see INSTALL.md)."
