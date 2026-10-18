@@ -1,0 +1,32 @@
+[package]
+name = "aegis-fleet"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+authors = ["Split2ops Software <support@zv9games.org>"]
+description = "Self-hosted S2O Aegis fleet server: enrollment, short-lived client certs, mTLS heartbeat"
+
+[[bin]]
+name = "aegis-fleet"
+path = "src/main.rs"
+
+[dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem", "x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pemfile = "2"
+x509-parser = "0.16"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+time = "0.3"
+thiserror = "1"
+clap = { version = "4.4", features = ["derive"] }
+s2o-attest = { path = "../s2o-attest" }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
