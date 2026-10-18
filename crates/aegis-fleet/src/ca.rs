@@ -60,13 +60,7 @@ impl FleetCa {
     pub fn fingerprint(&self) -> String {
         // Hash the stored PEM's DER, not the in-memory issuer object, which
         // is re-signed on load and therefore has different bytes.
-        use sha2::Digest;
-        let der = rustls_pemfile::certs(&mut self.cert_pem.as_bytes())
-            .next()
-            .and_then(Result::ok)
-            .map(|c| c.to_vec())
-            .unwrap_or_default();
-        hex::encode(sha2::Sha256::digest(der))
+        pem_fingerprint(&self.cert_pem)
     }
 
     pub fn save(&self, dir: &Path) -> FleetResult<()> {
@@ -162,4 +156,15 @@ pub(crate) fn write_secret(path: &Path, contents: &str) -> FleetResult<()> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+/// SHA-256 (hex) of the first certificate's DER in `pem`.
+pub fn pem_fingerprint(pem: &str) -> String {
+    use sha2::Digest;
+    let der = rustls_pemfile::certs(&mut pem.as_bytes())
+        .next()
+        .and_then(Result::ok)
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    hex::encode(sha2::Sha256::digest(der))
 }

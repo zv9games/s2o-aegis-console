@@ -416,6 +416,11 @@ impl FleetServer {
                 let record = serde_json::json!({ "reported": posture, "attested": claims });
                 self.store
                     .record_heartbeat(&agent_id, now(), &record.to_string())?;
+                self.audit(
+                    &format!("agent:{agent_id}"),
+                    "agent.heartbeat",
+                    serde_json::json!({"last_policy_version": last_policy_version}),
+                );
                 for r in &policy_results {
                     let status = serde_json::to_value(&r.status)
                         .ok()

@@ -1,0 +1,22 @@
+# S2O Aegis self-hosted fleet server. Initialise first:
+#   sudo -u aegis aegis-fleet --dir /var/lib/aegis-fleet init --name fleet.example.lan
+[Unit]
+Description=S2O Aegis fleet server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aegis
+ExecStart=/usr/local/bin/aegis-fleet --dir /var/lib/aegis-fleet serve --listen 0.0.0.0:8443
+Restart=on-failure
+StateDirectory=aegis-fleet
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aegis-fleet
+
+[Install]
+WantedBy=multi-user.target

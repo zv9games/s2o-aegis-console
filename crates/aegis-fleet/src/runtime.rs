@@ -55,6 +55,61 @@ pub enum TickOutcome {
     ReenrollRequired,
 }
 
+/// Everything an admin hands an agent out of band at enrollment.
+pub struct EnrollParams<'a> {
+    pub server_addr: &'a str,
+    pub server_name: &'a str,
+    pub ca_pem: &'a str,
+    /// Expected SHA-256 fingerprint of `ca_pem` (printed by `aegis-fleet
+    /// init`/`token`). Required: protects against a swapped CA file.
+    pub ca_fingerprint: &'a str,
+    pub token: &'a str,
+    pub hostname: &'a str,
+    pub cyberid_public_key: &'a str,
+    pub roster: AdminRoster,
+}
+
+/// Enroll and build the initial agent state.
+pub async fn enroll_new(
+    p: EnrollParams<'_>,
+    keys: &dyn AgentKeyStore,
+    now: i64,
+) -> FleetResult<AgentState> {
+    let fp = crate::ca::pem_fingerprint(p.ca_pem);
+    let want = p.ca_fingerprint.replace(':', "").to_ascii_lowercase();
+    if fp != want {
+        return Err(FleetError::Rejected(format!(
+            "CA fingerprint mismatch: file has {fp}, expected {want}"
+        )));
+    }
+    if p.roster.keys.is_empty() {
+        return Err(FleetError::Rejected("admin roster is empty".into()));
+    }
+    let ep = FleetEndpoint {
+        addr: p.server_addr.into(),
+        server_name: p.server_name.into(),
+        ca_pem: p.ca_pem.into(),
+    };
+    let e = crate::agent::enroll(&ep, keys, p.token, p.hostname, p.cyberid_public_key).await?;
+    Ok(AgentState {
+        agent_id: e.agent_id,
+        cert_pem: e.cert_pem,
+        not_after_unix: e.not_after_unix,
+        server_addr: p.server_addr.into(),
+        server_name: p.server_name.into(),
+        pins: vec![CaPin {
+            pem: p.ca_pem.into(),
+            valid_until: None,
+        }],
+        roster: p.roster,
+        last_policy_version: 0,
+        last_contact: now,
+        heartbeat_secs: 60,
+        pending_results: Vec::new(),
+        audit_head: None,
+    })
+}
+
 impl AgentState {
     pub fn load(path: &Path) -> FleetResult<Self> {
         let s = std::fs::read_to_string(path)?;
@@ -229,8 +284,18 @@ impl AgentState {
                 ..
             }) => {
                 self.last_contact = now;
-                if audit_head.is_some() {
-                    self.audit_head = audit_head;
+                if let Some(h) = audit_head {
+                    // Pin the audit key on first sight; never accept a head
+                    // that goes backwards (truncated/forked server log).
+                    let ok = match &self.audit_head {
+                        None => true,
+                        Some(old) => old.public_key == h.public_key && h.seq >= old.seq,
+                    };
+                    if ok {
+                        self.audit_head = Some(h);
+                    } else {
+                        eprintln!("[aegisd] WARNING: server audit head regressed or changed key");
+                    }
                 }
                 let results = self.apply_bundles(&bundles, now);
                 self.pending_results = results.clone();
