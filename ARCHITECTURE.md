@@ -24,6 +24,18 @@ added per pillar only after it has been tested on real Windows hosts.
 | TPM key storage | **Not built.** |
 | Packet driver | Port only (`PacketBackend`, `NoDriver`). |
 
+## 2a. Constraints (decided)
+
+- **No budget, no hosting.** Only free GitHub features: Actions on the public
+  repo, Releases, Pages if needed.
+- **Self-hosted only.** `aegis-fleet` runs on a machine the operator owns,
+  with **embedded SQLite**. A hosted/SaaS offering is **out of scope**.
+- **Signing without paid certificates.** Release artifacts are signed with
+  Sigstore (cosign keyless via GitHub OIDC) and/or GitHub artifact
+  attestations, and published with an SBOM. Windows Authenticode signing and
+  a CA-signed kernel driver are deferred until there is funding; the design
+  must not depend on them.
+
 ## 3. Security principles
 
 1. **No single point of trust.** A compromised server can observe and deny
@@ -37,16 +49,20 @@ added per pillar only after it has been tested on real Windows hosts.
    change pinned keys) require **M-of-N** admin signatures.
 4. **Small, sandboxed agent.** Minimal Rust service, least privilege per
    pillar, **no remote shell by default**, deny-first command allowlist.
-5. **Signed updates with rollback.** Agents verify release signatures and
-   keep the previous version to roll back to.
+5. **Signed updates with rollback.** Agents verify release signatures
+   (Sigstore bundle / GitHub attestation pinned to this repo's release
+   workflow identity, plus an Aegis release key embedded in the agent) and
+   keep the previous version to roll back to. Updates are pulled from GitHub
+   Releases or a local mirror on the fleet server.
 6. **Offline grace, not a kill switch.** If the server is unreachable, agents
    keep enforcing the last valid signed policy for a bounded grace period and
    keep logging locally. No remote "disable" capability exists.
 7. **Tamper-evident audit.** Every admin action and agent event goes into a
    hash-chained log; chain heads are periodically signed and replicated to
    agents and an optional external witness.
-8. **Supply chain.** Reproducible builds, signed releases, SBOM, `cargo deny`
-   / `cargo audit`, fuzzing of parsers in CI, external audit before 1.0.
+8. **Supply chain.** Reproducible builds, Sigstore/attestation-signed
+   GitHub Releases, SBOM (CycloneDX), `cargo deny`, fuzzing of parsers in
+   CI, external audit before 1.0 (when funded).
 9. **Observation before control.** Read-only features first; each enforcement
    feature has a per-pillar opt-in and Windows test evidence before release.
 
@@ -93,12 +109,12 @@ installs, physical attacks on TPMs, compromise of a quorum (M) of admins.
 | **T**ampering with telemetry | A4 forges events | Events signed by agent key; anomaly checks server-side | A4 can lie about its own host |
 | **T**ampering with audit log | A2 deletes entries | Hash chain + signed heads replicated to agents/witness | Truncation of entries newer than last replicated head |
 | **R**epudiation | Admin denies an action | Every action signed and chained in audit log | — |
-| **I**nformation disclosure | A6 reads telemetry | TLS in transit; minimize collected data; at-rest encryption (DB choice pending) | Server root (A2) can read telemetry |
+| **I**nformation disclosure | A6 reads telemetry | TLS in transit; minimize collected data; SQLite file permissions, optional at-rest encryption | Server root (A2) can read telemetry |
 | **I**nformation disclosure | Key theft from endpoint | TPM-bound keys; software fallback flagged in inventory | Software-key hosts |
 | **D**enial of service | A2 stops serving | Offline grace period; local logging continues | Fleet visibility lost during outage |
 | **D**enial of service | Bad policy isolates fleet | M-of-N for isolation; staged rollout; local break-glass documented | Quorum mistake |
 | **E**levation of privilege | Remote code exec via agent | No remote shell; deny-first allowlist; no script execution without M-of-N | Bugs in agent parsers (fuzzing) |
-| **E**levation of privilege | Malicious update | Release signature verification, rollback, reproducible builds | Release-key compromise |
+| **E**levation of privilege | Malicious update | Sigstore/attestation verification pinned to the repo workflow + embedded release key, rollback, reproducible builds | GitHub account / workflow compromise; no Authenticode (SmartScreen warnings) |
 | **E**levation of privilege | Local user abuses `aegisd` IPC | Pipe/socket ACLs restricted to admins; read-only methods by default | Misconfigured ACL |
 
 ## 5. Components
@@ -108,14 +124,15 @@ installs, physical attacks on TPMs, compromise of a quorum (M) of admins.
           |
  [admin console + CLI] --(admin auth, TLS)--> [aegis-fleet server] <--(mTLS)-- [aegisd agent] -- local IPC -- [aegis CLI / GUI]
                                                  |  CA (online, short-lived certs)          |  pillar engines (in-process)
-                                                 |  store (SQLite, decision pending)        |  local hash-chained log
+                                                 |  store (embedded SQLite)                 |  local hash-chained log
                                                  |  audit chain                             |  keystore (TPM / software)
 ```
 
 - **aegisd (agent)** – Windows service / systemd unit. Hosts pillar engines
   in-process, local IPC with ACLs, enrollment client, heartbeat, policy
   verifier, local audit chain, update verifier.
-- **aegis-fleet (server)** – enrollment endpoint, issuing CA for short-lived
+- **aegis-fleet (server)** – self-hosted single binary on an operator-owned
+  machine, embedded SQLite; enrollment endpoint, issuing CA for short-lived
   agent certs, heartbeat/telemetry ingest, policy distribution (stores signed
   blobs; cannot create valid ones), audit chain, admin API.
 - **Admin tooling** – CLI that signs policy and approvals with offline/hardware
@@ -149,9 +166,11 @@ installs, physical attacks on TPMs, compromise of a quorum (M) of admins.
 | 5 Agent as a service | Windows service + systemd, IPC ACLs, updates with rollback | Install/uninstall tested on Windows 10/11 VMs; signed update + rollback demo |
 | 6 Fleet observation | Inventory, posture, events, alerts in dashboard | Read-only fleet view with ≥3 real Windows agents |
 | 7 Enforcement | Per-pillar enforcement, ZTNA proxy, packet driver | Each pillar has Windows test evidence and opt-in; external review |
-| 8 Release hardening | Reproducible builds, signed releases, SBOM, fuzzing, external audit | Independent audit report; reproducible build verified |
+| 8 Release hardening | Reproducible builds, Sigstore-signed GitHub Releases, SBOM, fuzzing; external audit when funded | Reproducible build verified by a second builder; signatures verifiable with `cosign` / `gh attestation verify` |
 
 ## 7. Open decisions
-Tracked in PR discussions: deployment model (self-hosted vs SaaS), server
-database beyond embedded SQLite, code-signing certificates and hosting costs,
-TPM requirement vs. software fallback policy.
+
+Decided: self-hosted only, embedded SQLite, free GitHub-only infrastructure,
+keyless Sigstore / GitHub attestations for signing. Still open: whether TPM is
+required or software keys are allowed (and how that is shown to admins), the
+M-of-N defaults, and certificate/token lifetimes.
