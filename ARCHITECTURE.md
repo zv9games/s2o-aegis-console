@@ -179,5 +179,9 @@ Recorded 2026-10-18 (approved by the project owner):
 | D3 | **Risky actions need 2 admin approvals by default** (isolate host, run script, uninstall, change pinned admin keys), configurable per action class. Approvals are counted per *distinct admin key*; when the approving keys are registered to the same admin identity, tooling must show a prominent warning ("approvals are not independent") and the audit log records it. |
 | D4 | **Lifetimes**: client certificates 24 h, renewed at 12 h over mTLS; enrollment tokens 24 h, single use; 7-day offline grace after certificate expiry during which an agent may renew with its enrolled key, after which it must re-enroll. |
 
-Still open: certificate/token rotation for the fleet CA itself, and the
-exact list of action classes that count as risky.
+| D5 | **Risky action classes** (2 approvals by default): isolate host, run script/command, uninstall/disable agent, change admin roster, change firewall rules, change require-TPM, rotate fleet CA. Read-only / low-risk settings need 1. |
+| D6 | **Fleet CA**: 1-year lifetime. Rotation is a 2-approval signed bundle carrying the new CA certificate; agents pin old and new CA for a 30-day overlap, then drop the old one. Agents offline for the whole overlap must re-enroll. |
+| D7 | **Admin keys**: Ed25519 seeds in passphrase-encrypted files (Argon2id + XChaCha20-Poly1305), kept off the fleet server. Signing goes through a `PolicySigner` trait so FIDO2/YubiKey signers can be added later. |
+
+Admin rosters and the fleet CA are delivered to agents out of band together
+with the enrollment token; the server never chooses an agent's roster.
