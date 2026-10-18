@@ -1,7 +1,10 @@
 //! Windows Defender Firewall control via `netsh` / `Get-NetFirewall*`.
-#![cfg_attr(not(windows), allow(unused_imports))]
 
-use crate::{cmd, windows_only, PlatformResult};
+#[cfg(windows)]
+use crate::cmd;
+#[cfg(not(windows))]
+use crate::windows_only;
+use crate::PlatformResult;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProfileStatus {

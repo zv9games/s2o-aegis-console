@@ -1,4 +1,8 @@
-use crate::protocol::{IpcRequest, IpcResponse, AEGIS_UNIX_SOCKET};
+#[cfg(windows)]
+use crate::protocol::AEGIS_PIPE_NAME;
+#[cfg(unix)]
+use crate::protocol::AEGIS_UNIX_SOCKET;
+use crate::protocol::{IpcRequest, IpcResponse};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
