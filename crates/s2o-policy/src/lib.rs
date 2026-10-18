@@ -11,9 +11,12 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub mod keyfile;
+pub mod signer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -28,12 +31,31 @@ pub enum ActionClass {
     Uninstall,
     /// Replacing the pinned admin roster.
     ChangeRoster,
+    /// Adding, removing or changing host firewall rules.
+    ChangeFirewall,
+    /// Changing the fleet's require-TPM setting.
+    ChangeRequireTpm,
+    /// Rotating the fleet CA (dual-pin overlap).
+    RotateCa,
 }
 
 impl ActionClass {
+    /// Risky classes need `risky_threshold` (default 2) approvals (decision
+    /// D5). Only `Normal` (read-only / low-risk settings) needs one.
     pub fn is_risky(self) -> bool {
-        self != ActionClass::Normal
+        !matches!(self, ActionClass::Normal)
     }
+
+    pub const ALL: [ActionClass; 8] = [
+        ActionClass::Normal,
+        ActionClass::IsolateHost,
+        ActionClass::RunScript,
+        ActionClass::Uninstall,
+        ActionClass::ChangeRoster,
+        ActionClass::ChangeFirewall,
+        ActionClass::ChangeRequireTpm,
+        ActionClass::RotateCa,
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,12 +146,18 @@ impl SignedBundle {
         }
     }
 
-    /// Add an approval with an admin signing key.
+    /// Add an approval with a raw admin signing key (tests / tooling).
     pub fn approve(&mut self, key_id: &str, key: &SigningKey) {
-        let sig = key.sign(&self.bundle.signing_bytes());
+        self.approve_with(&signer::SoftwareSigner::new(key_id, key.clone()));
+    }
+
+    /// Add an approval with any [`signer::PolicySigner`] (encrypted file
+    /// today, FIDO2/hardware later).
+    pub fn approve_with(&mut self, signer: &dyn signer::PolicySigner) {
+        let sig = signer.sign(&self.bundle.signing_bytes());
         self.approvals.push(Approval {
-            key_id: key_id.to_string(),
-            signature: B64.encode(sig.to_bytes()),
+            key_id: signer.key_id().to_string(),
+            signature: B64.encode(sig),
         });
     }
 }
@@ -432,6 +460,15 @@ mod tests {
         sb.approve("bob-1", &f.bob);
         g.accept(&sb).unwrap();
         assert_eq!(g.roster, evil);
+    }
+
+    #[test]
+    fn approved_risky_classes() {
+        let r = fx().roster;
+        for c in ActionClass::ALL {
+            let want = if c == ActionClass::Normal { 1 } else { 2 };
+            assert_eq!(r.threshold(c), want, "{c:?}");
+        }
     }
 
     #[test]
